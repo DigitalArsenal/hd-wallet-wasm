@@ -10,10 +10,10 @@
 #define HD_WALLET_CONFIG_H
 
 // Version information
-#define HD_WALLET_VERSION_MAJOR 0
-#define HD_WALLET_VERSION_MINOR 1
-#define HD_WALLET_VERSION_PATCH 5
-#define HD_WALLET_VERSION_STRING "0.1.5"
+#define HD_WALLET_VERSION_MAJOR 2
+#define HD_WALLET_VERSION_MINOR 0
+#define HD_WALLET_VERSION_PATCH 0
+#define HD_WALLET_VERSION_STRING "2.0.0"
 
 // =============================================================================
 // Build Environment Detection

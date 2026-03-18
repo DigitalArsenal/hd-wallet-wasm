@@ -10,6 +10,13 @@
   padding: 0;
 }
 
+/* Button reset — counteract host-page normalize/tachyons leaking into the widget */
+button {
+  -webkit-appearance: none;
+  appearance: none;
+  line-height: inherit;
+}
+
 /* Prevent dragging on headings, headers, and links */
 h1, h2, h3, h4, h5, h6,
 a, button, nav, nav * {
@@ -4937,6 +4944,13 @@ body:has(.modal.active) .nav-bar {
   color: rgba(255, 255, 255, 0.9) !important;
 }
 
+.vcf-import-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
 /* Readonly badge */
 .readonly-badge {
   font-size: 0.6875rem;
@@ -4967,6 +4981,10 @@ body:has(.modal.active) .nav-bar {
 
   .vcard-form-row.address-row {
     grid-template-columns: 1fr;
+  }
+
+  .vcf-import-actions {
+    flex-direction: column;
   }
   
   .photo-upload-section {
@@ -5861,6 +5879,76 @@ a.chain-card:hover {
   display: block;
 }
 
+.x509-overview {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+  gap: 24px;
+  padding: 32px;
+  margin-bottom: 24px;
+  align-items: start;
+}
+
+.x509-copy {
+  min-width: 0;
+}
+
+.x509-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  margin-bottom: 14px;
+  border-radius: 999px;
+  background: rgba(96, 165, 250, 0.12);
+  color: #93c5fd;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.x509-copy h3 {
+  font-size: 1.35rem;
+  font-weight: 600;
+  line-height: 1.25;
+  margin-bottom: 12px;
+}
+
+.x509-copy p {
+  color: var(--white-60);
+  font-size: 0.95rem;
+  line-height: 1.75;
+  margin-bottom: 14px;
+}
+
+.x509-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.x509-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--white-80);
+  font-size: 0.78rem;
+  font-family: var(--font-mono);
+}
+
+.x509-flow {
+  margin-bottom: 24px;
+  padding: 28px 24px;
+}
+
+.x509-grid {
+  grid-template-columns: repeat(2, 1fr);
+}
+
 @media (max-width: 600px) {
   .code-block pre {
     padding: 14px;
@@ -5874,6 +5962,16 @@ a.chain-card:hover {
   .section-sm {
     padding-left: 8px;
     padding-right: 8px;
+  }
+  .x509-overview {
+    grid-template-columns: 1fr;
+    padding: 20px;
+  }
+  .x509-copy h3 {
+    font-size: 1.1rem;
+  }
+  .x509-copy p {
+    font-size: 0.88rem;
   }
 }
 

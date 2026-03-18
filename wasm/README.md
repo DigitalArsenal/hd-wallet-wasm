@@ -6,6 +6,7 @@ A comprehensive HD (Hierarchical Deterministic) wallet implementation compiled t
 
 - **BIP-32/39/44/49/84** - Complete HD wallet derivation standards
 - **Multi-curve support** - secp256k1, Ed25519, P-256, P-384, X25519
+- **X.509 PKI** - P-256/P-384 certificate issuance, PEM/DER/PKCS#12 interop, wallet attestations
 - **Multi-chain** - Bitcoin, Ethereum, Solana, Cosmos, Polkadot
 - **AES-256-GCM** - Authenticated encryption via WASM (Crypto++/OpenSSL)
 - **Hardware wallet ready** - Trezor, Ledger, KeepKey abstraction layer
@@ -65,6 +66,74 @@ btcKey.wipe();
 ethKey.wipe();
 master.wipe();
 ```
+
+## X.509 PKI
+
+The package includes a native `wallet.x509` API for regular Web PKI workflows.
+That means you can generate interoperable X.509 certificates for TLS or device
+identity, then optionally bind those certificates to an HD-wallet-backed key.
+
+Why this exists:
+
+- X.509 is what browsers, load balancers, mTLS stacks, and enterprise PKI tools already use
+- wallet ecosystems use different key types and trust models
+- `hd-wallet-wasm` bridges the two by embedding a wallet attestation inside a standard certificate
+
+What it supports:
+
+- P-256 and P-384 certificate keys
+- self-signed and issuer-signed certificate issuance
+- PEM, DER, and PKCS#12 import/export
+- certificate parsing and wallet-attestation verification
+
+Wallet attestation is additive. Certificate validation still happens through the
+normal X.509 chain. The attestation adds a second proof path showing that the
+certificate was bound by a selected wallet key.
+
+```javascript
+import init, { Curve, X509Encoding } from 'hd-wallet-wasm';
+
+const wallet = await init();
+const now = Math.floor(Date.now() / 1000);
+
+const certKey = wallet.x509.generatePrivateKey(Curve.P256);
+const certPem = wallet.x509.createSelfSignedCertificate(
+  {
+    subjectDn: 'CN=wallet.example.com,O=Digital Arsenal,C=US',
+    serialHex: '1001',
+    notBeforeUnix: now - 300,
+    notAfterUnix: now + 31536000,
+    dnsNames: ['wallet.example.com'],
+    keyUsage: ['digitalSignature', 'keyEncipherment'],
+    extendedKeyUsage: ['serverAuth'],
+    walletAttestation: {
+      curve: Curve.SECP256K1,
+      privateKey: wallet.utils.decodeHex(
+        '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f'
+      ),
+      keyLabel: 'btc-root'
+    }
+  },
+  Curve.P256,
+  certKey,
+  X509Encoding.PEM
+);
+
+const parsed = wallet.x509.parseCertificate(certPem);
+const valid = wallet.x509.verifyWalletAttestation(certPem);
+const pkcs12 = wallet.x509.exportPkcs12(
+  certPem,
+  X509Encoding.PEM,
+  Curve.P256,
+  certKey,
+  'changeit',
+  'wallet-example'
+);
+```
+
+Certificate keys use interoperable NIST curves. Wallet attestations can be
+signed with secp256k1, Ed25519, P-256, or P-384 keys depending on the wallet
+identity you want to bind.
 
 ## API Overview
 

@@ -30,8 +30,8 @@
 cmake_minimum_required(VERSION 3.16...3.28)
 
 # Version
-set(HD_WALLET_VERSION_MAJOR 1)
-set(HD_WALLET_VERSION_MINOR 3)
+set(HD_WALLET_VERSION_MAJOR 2)
+set(HD_WALLET_VERSION_MINOR 0)
 set(HD_WALLET_VERSION_PATCH 0)
 
 project(HDWalletWasm
@@ -144,6 +144,7 @@ set(HD_WALLET_HEADERS
   include/hd_wallet/ecdsa.h
   include/hd_wallet/eddsa.h
   include/hd_wallet/ecdh.h
+  include/hd_wallet/x509.h
   # Coins/Chains
   include/hd_wallet/coins/coin.h
   include/hd_wallet/coins/bitcoin.h
@@ -186,6 +187,7 @@ set(HD_WALLET_SOURCES
   src/eddsa.cpp
   src/ecdh.cpp
   src/ecies.cpp
+  src/x509.cpp
   # Coins
   src/coins/coin.cpp
   src/coins/bitcoin.cpp
@@ -294,9 +296,11 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       src/eddsa.cpp
       src/ecdh.cpp
       src/ecies.cpp
+      src/x509.cpp
       src/wasi_bridge.cpp
       src/aligned_api.cpp
       src/wasm_exports.cpp
+      generated/sdn/plugin_manifest_exports.cpp
       # Transaction building
       src/tx/transaction.cpp
       src/tx/bitcoin_tx.cpp
@@ -335,6 +339,8 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       "_hd_get_version_string"
       "_hd_has_cryptopp"
       "_hd_is_fips_mode"
+      "_plugin_get_manifest_flatbuffer"
+      "_plugin_get_manifest_flatbuffer_size"
 
       # ========== WASI Bridge ==========
       "_hd_wasi_has_feature"
@@ -427,6 +433,18 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       "_hd_kdf_hkdf"
       "_hd_kdf_pbkdf2"
       "_hd_kdf_scrypt"
+
+      # ========== X.509 ==========
+      "_hd_x509_generate_private_key"
+      "_hd_x509_export_private_key_pem"
+      "_hd_x509_import_private_key_pem"
+      "_hd_x509_create_self_signed"
+      "_hd_x509_issue_certificate"
+      "_hd_x509_convert_certificate"
+      "_hd_x509_parse_certificate_json"
+      "_hd_x509_verify_wallet_attestation"
+      "_hd_x509_export_pkcs12"
+      "_hd_x509_import_pkcs12_json"
 
       # ========== SLIP-10 Key Derivation ==========
       "_hd_slip10_ed25519_derive_path"
@@ -687,6 +705,7 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       src/ecdh.cpp
       src/ecies.cpp
       src/wasi_bridge.cpp
+      generated/sdn/plugin_manifest_exports.cpp
       src/coins/coin.cpp
       src/coins/bitcoin.cpp
       src/coins/ethereum.cpp
@@ -717,6 +736,8 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       "_hd_get_version_string"
       "_hd_has_cryptopp"
       "_hd_is_fips_mode"
+      "_plugin_get_manifest_flatbuffer"
+      "_plugin_get_manifest_flatbuffer_size"
       "_hd_get_supported_coins"
       "_hd_get_supported_curves"
       # WASI Bridge
@@ -1170,6 +1191,7 @@ if(HD_WALLET_BUILD_TESTS AND NOT EMSCRIPTEN)
     test/test_ethereum.cpp
     test/test_coin_addresses.cpp
     test/test_ecies.cpp
+    test/test_x509.cpp
     test/test_vectors.cpp
   )
   target_link_libraries(hd_wallet_tests PRIVATE hd_wallet)

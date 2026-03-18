@@ -14,6 +14,7 @@ HD Wallet WASM provides a complete implementation of BIP-32/39/44 hierarchical d
 
 - **BIP Standards**: Full implementation of BIP-32 (HD derivation), BIP-39 (mnemonics), and BIP-44/49/84 (derivation paths)
 - **Multi-Curve Cryptography**: secp256k1, Ed25519, NIST P-256, NIST P-384, and X25519
+- **X.509 PKI**: P-256/P-384 certificate issuance, PEM/DER/PKCS#12 interop, and wallet-backed certificate attestations
 - **Multi-Chain Support**: Bitcoin, Ethereum, Cosmos, Solana, Polkadot, and 50+ coins via SLIP-44
 - **Hardware Wallet Abstraction**: Unified API for KeepKey, Trezor, and Ledger devices
 - **WebAssembly**: Pure C++ compiled to WASM for cross-language interoperability
@@ -48,6 +49,12 @@ HD Wallet WASM provides a complete implementation of BIP-32/39/44 hierarchical d
   - Unified abstraction for KeepKey, Trezor, and Ledger
   - Device enumeration, connection management
   - Transaction and message signing via device
+
+- **X.509 PKI**
+  - Generate P-256 and P-384 certificate private keys
+  - Create self-signed certificates or issue subordinate certificates
+  - Import/export PEM, DER, and PKCS#12 bundles
+  - Embed and verify wallet attestations that bind a certificate to a selected wallet key
 
 - **Security**
   - Secure memory wiping with volatile pointers and memory barriers
@@ -286,6 +293,82 @@ const ethTx = wallet.ethereum.tx.createEIP1559({
 const ethRawTx = ethTx.serialize();
 ```
 
+### X.509 PKI and Wallet Attestations
+
+`hd-wallet-wasm` now ships a native X.509 stack because regular Web PKI is still
+the format that TLS terminators, reverse proxies, browsers, mTLS deployments,
+MDM systems, and enterprise certificate tooling already understand. The goal is
+not to replace TLS certificates with blockchain keys. The goal is to let one
+certificate carry both:
+
+- a normal interoperable X.509 identity for existing TLS and PKI infrastructure
+- an optional wallet attestation proving the certificate was bound by a selected
+  wallet key
+
+Certificate issuance uses NIST P-256 or P-384 keys for broad interoperability
+and FIPS-aligned deployments. Wallet attestations can be signed by secp256k1,
+Ed25519, P-256, or P-384 wallet keys. The attestation is stored in a non-critical
+certificate comment extension and signs a canonical payload over the certificate
+serial, issuer/subject DNs, validity window, and SPKI digest. A verifier can
+perform normal certificate-chain validation first, then independently verify the
+embedded wallet proof.
+
+Supported `wallet.x509` operations:
+
+- generate certificate private keys
+- create self-signed or issuer-signed certificates
+- convert certificates between PEM and DER
+- parse certificate metadata
+- export/import PKCS#12 bundles
+- verify embedded wallet attestations
+
+```javascript
+import HDWalletWasm, { Curve, X509Encoding } from 'hd-wallet-wasm';
+
+const wallet = await HDWalletWasm();
+const now = Math.floor(Date.now() / 1000);
+
+const certificateKey = wallet.x509.generatePrivateKey(Curve.P256);
+const walletKey = wallet.hdkey
+  .fromSeed(wallet.mnemonic.toSeed(wallet.mnemonic.generate(24)))
+  .derivePath("m/44'/0'/0'/0/0");
+
+const certificatePem = wallet.x509.createSelfSignedCertificate(
+  {
+    subjectDn: 'CN=api.example.com,O=Digital Arsenal,C=US',
+    serialHex: '1001',
+    notBeforeUnix: now - 300,
+    notAfterUnix: now + 31536000,
+    dnsNames: ['api.example.com'],
+    keyUsage: ['digitalSignature', 'keyEncipherment'],
+    extendedKeyUsage: ['serverAuth'],
+    walletAttestation: {
+      curve: Curve.SECP256K1,
+      privateKey: walletKey.privateKey(),
+      keyLabel: 'btc-root'
+    }
+  },
+  Curve.P256,
+  certificateKey,
+  X509Encoding.PEM
+);
+
+const parsed = wallet.x509.parseCertificate(certificatePem);
+const walletProofValid = wallet.x509.verifyWalletAttestation(certificatePem);
+const pkcs12 = wallet.x509.exportPkcs12(
+  certificatePem,
+  X509Encoding.PEM,
+  Curve.P256,
+  certificateKey,
+  'changeit',
+  'api-example'
+);
+```
+
+This gives you a standard certificate that existing TLS tooling can consume,
+plus a second proof path that can say "this server certificate was attested by
+this wallet key". That is the bridge between Web PKI and HD-wallet identity.
+
 ## API Reference
 
 Full API documentation is available at [https://digitalarsenal.github.io/hd-wallet-wasm/](https://digitalarsenal.github.io/hd-wallet-wasm/).
@@ -304,6 +387,7 @@ Full API documentation is available at [https://digitalarsenal.github.io/hd-wall
 | `polkadot` | Polkadot/Substrate addresses and signing |
 | `hardware` | Hardware wallet abstraction (KeepKey, Trezor, Ledger) |
 | `keyring` | Multi-wallet key management |
+| `x509` | X.509 certificate issuance, import/export, parsing, and wallet attestation verification |
 | `ecies` | ECIES encrypt/decrypt (ECDH + HKDF + AES-GCM), AES-CTR |
 | `utils` | Hash functions, encoding, key derivation, AES-GCM encryption |
 

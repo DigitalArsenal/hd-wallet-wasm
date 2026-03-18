@@ -256,6 +256,10 @@ export function getModalHTML() {
                 <div class="vcf-import-fields" id="vcf-import-fields"></div>
               </div>
               <div id="vcf-import-sig-status" class="vcard-sig-badge" style="display:none;"></div>
+              <div class="vcf-import-actions">
+                <button id="vcf-import-apply" class="glass-btn primary">Replace Identity</button>
+                <button id="vcf-import-close" class="glass-btn">Dismiss</button>
+              </div>
             </div>
           </div>
 

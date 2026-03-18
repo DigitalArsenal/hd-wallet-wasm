@@ -9,11 +9,16 @@
  * - Transaction building and signing
  *
  * @module hd-wallet-wasm
- * @version 1.3.0
+ * @version 2.0.0
  */
 
 // Import aligned API for batch operations
 import { AlignedAPI } from './aligned.mjs';
+import {
+  createSdnPluginContract,
+  SDN_PLUGIN_MANIFEST_EXPORTS
+} from './sdn-plugin.mjs';
+import { HD_WALLET_SDN_PLUGIN_MANIFEST } from './sdn-plugin-manifest-source.mjs';
 
 // =============================================================================
 // Enums (matching TypeScript definitions)
@@ -152,6 +157,17 @@ export const BitcoinScriptType = Object.freeze({
 export const Network = Object.freeze({
   MAINNET: 0,
   TESTNET: 1
+});
+
+/**
+ * X.509 certificate encoding formats
+ * @readonly
+ * @enum {number}
+ */
+export const X509Encoding = Object.freeze({
+  PEM: 0,
+  DER: 1,
+  PKCS12: 2
 });
 
 // =============================================================================
@@ -398,6 +414,8 @@ function decodeBase64Fallback(str) {
   }
 }
 
+const UTF8_ENCODER = new TextEncoder();
+const UTF8_DECODER = new TextDecoder();
 
 function encodeBech32Fallback(hrp, data) {
   let out = `${hrp}1`;
@@ -481,6 +499,198 @@ function readBytes(wasm, ptr, len) {
  */
 function readString(wasm, ptr) {
   return wasm.UTF8ToString(ptr);
+}
+
+function readSize32(wasm, ptr) {
+  return wasm.getValue(ptr, 'i32') >>> 0;
+}
+
+function callDynamicBytesResult(wasm, invoke, options = {}) {
+  const { wipeOutput = false } = options;
+  const lenPtr = wasm._hd_alloc(4);
+  if (!lenPtr) throw new HDWalletError(ErrorCode.OUT_OF_MEMORY);
+
+  try {
+    wasm.setValue(lenPtr, 0, 'i32');
+    checkResult(invoke(0, lenPtr));
+    const requestedSize = readSize32(wasm, lenPtr);
+    const outPtr = wasm._hd_alloc(requestedSize > 0 ? requestedSize : 1);
+    if (!outPtr) throw new HDWalletError(ErrorCode.OUT_OF_MEMORY);
+
+    try {
+      wasm.setValue(lenPtr, requestedSize, 'i32');
+      checkResult(invoke(outPtr, lenPtr));
+      const actualSize = readSize32(wasm, lenPtr);
+      return readBytes(wasm, outPtr, actualSize);
+    } finally {
+      if (wipeOutput && requestedSize > 0) {
+        wasm._hd_secure_wipe(outPtr, requestedSize);
+      }
+      wasm._hd_dealloc(outPtr);
+    }
+  } finally {
+    wasm._hd_dealloc(lenPtr);
+  }
+}
+
+function callDynamicStringResult(wasm, invoke, options = {}) {
+  const { wipeOutput = false } = options;
+  const lenPtr = wasm._hd_alloc(4);
+  if (!lenPtr) throw new HDWalletError(ErrorCode.OUT_OF_MEMORY);
+
+  try {
+    wasm.setValue(lenPtr, 0, 'i32');
+    checkResult(invoke(0, lenPtr));
+    const requestedSize = readSize32(wasm, lenPtr);
+    const outPtr = wasm._hd_alloc(requestedSize > 0 ? requestedSize : 1);
+    if (!outPtr) throw new HDWalletError(ErrorCode.OUT_OF_MEMORY);
+
+    try {
+      wasm.setValue(lenPtr, requestedSize, 'i32');
+      checkResult(invoke(outPtr, lenPtr));
+      return readString(wasm, outPtr);
+    } finally {
+      if (wipeOutput && requestedSize > 0) {
+        wasm._hd_secure_wipe(outPtr, requestedSize);
+      }
+      wasm._hd_dealloc(outPtr);
+    }
+  } finally {
+    wasm._hd_dealloc(lenPtr);
+  }
+}
+
+function toUint8Array(data, name = 'data') {
+  if (data instanceof Uint8Array) {
+    return data;
+  }
+  if (ArrayBuffer.isView(data)) {
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength).slice();
+  }
+  if (data instanceof ArrayBuffer) {
+    return new Uint8Array(data.slice(0));
+  }
+  throw new HDWalletError(ErrorCode.INVALID_ARGUMENT, `${name} must be binary data`);
+}
+
+function curveToName(curve) {
+  switch (curve) {
+    case Curve.SECP256K1: return 'secp256k1';
+    case Curve.ED25519: return 'ed25519';
+    case Curve.P256: return 'p256';
+    case Curve.P384: return 'p384';
+    case Curve.X25519: return 'x25519';
+    default:
+      throw new HDWalletError(ErrorCode.INVALID_ARGUMENT, `Unsupported curve: ${curve}`);
+  }
+}
+
+function escapeX509ListValue(value) {
+  return String(value).replace(/\\/g, '\\\\').replace(/,/g, '\\,');
+}
+
+function assertX509CertificateEncoding(encoding, name) {
+  if (encoding === X509Encoding.PKCS12) {
+    throw new HDWalletError(
+      ErrorCode.INVALID_ARGUMENT,
+      `${name} cannot be PKCS12; use exportPkcs12() or importPkcs12() for bundles`
+    );
+  }
+}
+
+function normalizeX509CertificateInput(certificate, encoding, name = 'certificate') {
+  assertX509CertificateEncoding(encoding, 'encoding');
+  if (encoding === X509Encoding.PEM) {
+    if (typeof certificate === 'string') {
+      return UTF8_ENCODER.encode(certificate);
+    }
+    return toUint8Array(certificate, name);
+  }
+  return toUint8Array(certificate, name);
+}
+
+function normalizePemInput(value, name) {
+  if (typeof value === 'string') {
+    return UTF8_ENCODER.encode(value);
+  }
+  return toUint8Array(value, name);
+}
+
+function decodeX509CertificateOutput(bytes, encoding) {
+  return encoding === X509Encoding.PEM ? UTF8_DECODER.decode(bytes) : bytes;
+}
+
+function normalizeParsedCertificateJson(parsed) {
+  return {
+    subjectDn: parsed.subject_dn ?? '',
+    issuerDn: parsed.issuer_dn ?? '',
+    serialHex: parsed.serial_hex ?? '',
+    notBefore: parsed.not_before ?? '',
+    notAfter: parsed.not_after ?? '',
+    isCa: parsed.is_ca === true,
+    dnsNames: Array.isArray(parsed.dns_names) ? parsed.dns_names : [],
+    ipAddresses: Array.isArray(parsed.ip_addresses) ? parsed.ip_addresses : [],
+    emailAddresses: Array.isArray(parsed.email_addresses) ? parsed.email_addresses : [],
+    uriNames: Array.isArray(parsed.uri_names) ? parsed.uri_names : [],
+    walletAttestationComment: parsed.wallet_attestation_comment ?? '',
+    walletAttestationValid: parsed.wallet_attestation_valid === true
+  };
+}
+
+function normalizePkcs12ImportJson(parsed) {
+  return {
+    certificatePem: parsed.certificate_pem ?? '',
+    privateKeyPem: parsed.private_key_pem ?? '',
+    chainPem: parsed.chain_pem ?? ''
+  };
+}
+
+function serializeX509Options(options) {
+  if (!options || typeof options !== 'object') {
+    throw new HDWalletError(ErrorCode.INVALID_ARGUMENT, 'X.509 options must be an object');
+  }
+
+  const lines = [];
+  const pushScalar = (key, value) => {
+    if (value === undefined || value === null || value === '') {
+      return;
+    }
+    lines.push(`${key}=${value}`);
+  };
+  const pushList = (key, values) => {
+    if (!Array.isArray(values) || values.length === 0) {
+      return;
+    }
+    lines.push(`${key}=${values.map(escapeX509ListValue).join(',')}`);
+  };
+
+  pushScalar('subject_dn', options.subjectDn);
+  pushScalar('serial_hex', options.serialHex);
+  pushScalar('not_before_unix', options.notBeforeUnix);
+  pushScalar('not_after_unix', options.notAfterUnix);
+  if (options.isCa !== undefined) {
+    pushScalar('is_ca', options.isCa ? 'true' : 'false');
+  }
+  if (options.pathLen !== undefined && options.pathLen !== null) {
+    pushScalar('path_len', options.pathLen);
+  }
+  pushList('dns', options.dnsNames);
+  pushList('ips', options.ipAddresses);
+  pushList('emails', options.emailAddresses);
+  pushList('uris', options.uriNames);
+  pushList('key_usage', options.keyUsage);
+  pushList('extended_key_usage', options.extendedKeyUsage);
+  pushScalar('friendly_name', options.friendlyName);
+
+  if (options.walletAttestation) {
+    const attestation = options.walletAttestation;
+    pushScalar('wallet_curve', curveToName(attestation.curve));
+    pushScalar('wallet_private_key_hex', encodeHexFallback(toUint8Array(attestation.privateKey, 'walletAttestation.privateKey')));
+    pushScalar('wallet_key_label', attestation.keyLabel);
+    pushScalar('wallet_comment_prefix', attestation.commentPrefix);
+  }
+
+  return lines.join('\n');
 }
 
 // =============================================================================
@@ -3673,6 +3883,285 @@ function createModule(wasm) {
   };
 
   // ==========================================================================
+  // X.509 API
+  // ==========================================================================
+
+  /**
+   * OpenSSL-backed X.509 certificate API
+   * @type {Object}
+   */
+  const x509 = {
+    isAvailable() {
+      return typeof wasm._hd_x509_generate_private_key === 'function' &&
+        typeof wasm._hd_openssl_init_fips === 'function';
+    },
+
+    generatePrivateKey(curve) {
+      const fn = requireWasmFunction(wasm, '_hd_x509_generate_private_key');
+      return callDynamicBytesResult(
+        wasm,
+        (outPtr, outLenPtr) => fn(curve, outPtr, outLenPtr),
+        { wipeOutput: true }
+      );
+    },
+
+    exportPrivateKeyPem(curve, privateKey) {
+      const fn = requireWasmFunction(wasm, '_hd_x509_export_private_key_pem');
+      const keyBytes = toUint8Array(privateKey, 'privateKey');
+      const keyPtr = allocAndCopy(wasm, keyBytes);
+      try {
+        return callDynamicStringResult(
+          wasm,
+          (outPtr, outLenPtr) => fn(curve, keyPtr, keyBytes.length, outPtr, outLenPtr),
+          { wipeOutput: true }
+        );
+      } finally {
+        wasm._hd_secure_wipe(keyPtr, keyBytes.length);
+        wasm._hd_dealloc(keyPtr);
+      }
+    },
+
+    importPrivateKeyPem(curve, pem) {
+      const fn = requireWasmFunction(wasm, '_hd_x509_import_private_key_pem');
+      const pemPtr = allocString(wasm, pem);
+      const pemLen = wasm.lengthBytesUTF8(pem) + 1;
+      try {
+        return callDynamicBytesResult(
+          wasm,
+          (outPtr, outLenPtr) => fn(curve, pemPtr, outPtr, outLenPtr),
+          { wipeOutput: true }
+        );
+      } finally {
+        wasm._hd_secure_wipe(pemPtr, pemLen);
+        wasm._hd_dealloc(pemPtr);
+      }
+    },
+
+    createSelfSignedCertificate(options, certificateCurve, certificatePrivateKey, outputEncoding = X509Encoding.PEM) {
+      const fn = requireWasmFunction(wasm, '_hd_x509_create_self_signed');
+      const optionsSpec = serializeX509Options(options);
+      const optionsPtr = allocString(wasm, optionsSpec);
+      const optionsLen = wasm.lengthBytesUTF8(optionsSpec) + 1;
+      const keyBytes = toUint8Array(certificatePrivateKey, 'certificatePrivateKey');
+      const keyPtr = allocAndCopy(wasm, keyBytes);
+
+      try {
+        const bytes = callDynamicBytesResult(
+          wasm,
+          (outPtr, outLenPtr) => fn(
+            optionsPtr,
+            certificateCurve,
+            keyPtr,
+            keyBytes.length,
+            outputEncoding,
+            outPtr,
+            outLenPtr
+          )
+        );
+        return decodeX509CertificateOutput(bytes, outputEncoding);
+      } finally {
+        wasm._hd_secure_wipe(optionsPtr, optionsLen);
+        wasm._hd_secure_wipe(keyPtr, keyBytes.length);
+        wasm._hd_dealloc(optionsPtr);
+        wasm._hd_dealloc(keyPtr);
+      }
+    },
+
+    issueCertificate(
+      options,
+      issuerCurve,
+      issuerPrivateKey,
+      issuerCertificate,
+      issuerCertificateEncoding,
+      subjectCurve,
+      subjectPrivateKey,
+      outputEncoding = X509Encoding.PEM
+    ) {
+      assertX509CertificateEncoding(issuerCertificateEncoding, 'issuerCertificateEncoding');
+      const fn = requireWasmFunction(wasm, '_hd_x509_issue_certificate');
+      const optionsSpec = serializeX509Options(options);
+      const optionsPtr = allocString(wasm, optionsSpec);
+      const optionsLen = wasm.lengthBytesUTF8(optionsSpec) + 1;
+      const issuerKeyBytes = toUint8Array(issuerPrivateKey, 'issuerPrivateKey');
+      const issuerKeyPtr = allocAndCopy(wasm, issuerKeyBytes);
+      const issuerCertBytes = normalizeX509CertificateInput(
+        issuerCertificate,
+        issuerCertificateEncoding,
+        'issuerCertificate'
+      );
+      const issuerCertPtr = allocAndCopy(wasm, issuerCertBytes);
+      const subjectKeyBytes = toUint8Array(subjectPrivateKey, 'subjectPrivateKey');
+      const subjectKeyPtr = allocAndCopy(wasm, subjectKeyBytes);
+
+      try {
+        const bytes = callDynamicBytesResult(
+          wasm,
+          (outPtr, outLenPtr) => fn(
+            optionsPtr,
+            issuerCurve,
+            issuerKeyPtr,
+            issuerKeyBytes.length,
+            issuerCertPtr,
+            issuerCertBytes.length,
+            issuerCertificateEncoding,
+            subjectCurve,
+            subjectKeyPtr,
+            subjectKeyBytes.length,
+            outputEncoding,
+            outPtr,
+            outLenPtr
+          )
+        );
+        return decodeX509CertificateOutput(bytes, outputEncoding);
+      } finally {
+        wasm._hd_secure_wipe(optionsPtr, optionsLen);
+        wasm._hd_secure_wipe(issuerKeyPtr, issuerKeyBytes.length);
+        wasm._hd_secure_wipe(subjectKeyPtr, subjectKeyBytes.length);
+        wasm._hd_dealloc(optionsPtr);
+        wasm._hd_dealloc(issuerKeyPtr);
+        wasm._hd_dealloc(issuerCertPtr);
+        wasm._hd_dealloc(subjectKeyPtr);
+      }
+    },
+
+    convertCertificate(certificate, inputEncoding, outputEncoding) {
+      assertX509CertificateEncoding(inputEncoding, 'inputEncoding');
+      assertX509CertificateEncoding(outputEncoding, 'outputEncoding');
+      const fn = requireWasmFunction(wasm, '_hd_x509_convert_certificate');
+      const certBytes = normalizeX509CertificateInput(certificate, inputEncoding);
+      const certPtr = allocAndCopy(wasm, certBytes);
+
+      try {
+        const bytes = callDynamicBytesResult(
+          wasm,
+          (outPtr, outLenPtr) => fn(
+            certPtr,
+            certBytes.length,
+            inputEncoding,
+            outputEncoding,
+            outPtr,
+            outLenPtr
+          )
+        );
+        return decodeX509CertificateOutput(bytes, outputEncoding);
+      } finally {
+        wasm._hd_dealloc(certPtr);
+      }
+    },
+
+    parseCertificate(certificate, inputEncoding = X509Encoding.PEM) {
+      assertX509CertificateEncoding(inputEncoding, 'inputEncoding');
+      const fn = requireWasmFunction(wasm, '_hd_x509_parse_certificate_json');
+      const certBytes = normalizeX509CertificateInput(certificate, inputEncoding);
+      const certPtr = allocAndCopy(wasm, certBytes);
+
+      try {
+        return normalizeParsedCertificateJson(JSON.parse(
+          callDynamicStringResult(
+            wasm,
+            (outPtr, outLenPtr) => fn(certPtr, certBytes.length, inputEncoding, outPtr, outLenPtr)
+          )
+        ));
+      } finally {
+        wasm._hd_dealloc(certPtr);
+      }
+    },
+
+    verifyWalletAttestation(certificate, inputEncoding = X509Encoding.PEM) {
+      assertX509CertificateEncoding(inputEncoding, 'inputEncoding');
+      const fn = requireWasmFunction(wasm, '_hd_x509_verify_wallet_attestation');
+      const certBytes = normalizeX509CertificateInput(certificate, inputEncoding);
+      const certPtr = allocAndCopy(wasm, certBytes);
+
+      try {
+        const result = fn(certPtr, certBytes.length, inputEncoding);
+        if (result < 0) {
+          throw new HDWalletError(result);
+        }
+        return result === 1;
+      } finally {
+        wasm._hd_dealloc(certPtr);
+      }
+    },
+
+    exportPkcs12(
+      certificate,
+      certificateEncoding,
+      privateKeyCurve,
+      privateKey,
+      password,
+      friendlyName = '',
+      chainPem = ''
+    ) {
+      assertX509CertificateEncoding(certificateEncoding, 'certificateEncoding');
+      const fn = requireWasmFunction(wasm, '_hd_x509_export_pkcs12');
+      const certBytes = normalizeX509CertificateInput(certificate, certificateEncoding);
+      const certPtr = allocAndCopy(wasm, certBytes);
+      const keyBytes = toUint8Array(privateKey, 'privateKey');
+      const keyPtr = allocAndCopy(wasm, keyBytes);
+      const passwordPtr = allocString(wasm, password);
+      const passwordLen = wasm.lengthBytesUTF8(password) + 1;
+      const friendlyNamePtr = allocString(wasm, friendlyName);
+      const chainBytes = normalizePemInput(chainPem, 'chainPem');
+      const chainPtr = chainBytes.length > 0 ? allocAndCopy(wasm, chainBytes) : 0;
+
+      try {
+        return callDynamicBytesResult(
+          wasm,
+          (outPtr, outLenPtr) => fn(
+            certPtr,
+            certBytes.length,
+            certificateEncoding,
+            privateKeyCurve,
+            keyPtr,
+            keyBytes.length,
+            passwordPtr,
+            friendlyNamePtr,
+            chainPtr,
+            chainBytes.length,
+            outPtr,
+            outLenPtr
+          ),
+          { wipeOutput: true }
+        );
+      } finally {
+        wasm._hd_secure_wipe(keyPtr, keyBytes.length);
+        wasm._hd_secure_wipe(passwordPtr, passwordLen);
+        wasm._hd_dealloc(certPtr);
+        wasm._hd_dealloc(keyPtr);
+        wasm._hd_dealloc(passwordPtr);
+        wasm._hd_dealloc(friendlyNamePtr);
+        if (chainPtr) {
+          wasm._hd_dealloc(chainPtr);
+        }
+      }
+    },
+
+    importPkcs12(pkcs12Bundle, password) {
+      const fn = requireWasmFunction(wasm, '_hd_x509_import_pkcs12_json');
+      const bundleBytes = toUint8Array(pkcs12Bundle, 'pkcs12Bundle');
+      const bundlePtr = allocAndCopy(wasm, bundleBytes);
+      const passwordPtr = allocString(wasm, password);
+      const passwordLen = wasm.lengthBytesUTF8(password) + 1;
+
+      try {
+        return normalizePkcs12ImportJson(JSON.parse(
+          callDynamicStringResult(
+            wasm,
+            (outPtr, outLenPtr) => fn(bundlePtr, bundleBytes.length, passwordPtr, outPtr, outLenPtr),
+            { wipeOutput: true }
+          )
+        ));
+      } finally {
+        wasm._hd_secure_wipe(bundlePtr, bundleBytes.length);
+        wasm._hd_secure_wipe(passwordPtr, passwordLen);
+        wasm._hd_dealloc(bundlePtr);
+        wasm._hd_dealloc(passwordPtr);
+      }
+    }
+  };
+
+  // ==========================================================================
   // ECIES API
   // ==========================================================================
 
@@ -3906,7 +4395,7 @@ function createModule(wasm) {
   // Return the module API
   // ==========================================================================
 
-  return {
+  const module = {
     // Module info
     getVersion() {
       const ptr = wasm._hd_get_version_string();
@@ -4034,6 +4523,7 @@ function createModule(wasm) {
     hardware,
     keyring,
     utils,
+    x509,
     ecies,
     aesCtr,
     slip10,
@@ -4058,6 +4548,9 @@ function createModule(wasm) {
       return this._aligned;
     }
   };
+
+  module.plugin = createSdnPluginContract({ wallet: module, wasm });
+  return module;
 }
 
 // =============================================================================
@@ -4212,7 +4705,9 @@ export async function createHDWallet() {
 export {
   HDKey,
   HDWalletError,
-  ErrorCode
+  ErrorCode,
+  HD_WALLET_SDN_PLUGIN_MANIFEST,
+  SDN_PLUGIN_MANIFEST_EXPORTS
 };
 
 // EPM Attestation

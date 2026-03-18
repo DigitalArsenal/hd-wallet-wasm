@@ -12,6 +12,136 @@
 // Import aligned API types
 import { AlignedAPI } from './aligned';
 
+export type BinaryLike = Uint8Array | ArrayBuffer | ArrayBufferView;
+export type X509CertificateInput = string | BinaryLike;
+
+export interface SdnPluginTypeRef {
+  schemaName: string | null;
+  fileIdentifier: string | null;
+  schemaHash?: number[];
+  acceptsAnyFlatbuffer?: boolean;
+}
+
+export interface SdnPluginAcceptedTypeSet {
+  setId: string;
+  allowedTypes: SdnPluginTypeRef[];
+  description?: string | null;
+}
+
+export interface SdnPluginPortManifest {
+  portId: string;
+  displayName?: string | null;
+  acceptedTypeSets: SdnPluginAcceptedTypeSet[];
+  minStreams?: number;
+  maxStreams?: number;
+  required?: boolean;
+  description?: string | null;
+}
+
+export interface SdnPluginMethodManifest {
+  methodId: string;
+  displayName?: string | null;
+  inputPorts: SdnPluginPortManifest[];
+  outputPorts: SdnPluginPortManifest[];
+  maxBatch?: number;
+  drainPolicy?: string | null;
+  description?: string | null;
+}
+
+export interface SdnPluginCapabilityManifest {
+  capabilityId: string;
+  required?: boolean;
+  description?: string | null;
+}
+
+export interface SdnPluginExternalInterfaceManifest {
+  interfaceId: string;
+  kind?: string | null;
+  direction?: string | null;
+  capability?: string | null;
+  resource?: string | null;
+  protocolId?: string | null;
+  topic?: string | null;
+  path?: string | null;
+  required?: boolean;
+  acceptedTypes?: SdnPluginTypeRef[];
+  description?: string | null;
+  properties?: Record<string, unknown>;
+}
+
+export interface SdnPluginBuildArtifact {
+  artifactId: string;
+  kind?: string | null;
+  path: string;
+  target?: string | null;
+  entrySymbol?: string | null;
+}
+
+export interface SdnPluginManifest {
+  pluginId: string;
+  name?: string | null;
+  version?: string | null;
+  pluginFamily?: string | null;
+  description?: string | null;
+  methods: SdnPluginMethodManifest[];
+  capabilities: SdnPluginCapabilityManifest[];
+  externalInterfaces: SdnPluginExternalInterfaceManifest[];
+  schemasUsed: SdnPluginTypeRef[];
+  buildArtifacts: SdnPluginBuildArtifact[];
+  abiVersion?: number;
+}
+
+export interface SdnPluginFrame {
+  portId: string;
+  typeRef?: SdnPluginTypeRef | null;
+  alignment?: number;
+  offset?: number;
+  size?: number;
+  ownership?: string;
+  generation?: number;
+  mutability?: string;
+  traceId?: string | null;
+  streamId?: number;
+  sequence?: number;
+  payload: any;
+}
+
+export interface SdnPluginInvocationResult {
+  outputs: SdnPluginFrame[];
+  backlogRemaining: number;
+  yielded: boolean;
+}
+
+export interface SdnPluginCapabilities {
+  randomBytes?: (length: number, context?: Record<string, unknown>) => BinaryLike;
+  walletSign?: (request: {
+    curve: string;
+    payload: any;
+    messageBytes: Uint8Array;
+    digest: Uint8Array | null;
+  }) => {
+    signature: BinaryLike;
+    publicKey: BinaryLike;
+    algorithm?: string;
+  };
+}
+
+export interface SdnPluginContract {
+  manifest: SdnPluginManifest;
+  manifestExports: {
+    bytesSymbol: string;
+    sizeSymbol: string;
+  };
+  getManifest(): SdnPluginManifest;
+  getManifestBytes(): Uint8Array;
+  withCapabilities(capabilities: SdnPluginCapabilities): SdnPluginContract;
+  invoke(methodId: string, request: { inputs: SdnPluginFrame[] }): SdnPluginInvocationResult;
+  encrypt_fields(request: { inputs: SdnPluginFrame[] }): SdnPluginInvocationResult;
+  decrypt_fields(request: { inputs: SdnPluginFrame[] }): SdnPluginInvocationResult;
+  sign_detached(request: { inputs: SdnPluginFrame[] }): SdnPluginInvocationResult;
+  verify_detached(request: { inputs: SdnPluginFrame[] }): SdnPluginInvocationResult;
+}
+
 // =============================================================================
 // Module Types
 // =============================================================================
@@ -74,6 +204,9 @@ export interface HDWalletModule {
   // Utilities
   utils: UtilsAPI;
 
+  // X.509 certificates
+  x509: X509API;
+
   // Key derivation helpers
   buildSigningPath: typeof buildSigningPath;
   buildEncryptionPath: typeof buildEncryptionPath;
@@ -82,6 +215,9 @@ export interface HDWalletModule {
 
   // libp2p PeerID / IPNS
   libp2p: Libp2pAPI;
+
+  // Canonical SDN plugin-facing contract
+  plugin: SdnPluginContract;
 
   // Aligned binary API for efficient batch operations
   aligned: AlignedAPI;
@@ -169,6 +305,12 @@ export enum BitcoinAddressType {
 export enum Network {
   MAINNET = 0,
   TESTNET = 1
+}
+
+export enum X509Encoding {
+  PEM = 0,
+  DER = 1,
+  PKCS12 = 2
 }
 
 // =============================================================================
@@ -643,6 +785,95 @@ export interface UtilsAPI {
 }
 
 // =============================================================================
+// X.509 API
+// =============================================================================
+
+export interface X509WalletAttestationOptions {
+  curve: Curve;
+  privateKey: BinaryLike;
+  keyLabel?: string;
+  commentPrefix?: string;
+}
+
+export interface X509CertificateOptions {
+  subjectDn: string;
+  serialHex?: string;
+  notBeforeUnix: number;
+  notAfterUnix: number;
+  isCa?: boolean;
+  pathLen?: number;
+  dnsNames?: string[];
+  ipAddresses?: string[];
+  emailAddresses?: string[];
+  uriNames?: string[];
+  keyUsage?: string[];
+  extendedKeyUsage?: string[];
+  friendlyName?: string;
+  walletAttestation?: X509WalletAttestationOptions;
+}
+
+export interface X509ParsedCertificate {
+  subjectDn: string;
+  issuerDn: string;
+  serialHex: string;
+  notBefore: string;
+  notAfter: string;
+  isCa: boolean;
+  dnsNames: string[];
+  ipAddresses: string[];
+  emailAddresses: string[];
+  uriNames: string[];
+  walletAttestationComment: string;
+  walletAttestationValid: boolean;
+}
+
+export interface X509Pkcs12Bundle {
+  certificatePem: string;
+  privateKeyPem: string;
+  chainPem: string;
+}
+
+export interface X509API {
+  isAvailable(): boolean;
+  generatePrivateKey(curve: Curve): Uint8Array;
+  exportPrivateKeyPem(curve: Curve, privateKey: BinaryLike): string;
+  importPrivateKeyPem(curve: Curve, pem: string): Uint8Array;
+  createSelfSignedCertificate(
+    options: X509CertificateOptions,
+    certificateCurve: Curve,
+    certificatePrivateKey: BinaryLike,
+    outputEncoding?: X509Encoding
+  ): string | Uint8Array;
+  issueCertificate(
+    options: X509CertificateOptions,
+    issuerCurve: Curve,
+    issuerPrivateKey: BinaryLike,
+    issuerCertificate: X509CertificateInput,
+    issuerCertificateEncoding: X509Encoding,
+    subjectCurve: Curve,
+    subjectPrivateKey: BinaryLike,
+    outputEncoding?: X509Encoding
+  ): string | Uint8Array;
+  convertCertificate(
+    certificate: X509CertificateInput,
+    inputEncoding: X509Encoding,
+    outputEncoding: X509Encoding
+  ): string | Uint8Array;
+  parseCertificate(certificate: X509CertificateInput, inputEncoding?: X509Encoding): X509ParsedCertificate;
+  verifyWalletAttestation(certificate: X509CertificateInput, inputEncoding?: X509Encoding): boolean;
+  exportPkcs12(
+    certificate: X509CertificateInput,
+    certificateEncoding: X509Encoding,
+    privateKeyCurve: Curve,
+    privateKey: BinaryLike,
+    password: string,
+    friendlyName?: string,
+    chainPem?: X509CertificateInput
+  ): Uint8Array;
+  importPkcs12(pkcs12Bundle: BinaryLike, password: string): X509Pkcs12Bundle;
+}
+
+// =============================================================================
 // libp2p PeerID / IPNS API
 // =============================================================================
 
@@ -712,6 +943,12 @@ export default function init(wasmPath?: string): Promise<HDWalletModule>;
  * @param wasmPath - Optional path to WASM file
  */
 export function createHDWallet(wasmPath?: string): Promise<HDWalletModule>;
+
+export const HD_WALLET_SDN_PLUGIN_MANIFEST: SdnPluginManifest;
+export const SDN_PLUGIN_MANIFEST_EXPORTS: {
+  bytesSymbol: string;
+  sizeSymbol: string;
+};
 
 // =============================================================================
 // EPM Attestation

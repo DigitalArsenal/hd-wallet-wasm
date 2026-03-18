@@ -1,6 +1,6 @@
 {
   "name": "hd-wallet-wasm",
-  "version": "1.6.0",
+  "version": "2.0.0",
   "description": "Comprehensive HD Wallet implementation in WebAssembly - BIP-32/39/44, multi-curve, multi-chain support",
   "type": "module",
   "main": "src/index.mjs",
@@ -37,9 +37,13 @@
     "README.md"
   ],
   "scripts": {
-    "generate": "node ../scripts/generate-aligned.mjs",
-    "build": "npm run generate && cmake --build ../build-wasm --target hd_wallet_wasm_npm -j",
+    "generate": "npm run generate:sdn-plugin",
+    "generate:all": "npm run generate:aligned && npm run generate:sdn-plugin",
+    "generate:aligned": "node ../scripts/generate-aligned.mjs",
+    "generate:sdn-plugin": "node ../scripts/generate-sdn-plugin-manifest.mjs",
+    "build": "npm run generate:sdn-plugin && cmake --build ../build-wasm --target hd_wallet_wasm_npm -j",
     "test:artifact": "node test/test_bundle_browser_artifact.mjs",
+    "test:sdn-plugin": "node test/test_sdn_plugin_compliance.mjs",
     "test:all": "node test/test_all.mjs",
     "test": "npm run test:artifact && npm run test:all",
     "test:bip39": "node test/test_bip39.mjs",

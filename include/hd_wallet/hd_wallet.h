@@ -79,6 +79,7 @@
 #include "ecdsa.h"
 #include "eddsa.h"
 #include "ecdh.h"
+#include "x509.h"
 
 // =============================================================================
 // Chain Support (conditionally included)

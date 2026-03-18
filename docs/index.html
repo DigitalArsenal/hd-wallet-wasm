@@ -9,8 +9,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=SF+Pro+Display:wght@400;500;600;700&family=SF+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <script type="module" crossorigin src="./assets/main-CmmzwXL0.js"></script>
-  <link rel="stylesheet" crossorigin href="./assets/main-Dq6oEdt7.css">
+  <script type="module" crossorigin src="./assets/main-BKArSGyH.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/main-BQnFx4W-.css">
 </head>
 <body>
   <!-- Blurred Background -->
@@ -32,6 +32,7 @@
         <a href="#packages" class="nav-link">Packages</a>
         <a href="#features" class="nav-link">Features</a>
         <a href="#quickstart" class="nav-link">Quick Start</a>
+        <a href="#x509-pki" class="nav-link">X.509 PKI</a>
         <a href="#blockchains" class="nav-link">Blockchains</a>
         <a href="#adversarial" class="nav-link">Security</a>
       </div>
@@ -60,6 +61,7 @@
     <a href="#packages" class="nav-link">Packages</a>
     <a href="#features" class="nav-link">Features</a>
     <a href="#quickstart" class="nav-link">Quick Start</a>
+    <a href="#x509-pki" class="nav-link">X.509 PKI</a>
     <a href="#blockchains" class="nav-link">Blockchains</a>
     <a href="#adversarial" class="nav-link">Security</a>
     <div class="nav-divider"></div>
@@ -98,7 +100,7 @@
             <div class="feature-icon" style="margin:0;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></div>
             <h3 style="margin:0;">hd-wallet-wasm</h3>
           </div>
-          <p>Core WebAssembly library. BIP-32/39/44 HD key derivation, multi-curve cryptography (secp256k1, Ed25519, NIST P-256), address generation, signing, and encryption for 50+ blockchains.</p>
+          <p>Core WebAssembly library. BIP-32/39/44 HD key derivation, multi-curve cryptography, X.509 certificate issuance, wallet attestations, address generation, signing, and encryption for 50+ blockchains.</p>
           <div class="code-block" style="margin:1rem 0;">
             <div class="code-block-header">
               <span class="code-lang">bash</span>
@@ -197,6 +199,11 @@ wallet.destroy();</code></pre>
           <p>Compiled to WASM for browser, Node.js, and WASI runtimes. Works with Go, Rust, Python, and any WASI-compatible host.</p>
         </div>
         <div class="feature-card glass-card">
+          <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 11V7a5 5 0 0 1 10 0v4"/><path d="M5 11h14v9H5z"/><path d="M12 15v2"/><path d="M9 20h6"/></svg></div>
+          <h3>X.509 and Wallet Proofs</h3>
+          <p>Issue standard P-256/P-384 certificates, exchange PEM/DER/PKCS#12, and embed wallet attestations that bind a certificate to a selected crypto key.</p>
+        </div>
+        <div class="feature-card glass-card">
           <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M12 12h.01M17 12h.01M7 12h.01"/></svg></div>
           <h3>Hardware Wallet Support</h3>
           <p>Abstraction layer for Trezor, Ledger, and KeepKey devices with WASI bridge integration for USB/HID communication.</p>
@@ -285,6 +292,100 @@ const encrypted = wallet.utils.aesGcm.encrypt(aesKey, plaintext, iv, aad);
 const result = wallet.utils.aesGcm.decrypt(
   aesKey, encrypted.ciphertext, encrypted.tag, iv, aad
 );</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- X.509 PKI -->
+  <section class="homepage-section page-section" id="x509-pki">
+    <div class="section-container">
+      <h2 class="section-heading">X.509 PKI</h2>
+      <p class="section-subheading">Standard Web PKI for TLS and device identity, with a wallet-backed attestation layer that binds certificates to HD-wallet keys.</p>
+
+      <div class="x509-overview glass-card">
+        <div class="x509-copy">
+          <span class="x509-eyebrow">Why we use it</span>
+          <h3>X.509 is what the rest of the internet already understands</h3>
+          <p>Browsers, load balancers, reverse proxies, mTLS deployments, device identity systems, and keystore tooling all already speak X.509. That means if we want a certificate that real infrastructure can consume, we use normal Web PKI instead of inventing a repo-local identity format.</p>
+          <p>What `hd-wallet-wasm` adds is a second proof path: the certificate can carry a wallet attestation signed by a selected wallet key. The certificate remains interoperable for TLS, and applications that care about wallet identity can verify the extra proof.</p>
+          <div class="x509-tag-row">
+            <span class="x509-tag">P-256 / P-384</span>
+            <span class="x509-tag">PEM / DER / PKCS#12</span>
+            <span class="x509-tag">TLS + mTLS</span>
+            <span class="x509-tag">Wallet Attestations</span>
+          </div>
+        </div>
+        <div class="code-block">
+          <div class="code-block-header">
+            <span class="code-lang">javascript</span>
+            <button class="code-copy-btn" title="Copy code">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+            </button>
+          </div>
+          <pre><code>import HDWalletWasm, { Curve, X509Encoding } from 'hd-wallet-wasm';
+
+const wallet = await HDWalletWasm();
+const now = Math.floor(Date.now() / 1000);
+const certKey = wallet.x509.generatePrivateKey(Curve.P256);
+
+const certPem = wallet.x509.createSelfSignedCertificate(
+  {
+    subjectDn: 'CN=api.example.com,O=Digital Arsenal,C=US',
+    serialHex: '1001',
+    notBeforeUnix: now - 300,
+    notAfterUnix: now + 31536000,
+    dnsNames: ['api.example.com'],
+    keyUsage: ['digitalSignature', 'keyEncipherment'],
+    extendedKeyUsage: ['serverAuth'],
+    walletAttestation: {
+      curve: Curve.SECP256K1,
+      privateKey: wallet.utils.decodeHex(
+        '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f'
+      ),
+      keyLabel: 'btc-root'
+    }
+  },
+  Curve.P256,
+  certKey,
+  X509Encoding.PEM
+);
+
+const parsed = wallet.x509.parseCertificate(certPem);
+const walletProofValid = wallet.x509.verifyWalletAttestation(certPem);</code></pre>
+        </div>
+      </div>
+
+      <div class="adversarial-flow x509-flow glass-card">
+        <div class="flow-step"><div class="flow-step-icon" style="background:rgba(96,165,250,0.15);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="1.5" stroke-linecap="round"><path d="M12 2l7 4v5c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6l7-4z"/><path d="M9 12l2 2 4-4"/></svg></div><div class="flow-step-label">Generate Cert Key</div></div>
+        <div class="flow-arrow"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14m-4-4l4 4-4 4"/></svg></div>
+        <div class="flow-step"><div class="flow-step-icon" style="background:rgba(52,211,153,0.15);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="1.5" stroke-linecap="round"><path d="M7 11V7a5 5 0 0 1 10 0v4"/><path d="M5 11h14v9H5z"/><path d="M12 15v2"/></svg></div><div class="flow-step-label">Issue X.509 Cert</div></div>
+        <div class="flow-arrow"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14m-4-4l4 4-4 4"/></svg></div>
+        <div class="flow-step"><div class="flow-step-icon" style="background:rgba(251,191,36,0.15);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-linecap="round"><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></div><div class="flow-step-label">Embed Wallet Proof</div></div>
+        <div class="flow-arrow"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14m-4-4l4 4-4 4"/></svg></div>
+        <div class="flow-step"><div class="flow-step-icon" style="background:rgba(248,113,113,0.15);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f87171" stroke-width="1.5" stroke-linecap="round"><path d="M3 12h6l3 8 4-16 3 8h2"/></svg></div><div class="flow-step-label">Verify Chain + Wallet</div></div>
+      </div>
+
+      <div class="features-grid x509-grid">
+        <div class="feature-card glass-card">
+          <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l7 4v5c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6l7-4z"/></svg></div>
+          <h3>How It Works</h3>
+          <p>Certificate issuance stays on regular P-256 or P-384 keys. The repo can create self-signed certs, issue subordinates, convert PEM and DER, and package material as PKCS#12 for normal keystores.</p>
+        </div>
+        <div class="feature-card glass-card">
+          <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 11V7a5 5 0 0 1 10 0v4"/><path d="M5 11h14v9H5z"/><path d="M12 15v2"/></svg></div>
+          <h3>Why It Matters</h3>
+          <p>Standard TLS tooling gets a normal certificate. Wallet-aware verifiers get an additional proof that the certificate was attested by a selected wallet key without replacing the existing PKI chain.</p>
+        </div>
+        <div class="feature-card glass-card">
+          <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 8v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8"/><path d="M3 8l9-5 9 5"/><path d="M12 13v5"/></svg></div>
+          <h3>How We Use It</h3>
+          <p>The wallet attestation signs canonical certificate fields including the SPKI digest. That creates a durable binding between the certificate and the chosen wallet identity, such as a Bitcoin-root secp256k1 key.</p>
+        </div>
+        <div class="feature-card glass-card">
+          <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4"/><path d="M21 12c0 4.97-4.03 9-9 9a9 9 0 1 1 0-18c2.38 0 4.54.92 6.15 2.43"/></svg></div>
+          <h3>What Verifiers Check</h3>
+          <p>First validate the normal X.509 chain. Then parse the certificate and verify the embedded wallet proof. Both need to pass if you want to prove a server certificate was bound by a wallet key.</p>
+        </div>
       </div>
     </div>
   </section>

@@ -1,5 +1,6 @@
 # Build directories
 build/
+build-*/
 build-native/
 build-wasm/
 build-wasi/
@@ -30,6 +31,7 @@ __pycache__/
 
 # Output directories
 wasm/dist/
+openssl-fips/dist/
 
 # OS files
 .DS_Store

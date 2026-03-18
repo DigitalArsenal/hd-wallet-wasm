@@ -4,13 +4,16 @@
   "scripts": {
     "prepare": "husky",
     "dev": "cd wallet-ui && npm run dev",
+    "generate:sdn-plugin-manifest": "node scripts/generate-sdn-plugin-manifest.mjs",
     "build:docs": "cd wallet-ui && npm run build:docs",
     "test": "npm run test:artifact && npm run test:wasm && npm run test:wallet-ui",
     "test:artifact": "cd wasm && npm run test:artifact",
     "test:wasm": "cd wasm && npm run test:all",
-    "test:wallet-ui": "cd wallet-ui && npm test"
+    "test:wallet-ui": "cd wallet-ui && npm test",
+    "test:sdn-plugin": "cd wasm && npm run test:sdn-plugin"
   },
   "devDependencies": {
+    "flatbuffers": "^25.9.23",
     "husky": "^9.1.7"
   },
   "repository": {

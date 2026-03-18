@@ -221,7 +221,7 @@ writeFileSync(jsOutputPath, jsContent);
 
 // Print layout information
 console.log('\nGenerated struct layouts:');
-for (const [name, layout] of Object.entries(result.layouts)) {
+for (const [name, layout] of Object.entries(result.layouts ?? {})) {
   console.log(`  ${name}: ${layout.size} bytes (align ${layout.align})`);
 }
 

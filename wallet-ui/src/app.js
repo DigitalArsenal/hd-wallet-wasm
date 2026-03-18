@@ -3498,11 +3498,49 @@ function verifyVCardSignature(vcardText) {
   }
 }
 
+function hideImportedVcardPreview() {
+  state.importedVcardPreview = null;
+  const resultEl = $('vcf-import-result');
+  const fieldsEl = $('vcf-import-fields');
+  const sigStatus = $('vcf-import-sig-status');
+  if (fieldsEl) fieldsEl.innerHTML = '';
+  if (sigStatus) {
+    sigStatus.innerHTML = '';
+    sigStatus.style.display = 'none';
+  }
+  if (resultEl) resultEl.style.display = 'none';
+}
+
+function applyImportedVcardPreview() {
+  const imported = state.importedVcardPreview;
+  if (!imported) return;
+
+  for (const id of vcardFieldIds) {
+    const el = $(id);
+    if (el) el.value = imported.formValues[id] || '';
+  }
+
+  state.vcardPhoto = imported.photo || null;
+  if (imported.photo) {
+    showPhotoPreview(imported.photo);
+  } else {
+    resetPhotoPreview();
+  }
+
+  saveVcardIdentity();
+  updateIdentityCardSummary();
+  setPhotoActionsVisible(false);
+  $('vcard-edit-view').style.display = 'none';
+  $('vcard-form-view').style.display = '';
+  hideImportedVcardPreview();
+}
+
 function parseAndDisplayVCF(vcfText) {
   const lines = vcfText.replace(/\r?\n /g, '').split(/\r?\n/);
   const fields = {};
   const keys = [];
   let photo = null;
+  const formValues = Object.fromEntries(vcardFieldIds.map(id => [id, '']));
 
   for (const line of lines) {
     const colonIdx = line.indexOf(':');
@@ -3512,19 +3550,38 @@ function parseAndDisplayVCF(vcfText) {
 
     if (prop === 'FN') {
       fields.name = value;
-    } else if (prop.startsWith('N')) {
+    } else if (prop === 'N') {
+      const parts = value.split(';');
+      formValues['vcard-lastname'] = parts[0] || '';
+      formValues['vcard-firstname'] = parts[1] || '';
+      formValues['vcard-middlename'] = parts[2] || '';
+      formValues['vcard-prefix'] = parts[3] || '';
+      formValues['vcard-suffix'] = parts[4] || '';
       if (!fields.name) {
-        const parts = value.split(';');
         fields.name = [parts[3], parts[1], parts[2], parts[0], parts[4]].filter(Boolean).join(' ');
       }
+    } else if (prop === 'NICKNAME') {
+      formValues['vcard-nickname'] = value;
     } else if (prop.startsWith('EMAIL')) {
+      formValues['vcard-email'] ||= value;
       fields.email = value;
     } else if (prop.startsWith('ORG')) {
-      fields.org = value.replace(/;/g, ', ');
+      const normalized = value.replace(/;/g, ', ');
+      formValues['vcard-org'] ||= normalized;
+      fields.org = normalized;
     } else if (prop.startsWith('TITLE')) {
+      formValues['vcard-title'] ||= value;
       fields.title = value;
     } else if (prop.startsWith('TEL')) {
+      formValues['vcard-phone'] ||= value;
       fields.tel = value;
+    } else if (prop.startsWith('ADR')) {
+      const parts = value.split(';');
+      formValues['vcard-street'] ||= [parts[1], parts[2]].filter(Boolean).join(' ');
+      formValues['vcard-city'] ||= parts[3] || '';
+      formValues['vcard-region'] ||= parts[4] || '';
+      formValues['vcard-postal'] ||= parts[5] || '';
+      formValues['vcard-country'] ||= parts[6] || '';
     } else if (prop.startsWith('PHOTO')) {
       if (prop.includes('VALUE=URI') || value.startsWith('data:') || value.startsWith('http')) {
         photo = value;
@@ -3539,6 +3596,10 @@ function parseAndDisplayVCF(vcfText) {
     } else if (prop.startsWith('X-CRYPTO-KEY') || prop.startsWith('X-KEY')) {
       keys.push({ type: prop.split(';')[0], value });
     }
+  }
+
+  if (!formValues['vcard-firstname'] && !formValues['vcard-lastname'] && fields.name) {
+    formValues['vcard-firstname'] = fields.name;
   }
 
   const resultEl = $('vcf-import-result');
@@ -3600,6 +3661,11 @@ function parseAndDisplayVCF(vcfText) {
     }
     sigStatus.style.display = 'flex';
   }
+
+  state.importedVcardPreview = {
+    formValues,
+    photo,
+  };
 
   fieldsEl.innerHTML = html;
   resultEl.style.display = 'block';
@@ -4532,6 +4598,14 @@ function setupMainAppHandlers() {
     };
     reader.readAsText(file);
     e.target.value = '';
+  });
+
+  $('vcf-import-apply')?.addEventListener('click', () => {
+    applyImportedVcardPreview();
+  });
+
+  $('vcf-import-close')?.addEventListener('click', () => {
+    hideImportedVcardPreview();
   });
 
   // Reveal sensitive key buttons

@@ -1,0 +1,80 @@
+namespace sdn.plugin;
+
+table TypeRef {
+  schema_name: string;
+  file_identifier: string;
+  schema_hash: [ubyte];
+  accepts_any_flatbuffer: bool = false;
+}
+
+table AcceptedTypeSet {
+  set_id: string (required);
+  allowed_types: [TypeRef];
+  description: string;
+}
+
+table PortManifest {
+  port_id: string (required);
+  display_name: string;
+  accepted_type_sets: [AcceptedTypeSet];
+  min_streams: uint16 = 1;
+  max_streams: uint16 = 1;
+  required: bool = true;
+  description: string;
+}
+
+table MethodManifest {
+  method_id: string (required);
+  display_name: string;
+  input_ports: [PortManifest];
+  output_ports: [PortManifest];
+  max_batch: uint32 = 1;
+  drain_policy: string;
+  description: string;
+}
+
+table CapabilityManifest {
+  capability_id: string (required);
+  required: bool = true;
+  description: string;
+}
+
+table ExternalInterfaceManifest {
+  interface_id: string (required);
+  kind: string;
+  direction: string;
+  capability: string;
+  resource: string;
+  protocol_id: string;
+  topic: string;
+  path: string;
+  required: bool = true;
+  accepted_types: [TypeRef];
+  description: string;
+  properties_json: string;
+}
+
+table BuildArtifact {
+  artifact_id: string (required);
+  kind: string;
+  path: string (required);
+  target: string;
+  entry_symbol: string;
+}
+
+table PluginManifest {
+  plugin_id: string (required, key);
+  name: string;
+  version: string;
+  plugin_family: string;
+  description: string;
+  methods: [MethodManifest];
+  capabilities: [CapabilityManifest];
+  external_interfaces: [ExternalInterfaceManifest];
+  schemas_used: [TypeRef];
+  build_artifacts: [BuildArtifact];
+  abi_version: uint32 = 1;
+}
+
+root_type PluginManifest;
+file_identifier "PMAN";

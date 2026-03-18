@@ -127,8 +127,14 @@ async function runTests() {
     console.log('\n\x1b[1mAPI Surface Tests:\x1b[0m');
     await import('./test_api_surface.mjs');
 
+    console.log('\n\x1b[1mX.509 Tests:\x1b[0m');
+    await import('./test_x509.mjs');
+
     console.log('\n\x1b[1mAligned Surface Tests:\x1b[0m');
     await import('./test_aligned_surface.mjs');
+
+    console.log('\n\x1b[1mSDN Plugin Compliance Tests:\x1b[0m');
+    await import('./test_sdn_plugin_compliance.mjs');
 
     console.log('\n\x1b[1mIsomorphic Tests:\x1b[0m');
     await import('./test_isomorphic.mjs');
