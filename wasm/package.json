@@ -87,6 +87,9 @@
   "engines": {
     "node": ">=18.0.0"
   },
+  "dependencies": {
+    "flatbuffers": "^25.2.10"
+  },
   "devDependencies": {
     "@types/node": "^20.0.0"
   }
