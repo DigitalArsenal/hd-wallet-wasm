@@ -1,7 +1,7 @@
 # X.509 PKI in hd-wallet-wasm
 
 This document describes the X.509 implementation that ships in `hd-wallet-wasm`
-`2.0.0`. It replaces the earlier browser-only PKI design notes that assumed
+`2.0.1`. It replaces the earlier browser-only PKI design notes that assumed
 JavaScript certificate modules which are no longer the architecture of record.
 
 ## Overview

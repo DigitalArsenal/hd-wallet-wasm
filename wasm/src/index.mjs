@@ -9,7 +9,7 @@
  * - Transaction building and signing
  *
  * @module hd-wallet-wasm
- * @version 2.0.0
+ * @version 2.0.1
  */
 
 // Import aligned API for batch operations
@@ -505,56 +505,95 @@ function readSize32(wasm, ptr) {
   return wasm.getValue(ptr, 'i32') >>> 0;
 }
 
+function shouldRetryDynamicResult(result, capacity, requiredSize) {
+  return result === -ErrorCode.OUT_OF_MEMORY && requiredSize > capacity;
+}
+
 function callDynamicBytesResult(wasm, invoke, options = {}) {
-  const { wipeOutput = false } = options;
+  const { wipeOutput = false, maxAttempts = 6 } = options;
   const lenPtr = wasm._hd_alloc(4);
   if (!lenPtr) throw new HDWalletError(ErrorCode.OUT_OF_MEMORY);
 
   try {
     wasm.setValue(lenPtr, 0, 'i32');
     checkResult(invoke(0, lenPtr));
-    const requestedSize = readSize32(wasm, lenPtr);
-    const outPtr = wasm._hd_alloc(requestedSize > 0 ? requestedSize : 1);
-    if (!outPtr) throw new HDWalletError(ErrorCode.OUT_OF_MEMORY);
+    let requestedSize = readSize32(wasm, lenPtr);
 
-    try {
-      wasm.setValue(lenPtr, requestedSize, 'i32');
-      checkResult(invoke(outPtr, lenPtr));
-      const actualSize = readSize32(wasm, lenPtr);
-      return readBytes(wasm, outPtr, actualSize);
-    } finally {
-      if (wipeOutput && requestedSize > 0) {
-        wasm._hd_secure_wipe(outPtr, requestedSize);
+    // Some outputs are regenerated on each call, so their exact size can grow
+    // between the length probe and the materialization call.
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const capacity = requestedSize > 0 ? requestedSize : 1;
+      const outPtr = wasm._hd_alloc(capacity);
+      if (!outPtr) throw new HDWalletError(ErrorCode.OUT_OF_MEMORY);
+
+      try {
+        wasm.setValue(lenPtr, capacity, 'i32');
+        const result = invoke(outPtr, lenPtr);
+        const actualSize = readSize32(wasm, lenPtr);
+        if (result === 0) {
+          return readBytes(wasm, outPtr, actualSize);
+        }
+        if (shouldRetryDynamicResult(result, capacity, actualSize)) {
+          requestedSize = Math.max(actualSize, capacity * 2);
+          continue;
+        }
+        checkResult(result);
+      } finally {
+        if (wipeOutput && capacity > 0) {
+          wasm._hd_secure_wipe(outPtr, capacity);
+        }
+        wasm._hd_dealloc(outPtr);
       }
-      wasm._hd_dealloc(outPtr);
     }
+
+    throw new HDWalletError(
+      ErrorCode.OUT_OF_MEMORY,
+      'Dynamic result size changed too many times while materializing output'
+    );
   } finally {
     wasm._hd_dealloc(lenPtr);
   }
 }
 
 function callDynamicStringResult(wasm, invoke, options = {}) {
-  const { wipeOutput = false } = options;
+  const { wipeOutput = false, maxAttempts = 6 } = options;
   const lenPtr = wasm._hd_alloc(4);
   if (!lenPtr) throw new HDWalletError(ErrorCode.OUT_OF_MEMORY);
 
   try {
     wasm.setValue(lenPtr, 0, 'i32');
     checkResult(invoke(0, lenPtr));
-    const requestedSize = readSize32(wasm, lenPtr);
-    const outPtr = wasm._hd_alloc(requestedSize > 0 ? requestedSize : 1);
-    if (!outPtr) throw new HDWalletError(ErrorCode.OUT_OF_MEMORY);
+    let requestedSize = readSize32(wasm, lenPtr);
 
-    try {
-      wasm.setValue(lenPtr, requestedSize, 'i32');
-      checkResult(invoke(outPtr, lenPtr));
-      return readString(wasm, outPtr);
-    } finally {
-      if (wipeOutput && requestedSize > 0) {
-        wasm._hd_secure_wipe(outPtr, requestedSize);
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const capacity = requestedSize > 0 ? requestedSize : 1;
+      const outPtr = wasm._hd_alloc(capacity);
+      if (!outPtr) throw new HDWalletError(ErrorCode.OUT_OF_MEMORY);
+
+      try {
+        wasm.setValue(lenPtr, capacity, 'i32');
+        const result = invoke(outPtr, lenPtr);
+        const actualSize = readSize32(wasm, lenPtr);
+        if (result === 0) {
+          return readString(wasm, outPtr);
+        }
+        if (shouldRetryDynamicResult(result, capacity, actualSize)) {
+          requestedSize = Math.max(actualSize, capacity * 2);
+          continue;
+        }
+        checkResult(result);
+      } finally {
+        if (wipeOutput && capacity > 0) {
+          wasm._hd_secure_wipe(outPtr, capacity);
+        }
+        wasm._hd_dealloc(outPtr);
       }
-      wasm._hd_dealloc(outPtr);
     }
+
+    throw new HDWalletError(
+      ErrorCode.OUT_OF_MEMORY,
+      'Dynamic result size changed too many times while materializing output'
+    );
   } finally {
     wasm._hd_dealloc(lenPtr);
   }

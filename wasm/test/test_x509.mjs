@@ -81,61 +81,63 @@ if (!wallet?.x509?.isAvailable?.()) {
   });
 
   test('X.509: issuer-signed certificate and PKCS#12 import/export round-trip', () => {
-    const rootPrivateKey = wallet.x509.generatePrivateKey(Curve.P384);
-    const leafPrivateKey = wallet.x509.generatePrivateKey(Curve.P384);
+    for (let i = 0; i < 5; i++) {
+      const rootPrivateKey = wallet.x509.generatePrivateKey(Curve.P384);
+      const leafPrivateKey = wallet.x509.generatePrivateKey(Curve.P384);
 
-    const rootCertificatePem = wallet.x509.createSelfSignedCertificate(
-      {
-        subjectDn: 'CN=Wallet Root CA,O=HD Wallet,C=US',
-        serialHex: '1001',
-        notBeforeUnix: 1704067200,
-        notAfterUnix: 1767225600,
-        isCa: true,
-        pathLen: 0,
-        keyUsage: ['keyCertSign', 'cRLSign'],
-        friendlyName: 'wallet-root'
-      },
-      Curve.P384,
-      rootPrivateKey,
-      X509Encoding.PEM
-    );
+      const rootCertificatePem = wallet.x509.createSelfSignedCertificate(
+        {
+          subjectDn: 'CN=Wallet Root CA,O=HD Wallet,C=US',
+          serialHex: '1001',
+          notBeforeUnix: 1704067200,
+          notAfterUnix: 1767225600,
+          isCa: true,
+          pathLen: 0,
+          keyUsage: ['keyCertSign', 'cRLSign'],
+          friendlyName: 'wallet-root'
+        },
+        Curve.P384,
+        rootPrivateKey,
+        X509Encoding.PEM
+      );
 
-    const leafCertificatePem = wallet.x509.issueCertificate(
-      {
-        subjectDn: 'CN=leaf.wallet.example,O=HD Wallet,C=US',
-        serialHex: '1002',
-        notBeforeUnix: 1704067200,
-        notAfterUnix: 1735689600,
-        dnsNames: ['leaf.wallet.example'],
-        keyUsage: ['digitalSignature', 'keyEncipherment'],
-        extendedKeyUsage: ['serverAuth'],
-        friendlyName: 'wallet-leaf'
-      },
-      Curve.P384,
-      rootPrivateKey,
-      rootCertificatePem,
-      X509Encoding.PEM,
-      Curve.P384,
-      leafPrivateKey,
-      X509Encoding.PEM
-    );
+      const leafCertificatePem = wallet.x509.issueCertificate(
+        {
+          subjectDn: 'CN=leaf.wallet.example,O=HD Wallet,C=US',
+          serialHex: '1002',
+          notBeforeUnix: 1704067200,
+          notAfterUnix: 1735689600,
+          dnsNames: ['leaf.wallet.example'],
+          keyUsage: ['digitalSignature', 'keyEncipherment'],
+          extendedKeyUsage: ['serverAuth'],
+          friendlyName: 'wallet-leaf'
+        },
+        Curve.P384,
+        rootPrivateKey,
+        rootCertificatePem,
+        X509Encoding.PEM,
+        Curve.P384,
+        leafPrivateKey,
+        X509Encoding.PEM
+      );
 
-    const pkcs12 = wallet.x509.exportPkcs12(
-      leafCertificatePem,
-      X509Encoding.PEM,
-      Curve.P384,
-      leafPrivateKey,
-      'changeit',
-      'wallet-leaf',
-      rootCertificatePem
-    );
+      const pkcs12 = wallet.x509.exportPkcs12(
+        leafCertificatePem,
+        X509Encoding.PEM,
+        Curve.P384,
+        leafPrivateKey,
+        'changeit',
+        'wallet-leaf',
+        rootCertificatePem
+      );
 
-    assert(pkcs12 instanceof Uint8Array, 'PKCS#12 export should return bytes');
-    assert(pkcs12.length > 0, 'PKCS#12 export should not be empty');
+      assert(pkcs12 instanceof Uint8Array, `PKCS#12 export should return bytes (iteration ${i + 1})`);
+      assert(pkcs12.length > 0, `PKCS#12 export should not be empty (iteration ${i + 1})`);
 
-    const imported = wallet.x509.importPkcs12(pkcs12, 'changeit');
-    assert(imported.certificatePem.includes('BEGIN CERTIFICATE'), 'Imported PKCS#12 should include certificate PEM');
-    assert(imported.privateKeyPem.includes('BEGIN PRIVATE KEY'), 'Imported PKCS#12 should include private key PEM');
-    assert(imported.chainPem.includes('BEGIN CERTIFICATE'), 'Imported PKCS#12 should include chain PEM');
+      const imported = wallet.x509.importPkcs12(pkcs12, 'changeit');
+      assert(imported.certificatePem.includes('BEGIN CERTIFICATE'), `Imported PKCS#12 should include certificate PEM (iteration ${i + 1})`);
+      assert(imported.privateKeyPem.includes('BEGIN PRIVATE KEY'), `Imported PKCS#12 should include private key PEM (iteration ${i + 1})`);
+      assert(imported.chainPem.includes('BEGIN CERTIFICATE'), `Imported PKCS#12 should include chain PEM (iteration ${i + 1})`);
+    }
   });
 }

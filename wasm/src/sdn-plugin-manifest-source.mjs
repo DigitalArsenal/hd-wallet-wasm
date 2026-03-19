@@ -4,7 +4,7 @@ export const HD_WALLET_SDN_PLUGIN_ID =
 export const HD_WALLET_SDN_PLUGIN_MANIFEST = Object.freeze({
   pluginId: HD_WALLET_SDN_PLUGIN_ID,
   name: 'HD Wallet Crypto',
-  version: '2.0.0',
+  version: '2.0.1',
   pluginFamily: 'infrastructure',
   description:
     'Native-crypto infrastructure plugin surface for detached signing and field-level encryption inside an sdn-flow runtime.',
