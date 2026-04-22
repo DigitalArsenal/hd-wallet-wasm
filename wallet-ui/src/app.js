@@ -252,6 +252,7 @@ async function p384GenerateKeyPairAsync() {
 
 // Integration callback — set via options.onLogin in createWalletUI / init
 let _onLoginCallback = null;
+let _onLogoutCallback = null;
 
 // When false, login() will NOT auto-open the Account modal after authentication.
 // Set via options.openAccountAfterLogin in createWalletUI / init (default: true).
@@ -2724,6 +2725,14 @@ function logout() {
   // Clear HD wallet UI
   const derivedResult = $('derived-result');
   if (derivedResult) derivedResult.style.display = 'none';
+  $('keys-modal')?.classList.remove('active');
+}
+
+async function handleLogoutRequest() {
+  logout();
+  if (typeof _onLogoutCallback === 'function') {
+    await _onLogoutCallback();
+  }
 }
 
 // =============================================================================
@@ -4208,7 +4217,12 @@ function setupMainAppHandlers() {
   $('hero-login')?.addEventListener('click', () => {
     $('login-modal')?.classList.add('active');
   });
-  $('nav-logout')?.addEventListener('click', logout);
+  $('nav-logout')?.addEventListener('click', () => {
+    void handleLogoutRequest();
+  });
+  $('wallet-account-logout')?.addEventListener('click', () => {
+    void handleLogoutRequest();
+  });
   $('nav-keys')?.addEventListener('click', async () => {
     $('keys-modal')?.classList.add('active');
     if (state.loggedIn) {
@@ -4712,8 +4726,8 @@ function setupMainAppHandlers() {
     }
 
     if (mobileLogout) {
-      mobileLogout.addEventListener('click', () => {
-        logout();
+      mobileLogout.addEventListener('click', async () => {
+        await handleLogoutRequest();
         mobileMenu.classList.remove('open');
         mobileMenuBtn.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>';
       });
@@ -5853,10 +5867,11 @@ function setupHomepageHandlers() {
 // =============================================================================
 
 export async function init(rootElement, options = {}) {
-  const { autoOpenWallet = false, onLogin = null, openAccountAfterLogin = true } = typeof rootElement === 'object' && !(rootElement instanceof Node)
+  const { autoOpenWallet = false, onLogin = null, onLogout = null, openAccountAfterLogin = true } = typeof rootElement === 'object' && !(rootElement instanceof Node)
     ? (options = rootElement, {}) : options;
   if (rootElement && rootElement instanceof Node) _root = rootElement;
   if (typeof onLogin === 'function') _onLoginCallback = onLogin;
+  if (typeof onLogout === 'function') _onLogoutCallback = onLogout;
   _openAccountAfterLogin = openAccountAfterLogin;
 
   // Inject modal HTML if not already present in the DOM
@@ -5972,6 +5987,8 @@ export async function init(rootElement, options = {}) {
  * @param {Object} [options]      - Options passed to init()
  * @param {Function} [options.onLogin] - Callback fired after successful login with
  *   `{ xpub, signingPublicKey, sign(message) }` for SDN identity (BIP-44 coin type 0)
+ * @param {Function} [options.onLogout] - Callback fired after local wallet logout so
+ *   host apps can clear any external session state.
  * @param {boolean}  [options.openAccountAfterLogin=true] - When false, the Account
  *   modal will NOT auto-open after login. Useful for integrations that handle
  *   post-login UX themselves (e.g. challenge-response auth flows).
@@ -5986,9 +6003,9 @@ export async function createWalletUI(rootElement, options = {}) {
       const modal = document.getElementById('login-modal');
       if (modal) modal.classList.add('active');
     },
-    /** Open the account / keys modal (requires login first) */
+    /** Open the account / keys modal when unlocked, or the login modal otherwise */
     openAccount() {
-      const modal = document.getElementById('keys-modal');
+      const modal = document.getElementById(state.loggedIn ? 'keys-modal' : 'login-modal');
       if (modal) modal.classList.add('active');
     },
     /** Remove all injected wallet UI elements from the DOM */
