@@ -12,7 +12,9 @@
 // Crypto++ headers
 #include <cryptopp/sha.h>
 #include <cryptopp/eccrypto.h>
+#if !HD_WALLET_IS_WASI
 #include <cryptopp/osrng.h>
+#endif
 #include <cryptopp/oids.h>
 
 namespace hd_wallet {

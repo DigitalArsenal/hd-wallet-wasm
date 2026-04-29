@@ -13,12 +13,12 @@
 #include "hd_wallet/config.h"
 #include "hd_wallet/error.h"
 #include "hd_wallet/ecdh.h"
+#include "hd_wallet/secure_rng.h"
 
 #include <cryptopp/eccrypto.h>
 #include <cryptopp/ecp.h>
 #include <cryptopp/asn.h>
 #include <cryptopp/oids.h>
-#include <cryptopp/osrng.h>
 #include <cryptopp/integer.h>
 #include <cryptopp/sha.h>
 #include <cryptopp/xed25519.h>
@@ -782,7 +782,7 @@ Result<KeyPair> generateEphemeralKeyPair(Curve curve) {
 #endif
 
     try {
-        CryptoPP::AutoSeededRandomPool rng;
+        SecureRandomGenerator rng;
         KeyPair kp;
 
         switch (curve) {

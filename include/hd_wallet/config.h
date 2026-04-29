@@ -12,8 +12,8 @@
 // Version information
 #define HD_WALLET_VERSION_MAJOR 2
 #define HD_WALLET_VERSION_MINOR 0
-#define HD_WALLET_VERSION_PATCH 1
-#define HD_WALLET_VERSION_STRING "2.0.1"
+#define HD_WALLET_VERSION_PATCH 6
+#define HD_WALLET_VERSION_STRING "2.0.6"
 
 // =============================================================================
 // Build Environment Detection
@@ -27,7 +27,7 @@
 #endif
 
 // Detect WASI (pure WASM without Emscripten JS glue)
-#if defined(__wasi__) || (HD_WALLET_IS_WASM && !defined(__EMSCRIPTEN__))
+#if defined(HD_WALLET_FORCE_WASI) || defined(__wasi__) || (HD_WALLET_IS_WASM && !defined(__EMSCRIPTEN__))
   #define HD_WALLET_IS_WASI 1
 #else
   #define HD_WALLET_IS_WASI 0

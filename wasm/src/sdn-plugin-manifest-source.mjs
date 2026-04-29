@@ -292,6 +292,13 @@ export const HD_WALLET_SDN_PLUGIN_MANIFEST = Object.freeze({
       entrySymbol: 'plugin_get_manifest_flatbuffer',
     },
     {
+      artifactId: 'hd-wallet-wasm-wasi',
+      kind: 'wasm-module',
+      path: 'wasm/dist/hd-wallet-wasi.wasm',
+      target: 'wasi',
+      entrySymbol: 'plugin_get_manifest_flatbuffer',
+    },
+    {
       artifactId: 'hd-wallet-wasm-loader',
       kind: 'javascript-loader',
       path: 'wasm/dist/hd-wallet.js',

@@ -31,11 +31,10 @@
 #include <cryptopp/secblock.h>
 
 #if HD_WALLET_IS_WASI
-// WASI random_get syscall
-extern "C" {
-    __attribute__((import_module("wasi_snapshot_preview1")))
-    __attribute__((import_name("random_get")))
-    int32_t __wasi_random_get(uint8_t* buf, size_t buf_len);
+#include <wasi/api.h>
+
+extern "C" int32_t __syscall_getdents64(int32_t, int32_t, int32_t) {
+    return -52; // ENOSYS: directory enumeration is not available in this module.
 }
 #elif defined(__linux__)
 #include <sys/random.h>

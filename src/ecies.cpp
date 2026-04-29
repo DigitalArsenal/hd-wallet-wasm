@@ -14,12 +14,12 @@
 #include "hd_wallet/types.h"
 #include "hd_wallet/error.h"
 #include "hd_wallet/ecdh.h"
+#include "hd_wallet/secure_rng.h"
 
 #if HD_WALLET_USE_OPENSSL
 #include "hd_wallet/crypto_openssl.h"
 #endif
 
-#include <cryptopp/osrng.h>
 #include <cryptopp/secblock.h>
 #include <cryptopp/sha.h>
 #include <cryptopp/gcm.h>
@@ -317,7 +317,7 @@ int32_t eciesEncrypt(
     // Random IV
     uint8_t* ivOut = out + ephKeySize;
     try {
-        CryptoPP::AutoSeededRandomPool rng;
+        SecureRandomGenerator rng;
         rng.GenerateBlock(ivOut, ECIES_IV_SIZE);
     } catch (...) {
         secureWipe(aesKey, sizeof(aesKey));

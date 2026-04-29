@@ -18,7 +18,9 @@
 #include <cryptopp/ecp.h>
 #include <cryptopp/asn.h>
 #include <cryptopp/oids.h>
+#if !HD_WALLET_IS_WASI
 #include <cryptopp/osrng.h>
+#endif
 #include <cryptopp/integer.h>
 #include <cryptopp/dsa.h>
 #include <cryptopp/sha.h>

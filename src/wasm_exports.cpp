@@ -44,7 +44,6 @@ extern "C" int32_t hd_ecdh(
 #include <cryptopp/pwdbased.h>
 #include <cryptopp/scrypt.h>
 #include <cryptopp/eccrypto.h>
-#include <cryptopp/osrng.h>
 #include <cryptopp/oids.h>
 #include <cryptopp/nbtheory.h>
 #include <cryptopp/filters.h>

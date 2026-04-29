@@ -79,7 +79,7 @@ run_wasm() {
 
   step "Verify WASM Output"
   local ok=true
-  for f in hd-wallet.wasm hd-wallet.js hd-wallet-inline.js; do
+  for f in hd-wallet.wasm hd-wallet-wasi.wasm hd-wallet.js hd-wallet-inline.js; do
     if [ -f "$ROOT/build-wasi/wasm/$f" ]; then
       echo "  $f ($(wc -c < "$ROOT/build-wasi/wasm/$f") bytes)"
     else
@@ -87,11 +87,6 @@ run_wasm() {
       ok=false
     fi
   done
-
-  # Check WASI target too
-  if [ -f "$ROOT/build-wasi/wasm/hd-wallet-wasi.wasm" ]; then
-    echo "  hd-wallet-wasi.wasm ($(wc -c < "$ROOT/build-wasi/wasm/hd-wallet-wasi.wasm") bytes)"
-  fi
 
   if $ok; then
     pass "wasm output verification"
@@ -116,6 +111,7 @@ run_npm() {
   step "NPM: Copy WASM artifacts"
   mkdir -p "$ROOT/wasm/dist"
   cp "$ROOT/build-wasi/wasm/hd-wallet.wasm" "$ROOT/wasm/dist/" 2>/dev/null || true
+  cp "$ROOT/build-wasi/wasm/hd-wallet-wasi.wasm" "$ROOT/wasm/dist/" 2>/dev/null || true
   cp "$ROOT/build-wasi/wasm/hd-wallet.js" "$ROOT/wasm/dist/" 2>/dev/null || true
   cp "$ROOT/build-wasi/wasm/hd-wallet-inline.js" "$ROOT/wasm/dist/" 2>/dev/null || true
   cp "$ROOT/wasm/src/index.d.ts" "$ROOT/wasm/dist/" 2>/dev/null || true

@@ -14,8 +14,11 @@
 #include "hd_wallet/eddsa.h"
 
 #include <cryptopp/xed25519.h>
+#if !HD_WALLET_IS_WASI
 #include <cryptopp/osrng.h>
+#endif
 #include <cryptopp/sha.h>
+#include <cryptopp/hmac.h>
 #include <cryptopp/secblock.h>
 
 #include <cstring>

@@ -32,7 +32,7 @@ cmake_minimum_required(VERSION 3.16...3.28)
 # Version
 set(HD_WALLET_VERSION_MAJOR 2)
 set(HD_WALLET_VERSION_MINOR 0)
-set(HD_WALLET_VERSION_PATCH 1)
+set(HD_WALLET_VERSION_PATCH 6)
 
 project(HDWalletWasm
   VERSION ${HD_WALLET_VERSION_MAJOR}.${HD_WALLET_VERSION_MINOR}.${HD_WALLET_VERSION_PATCH}
@@ -705,6 +705,7 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       src/ecdh.cpp
       src/ecies.cpp
       src/wasi_bridge.cpp
+      src/wasm_exports.cpp
       generated/sdn/plugin_manifest_exports.cpp
       src/coins/coin.cpp
       src/coins/bitcoin.cpp
@@ -712,6 +713,7 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       src/coins/solana.cpp
       src/coins/cosmos.cpp
       src/coins/polkadot.cpp
+      src/libp2p.cpp
       src/tx/transaction.cpp
       src/tx/bitcoin_tx.cpp
       src/tx/ethereum_tx.cpp
@@ -742,7 +744,6 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       "_hd_get_supported_curves"
       # WASI Bridge
       "_hd_wasi_has_feature"
-      "_hd_wasi_set_callback"
       "_hd_wasi_get_warning"
       # Entropy
       "_hd_inject_entropy"
@@ -780,12 +781,6 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       # BIP-44/49/84 Paths
       "_hd_path_build"
       "_hd_path_parse"
-      "_hd_path_to_string"
-      "_hd_path_get_purpose"
-      "_hd_path_get_coin_type"
-      "_hd_path_get_account"
-      "_hd_path_get_change"
-      "_hd_path_get_index"
       # Multi-Curve Keys
       "_hd_curve_pubkey_from_privkey"
       "_hd_curve_decompress_pubkey"
@@ -828,15 +823,6 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       "_hd_kdf_hkdf"
       "_hd_kdf_pbkdf2"
       "_hd_kdf_scrypt"
-      # Key Validation
-      "_hd_validate_private_key"
-      "_hd_validate_public_key"
-      "_hd_validate_path"
-      "_hd_public_key_from_private"
-      # Path Building
-      "_hd_build_path"
-      "_hd_build_signing_path"
-      "_hd_build_encryption_path"
       # Coin Address Generation & Validation
       # Generic coin utilities (coin.cpp)
       "_hd_coin_address_from_pubkey"
@@ -959,6 +945,7 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       ${WASM_COMPILE_OPTIONS}
       -fignore-exceptions
       -DHD_WALLET_NO_EXCEPTIONS=1
+      -DHD_WALLET_FORCE_WASI=1
       -DHD_WALLET_ENABLE_BITCOIN=1
       -DHD_WALLET_ENABLE_ETHEREUM=1
       -DHD_WALLET_ENABLE_SOLANA=1
@@ -979,8 +966,8 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       -sSTANDALONE_WASM=1
       -sPURE_WASI=1
       -sWASM=1
-      -sERROR_ON_UNDEFINED_SYMBOLS=0
-      -Wno-undefined
+      -sERROR_ON_UNDEFINED_SYMBOLS=1
+      -sNO_FILESYSTEM=1
       "-sEXPORTED_FUNCTIONS=[${WASI_EXPORTED_FUNCS_STR}]"
       -sALLOW_MEMORY_GROWTH=1
       -sINITIAL_MEMORY=32MB
@@ -1099,13 +1086,16 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
     # Target: NPM package
     # =========================================================================
     add_custom_target(hd_wallet_wasm_npm ALL
-      DEPENDS hd_wallet_wasm_inline hd_wallet_wasm_js
+      DEPENDS hd_wallet_wasm_inline hd_wallet_wasm_js hd_wallet_wasm_wasi
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${WASM_OUTPUT_DIR}/hd-wallet-inline.js"
         "${WASM_NPM_DIR}/hd-wallet.js"
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${WASM_OUTPUT_DIR}/hd-wallet.wasm"
         "${WASM_NPM_DIR}/hd-wallet.wasm"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${WASM_OUTPUT_DIR}/hd-wallet-wasi.wasm"
+        "${WASM_NPM_DIR}/hd-wallet-wasi.wasm"
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/wasm/src/index.d.ts"
         "${WASM_NPM_DIR}/index.d.ts"

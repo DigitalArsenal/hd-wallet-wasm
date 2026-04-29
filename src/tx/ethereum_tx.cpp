@@ -8,6 +8,7 @@
 
 #include "hd_wallet/tx/ethereum_tx.h"
 #include "hd_wallet/config.h"
+#include "hd_wallet/secure_rng.h"
 
 #include <algorithm>
 #include <cstring>
@@ -19,7 +20,6 @@
 #include <cryptopp/eccrypto.h>
 #include <cryptopp/ecp.h>
 #include <cryptopp/oids.h>
-#include <cryptopp/osrng.h>
 #include <cryptopp/sha.h>
 #include <cryptopp/keccak.h>
 #include <cryptopp/integer.h>
@@ -658,7 +658,7 @@ static bool signECDSARecoverable(
     privKey.MakePublicKey(pubKey);
 
     // Create signer with deterministic K (RFC 6979)
-    AutoSeededRandomPool rng;
+    SecureRandomGenerator rng;
     ECDSA<ECP, SHA256>::Signer signer(privKey);
 
     // Sign (produces DER-encoded signature)

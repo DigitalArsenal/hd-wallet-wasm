@@ -116,9 +116,14 @@ test('SDN plugin: embedded manifest exports return the generated PMAN bytes', ()
     'Embedded manifest should retain explicit external interface declarations'
   );
   assertEqual(
-    decoded.buildArtifacts[0].path,
-    'wasm/dist/hd-wallet.wasm',
-    'Embedded manifest should document the checked-in browser artifact path'
+    decoded.buildArtifacts.length,
+    3,
+    'Embedded manifest should document browser, WASI, and loader artifacts'
+  );
+  assertEqual(
+    decoded.buildArtifacts[1].path,
+    'wasm/dist/hd-wallet-wasi.wasm',
+    'Embedded manifest should document the pure WASI artifact path'
   );
 });
 
@@ -233,4 +238,3 @@ function assertDeepEqual(actual, expected, message) {
     throw new Error(message || `Expected ${expectedJson}, got ${actualJson}`);
   }
 }
-

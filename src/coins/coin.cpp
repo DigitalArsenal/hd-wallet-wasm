@@ -9,6 +9,7 @@
 #include "hd_wallet/coins/ethereum.h"
 #include "hd_wallet/coins/polkadot.h"
 #include "hd_wallet/coins/solana.h"
+#include "hd_wallet/secure_rng.h"
 
 #include <algorithm>
 #include <cctype>
@@ -24,7 +25,6 @@
 #include <cryptopp/ripemd.h>
 #include <cryptopp/blake2.h>
 #include <cryptopp/eccrypto.h>
-#include <cryptopp/osrng.h>
 #include <cryptopp/oids.h>
 #include <cryptopp/hex.h>
 #include <cryptopp/xed25519.h>
@@ -830,7 +830,7 @@ Result<ECDSASignature> ecdsaSign(const Bytes32& hash, const Bytes32& private_key
     ECDSA<ECP, SHA256>::Signer signer(key);
 
     // Sign
-    AutoSeededRandomPool rng;
+    SecureRandomGenerator rng;
     size_t sig_len = signer.MaxSignatureLength();
     std::vector<uint8_t> signature(sig_len);
     sig_len = signer.SignMessage(rng, hash.data(), 32, signature.data());

@@ -8,6 +8,7 @@
 
 #include "hd_wallet/bip39.h"
 #include "hd_wallet/hash.h"
+#include "hd_wallet/secure_rng.h"
 #include "hd_wallet/secure_memory.h"
 #include "hd_wallet/wasi_bridge.h"
 
@@ -16,10 +17,6 @@
 #include <cctype>
 #include <cstring>
 #include <sstream>
-
-#if HD_WALLET_USE_CRYPTOPP
-#include <cryptopp/osrng.h>
-#endif
 
 // Include wordlist from separate file
 #include "bip39_wordlist.inc"
@@ -238,7 +235,7 @@ Result<std::string> generateMnemonic(size_t word_count, Language lang) {
     // SECURITY FIX [VULN-09]: Use Crypto++ AutoSeededRandomPool instead of
     // std::random_device, which may be deterministic on some platforms (e.g., MinGW).
     // Also avoids discarding entropy by using full-width random bytes directly.
-    CryptoPP::AutoSeededRandomPool rng;
+    SecureRandomGenerator rng;
     rng.GenerateBlock(entropy.data(), entropy_bytes);
 #endif
 

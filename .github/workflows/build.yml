@@ -75,6 +75,7 @@ jobs:
           echo "Checking WASM output files..."
           ls -la build/wasm/
           test -f build/wasm/hd-wallet.wasm
+          test -f build/wasm/hd-wallet-wasi.wasm
           test -f build/wasm/hd-wallet.js
           test -f build/wasm/hd-wallet-inline.js
 
@@ -84,6 +85,7 @@ jobs:
           name: wasm-build
           path: |
             build/wasm/hd-wallet.wasm
+            build/wasm/hd-wallet-wasi.wasm
             build/wasm/hd-wallet.js
             build/wasm/hd-wallet-inline.js
           retention-days: 7

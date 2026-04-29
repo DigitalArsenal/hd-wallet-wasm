@@ -73,6 +73,7 @@ jobs:
           ls -la wasm/dist/
           test -f wasm/dist/hd-wallet.js
           test -f wasm/dist/hd-wallet.wasm
+          test -f wasm/dist/hd-wallet-wasi.wasm
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -179,6 +180,7 @@ jobs:
           files: |
             wasm/dist/hd-wallet.js
             wasm/dist/hd-wallet.wasm
+            wasm/dist/hd-wallet-wasi.wasm
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

@@ -8,6 +8,7 @@
 
 #include "hd_wallet/tx/bitcoin_tx.h"
 #include "hd_wallet/config.h"
+#include "hd_wallet/secure_rng.h"
 
 #include <algorithm>
 #include <cstring>
@@ -17,7 +18,6 @@
 #include <cryptopp/eccrypto.h>
 #include <cryptopp/ecp.h>
 #include <cryptopp/oids.h>
-#include <cryptopp/osrng.h>
 #include <cryptopp/sha.h>
 #include <cryptopp/integer.h>
 #include <cryptopp/dsa.h>
@@ -908,7 +908,7 @@ static ByteVector signECDSA(const Bytes32& hash, const Bytes32& privateKey) {
   ECDSA<ECP, SHA256>::Signer signer(privKey);
 
   // Sign
-  AutoSeededRandomPool rng;
+  SecureRandomGenerator rng;
   std::string signature;
   StringSource ss(
     hash.data(), hash.size(), true,

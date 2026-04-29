@@ -20,7 +20,9 @@
 #include <cryptopp/secblock.h>
 #include <cryptopp/ripemd.h>
 #include <cryptopp/eccrypto.h>
+#if !HD_WALLET_IS_WASI
 #include <cryptopp/osrng.h>
+#endif
 #include <cryptopp/oids.h>
 #include <cryptopp/asn.h>
 #include <cryptopp/integer.h>
