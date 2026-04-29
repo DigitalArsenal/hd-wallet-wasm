@@ -10,10 +10,6 @@
 // =============================================================================
 
 import initHDWallet, { Curve, getSigningKey, getEncryptionKey, buildSigningPath, buildEncryptionPath, WellKnownCoinType } from 'hd-wallet-wasm';
-import { x25519, ed25519 } from '@noble/curves/ed25519';
-import { secp256k1 } from '@noble/curves/secp256k1';
-import { p256 } from '@noble/curves/p256';
-import { sha256 as sha256Noble } from '@noble/hashes/sha256';
 import { keccak_256 } from '@noble/hashes/sha3';
 import QRCode from 'qrcode';
 import { Buffer } from 'buffer';
@@ -172,41 +168,55 @@ function bytesToBase64(bytes) {
 }
 
 // =============================================================================
-// SHA-256 and HKDF (WebCrypto-based)
+// WASM-backed cryptographic helpers
 // =============================================================================
 
+function hdWallet() {
+  if (!state.hdWalletModule) throw new Error('HD wallet WASM module not initialized');
+  return state.hdWalletModule;
+}
+
+function asUint8Array(value) {
+  if (value instanceof Uint8Array) return value;
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  }
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  throw new Error('Expected byte array');
+}
+
 async function sha256(data) {
-  const hash = await crypto.subtle.digest('SHA-256', data);
-  return new Uint8Array(hash);
+  return hdWallet().utils.sha256(asUint8Array(data));
 }
 
 async function hkdf(ikm, salt, info, length) {
-  const key = await crypto.subtle.importKey('raw', ikm, 'HKDF', false, ['deriveBits']);
-  const derived = await crypto.subtle.deriveBits(
-    { name: 'HKDF', hash: 'SHA-256', salt, info },
-    key,
-    length * 8
-  );
-  return new Uint8Array(derived);
+  return hdWallet().utils.hkdf(asUint8Array(ikm), asUint8Array(salt), asUint8Array(info), length);
 }
 
 async function aesGcmEncryptJson(keyBytes, obj, aadStr) {
   if (!(keyBytes instanceof Uint8Array)) throw new Error('Invalid AES key');
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const cryptoKey = await crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['encrypt']);
-  const alg = { name: 'AES-GCM', iv };
-  if (aadStr) alg.additionalData = new TextEncoder().encode(aadStr);
+  const iv = hdWallet().utils.getRandomBytes(12);
   const plaintext = new TextEncoder().encode(JSON.stringify(obj));
-  const ciphertext = await crypto.subtle.encrypt(alg, cryptoKey, plaintext);
-  return { iv, ciphertext: new Uint8Array(ciphertext) };
+  const aad = aadStr ? new TextEncoder().encode(aadStr) : new Uint8Array(0);
+  const { ciphertext, tag } = hdWallet().utils.aesGcm.encrypt(keyBytes, plaintext, iv, aad);
+  const sealed = new Uint8Array(ciphertext.length + tag.length);
+  sealed.set(ciphertext, 0);
+  sealed.set(tag, ciphertext.length);
+  return { iv, ciphertext: sealed };
 }
 
 async function aesGcmDecryptJson(keyBytes, iv, ciphertextBytes, aadStr) {
   if (!(keyBytes instanceof Uint8Array)) throw new Error('Invalid AES key');
-  const cryptoKey = await crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['decrypt']);
-  const alg = { name: 'AES-GCM', iv };
-  if (aadStr) alg.additionalData = new TextEncoder().encode(aadStr);
-  const plaintext = await crypto.subtle.decrypt(alg, cryptoKey, ciphertextBytes);
+  const sealed = asUint8Array(ciphertextBytes);
+  if (sealed.length <= 16) throw new Error('Ciphertext is too short');
+  const aad = aadStr ? new TextEncoder().encode(aadStr) : new Uint8Array(0);
+  const plaintext = hdWallet().utils.aesGcm.decrypt(
+    keyBytes,
+    sealed.subarray(0, sealed.length - 16),
+    sealed.subarray(sealed.length - 16),
+    asUint8Array(iv),
+    aad
+  );
   return JSON.parse(new TextDecoder().decode(plaintext));
 }
 
@@ -215,35 +225,39 @@ async function aesGcmDecryptJson(keyBytes, iv, ciphertextBytes, aadStr) {
 // =============================================================================
 
 function generateKeyPair(curveType) {
+  const w = hdWallet();
   if (curveType === Curve.SECP256K1) {
-    const privateKey = secp256k1.utils.randomPrivateKey();
-    const publicKey = secp256k1.getPublicKey(privateKey, true);
-    return { privateKey, publicKey };
+    return generateEcKeyPair(w, Curve.SECP256K1, 32);
   }
   if (curveType === Curve.X25519) {
-    const privateKey = x25519.utils.randomPrivateKey();
-    const publicKey = x25519.getPublicKey(privateKey);
+    const privateKey = w.utils.getRandomBytes(32);
+    const publicKey = w.curves.x25519.publicKey(privateKey);
     return { privateKey, publicKey };
   }
   throw new Error(`Unsupported curve type: ${curveType}`);
 }
 
+function generateEcKeyPair(w, curveType, privateKeyLength) {
+  let lastError = null;
+  for (let i = 0; i < 16; i += 1) {
+    const privateKey = w.utils.getRandomBytes(privateKeyLength);
+    try {
+      const publicKey = w.curves.publicKeyFromPrivate(privateKey, curveType);
+      return { privateKey, publicKey };
+    } catch (err) {
+      lastError = err;
+      privateKey.fill(0);
+    }
+  }
+  throw lastError || new Error('Failed to generate curve keypair');
+}
+
 async function p256GenerateKeyPairAsync() {
-  const keyPair = await crypto.subtle.generateKey(
-    { name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']
-  );
-  const rawPublic = await crypto.subtle.exportKey('raw', keyPair.publicKey);
-  const pkcs8Private = await crypto.subtle.exportKey('pkcs8', keyPair.privateKey);
-  return { publicKey: new Uint8Array(rawPublic), privateKey: new Uint8Array(pkcs8Private) };
+  return generateEcKeyPair(hdWallet(), Curve.P256, 32);
 }
 
 async function p384GenerateKeyPairAsync() {
-  const keyPair = await crypto.subtle.generateKey(
-    { name: 'ECDSA', namedCurve: 'P-384' }, true, ['sign', 'verify']
-  );
-  const rawPublic = await crypto.subtle.exportKey('raw', keyPair.publicKey);
-  const pkcs8Private = await crypto.subtle.exportKey('pkcs8', keyPair.privateKey);
-  return { publicKey: new Uint8Array(rawPublic), privateKey: new Uint8Array(pkcs8Private) };
+  return generateEcKeyPair(hdWallet(), Curve.P384, 48);
 }
 
 // =============================================================================
@@ -437,7 +451,7 @@ function deriveKeysFromHDRoot(hdRoot) {
 
   // SOL signing key m/44'/501'/0'/0/0 — ed25519
   const solSigning = getSigningKey(hdRoot, 501, 0, 0);
-  const ed25519PubKey = ed25519.getPublicKey(solSigning.privateKey);
+  const ed25519PubKey = hdWallet().curves.ed25519.publicKeyFromSeed(solSigning.privateKey);
 
   return {
     secp256k1: { privateKey: btcSigning.privateKey, publicKey: btcSigning.publicKey },
@@ -470,7 +484,7 @@ function deriveAllAddressesFromHD() {
     const solPath = buildSigningPath(501, 0, 0);
     const solDerived = state.hdRoot.derivePath(solPath);
     const solPrivKey = solDerived.privateKey();
-    solAddress = generateSolAddress(ed25519.getPublicKey(solPrivKey));
+    solAddress = generateSolAddress(hdWallet().curves.ed25519.publicKeyFromSeed(solPrivKey));
   } catch (e) {
     console.error('Failed to derive SOL address:', e);
   }
@@ -549,7 +563,7 @@ function deriveAddressForPath(coinType, account, index) {
   if (coinType === 501) {
     // Solana: ed25519
     const privKey = derived.privateKey();
-    const pubKey = ed25519.getPublicKey(privKey);
+    const pubKey = hdWallet().curves.ed25519.publicKeyFromSeed(privKey);
     return { address: generateSolAddress(pubKey), publicKey: pubKey, path };
   }
 
@@ -2182,7 +2196,7 @@ function deriveKeyFromPath(path) {
 
 function deriveX25519FromSeed(seed) {
   const privateKey = new Uint8Array(seed);
-  const publicKey = x25519.getPublicKey(privateKey);
+  const publicKey = hdWallet().curves.x25519.publicKey(privateKey);
   return {
     privateKey,
     publicKey: new Uint8Array(publicKey),
@@ -2191,7 +2205,7 @@ function deriveX25519FromSeed(seed) {
 
 function deriveSecp256k1FromSeed(seed) {
   const privateKey = new Uint8Array(seed);
-  const publicKey = secp256k1.getPublicKey(privateKey, true);
+  const publicKey = hdWallet().curves.publicKeyFromPrivate(privateKey, Curve.SECP256K1);
   return {
     privateKey,
     publicKey: new Uint8Array(publicKey),
@@ -2200,7 +2214,7 @@ function deriveSecp256k1FromSeed(seed) {
 
 function deriveP256FromSeed(seed) {
   const privateKey = new Uint8Array(seed);
-  const publicKey = p256.getPublicKey(privateKey, true);
+  const publicKey = hdWallet().curves.publicKeyFromPrivate(privateKey, Curve.P256);
   return {
     privateKey,
     publicKey: new Uint8Array(publicKey),
@@ -2493,7 +2507,7 @@ function login(keys) {
     try {
       const sdnSigning = getSigningKey(state.hdRoot, 0, 0, 0);
       const sdnPrivKey = sdnSigning.privateKey;
-      const sdnPubKey = ed25519.getPublicKey(sdnPrivKey);
+      const sdnPubKey = hdWallet().curves.ed25519.publicKeyFromSeed(sdnPrivKey);
       // Don't keep derived private key bytes around longer than needed.
       if (sdnPrivKey instanceof Uint8Array) sdnPrivKey.fill(0);
       const xpub = state.hdRoot.toXpub();
@@ -2507,7 +2521,7 @@ function login(keys) {
             : message;
           const signing = getSigningKey(state.hdRoot, 0, 0, 0);
           try {
-            return ed25519.sign(msgBytes, signing.privateKey);
+            return hdWallet().curves.ed25519.sign(msgBytes, signing.privateKey);
           } finally {
             if (signing?.privateKey instanceof Uint8Array) signing.privateKey.fill(0);
           }
@@ -3400,7 +3414,7 @@ function signVCard(vcardText) {
 
   const body = getSignableBody(vcardText);
   const messageBytes = new TextEncoder().encode(body);
-  const signature = ed25519.sign(messageBytes, state.wallet.ed25519.privateKey);
+  const signature = hdWallet().curves.ed25519.sign(messageBytes, state.wallet.ed25519.privateKey);
   const sigB64 = toBase64(signature);
 
   // Encode signature + derivation path (coinType=501, account=0, index=0)
@@ -3491,7 +3505,7 @@ function verifyVCardSignature(vcardText) {
   const pubKeyBytes = Uint8Array.from(atob(ed25519PubB64), c => c.charCodeAt(0));
 
   try {
-    const valid = ed25519.verify(sigBytes, messageBytes, pubKeyBytes);
+    const valid = hdWallet().curves.ed25519.verify(messageBytes, sigBytes, pubKeyBytes);
     return { verified: valid, path, publicKey: ed25519PubB64, error: valid ? null : 'Signature invalid' };
   } catch (e) {
     return { verified: false, path, publicKey: ed25519PubB64, error: e.message };
@@ -5942,13 +5956,12 @@ export async function init(rootElement, options = {}) {
 
     // Auto-login with saved PKI keys if no stored wallet
     if (hasSavedKeys && !hasStoredWallet) {
-      const tempEd25519Seed = new Uint8Array(32);
-      crypto.getRandomValues(tempEd25519Seed);
+      const tempEd25519Seed = hdWallet().utils.getRandomBytes(32);
       const tempKeys = {
         x25519: generateKeyPair(Curve.X25519),
         ed25519: {
           privateKey: tempEd25519Seed,
-          publicKey: ed25519.getPublicKey(tempEd25519Seed),
+          publicKey: hdWallet().curves.ed25519.publicKeyFromSeed(tempEd25519Seed),
         },
         secp256k1: generateKeyPair(Curve.SECP256K1),
         p256: await p256GenerateKeyPairAsync(),

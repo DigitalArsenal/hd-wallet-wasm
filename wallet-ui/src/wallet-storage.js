@@ -12,6 +12,8 @@
  * @module wallet-storage
  */
 
+import initHDWallet from 'hd-wallet-wasm';
+
 // =============================================================================
 // Storage Keys
 // =============================================================================
@@ -31,6 +33,23 @@ const AES_GCM_IV_LENGTH = 12;
 // (This is still not a substitute for rate-limiting when an attacker can query online.)
 const PIN_PBKDF2_ITERATIONS = 600000;
 const LEGACY_PIN_PBKDF2_ITERATIONS = 100000;
+const AES_GCM_TAG_LENGTH = 16;
+
+let walletPromise = null;
+
+function getWallet() {
+  if (!walletPromise) walletPromise = initHDWallet();
+  return walletPromise;
+}
+
+function asUint8Array(value) {
+  if (value instanceof Uint8Array) return value;
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  }
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  throw new Error('Expected byte array');
+}
 
 // =============================================================================
 // Storage Method Enum
@@ -73,10 +92,9 @@ function base64ToUint8Array(base64) {
 /**
  * Generate cryptographically secure random bytes
  */
-function generateRandomBytes(length) {
-  const bytes = new Uint8Array(length);
-  crypto.getRandomValues(bytes);
-  return bytes;
+async function generateRandomBytes(length) {
+  const wallet = await getWallet();
+  return wallet.utils.getRandomBytes(length);
 }
 
 // =============================================================================
@@ -95,29 +113,9 @@ function generateRandomBytes(length) {
  */
 async function hkdfDerive(inputKeyMaterial, salt, info, length) {
   const encoder = new TextEncoder();
-
-  // Import the input key material
-  const keyMaterial = await crypto.subtle.importKey(
-    'raw',
-    inputKeyMaterial,
-    'HKDF',
-    false,
-    ['deriveBits']
-  );
-
-  // Derive bits using HKDF
-  const derivedBits = await crypto.subtle.deriveBits(
-    {
-      name: 'HKDF',
-      hash: 'SHA-256',
-      salt: salt,
-      info: encoder.encode(info)
-    },
-    keyMaterial,
-    length * 8
-  );
-
-  return new Uint8Array(derivedBits);
+  const wallet = await getWallet();
+  const infoBytes = typeof info === 'string' ? encoder.encode(info) : asUint8Array(info);
+  return wallet.utils.hkdf(asUint8Array(inputKeyMaterial), asUint8Array(salt), infoBytes, length);
 }
 
 /**
@@ -174,31 +172,11 @@ async function deriveKeyFromPIN(pin, storedSalt, iterations = PIN_PBKDF2_ITERATI
   const pinBytes = encoder.encode(pin);
 
   // Use stored salt or generate new one
-  const salt = storedSalt || generateRandomBytes(16);
-
-  // Import PIN as key material
-  const keyMaterial = await crypto.subtle.importKey(
-    'raw',
-    pinBytes,
-    'PBKDF2',
-    false,
-    ['deriveBits']
-  );
-
-  // Use PBKDF2 with high iteration count for PIN (since PINs have low entropy)
-  const derivedBits = await crypto.subtle.deriveBits(
-    {
-      name: 'PBKDF2',
-      hash: 'SHA-256',
-      salt: salt,
-      iterations
-    },
-    keyMaterial,
-    256
-  );
+  const salt = storedSalt || await generateRandomBytes(16);
+  const wallet = await getWallet();
 
   return {
-    keyMaterial: new Uint8Array(derivedBits),
+    keyMaterial: wallet.utils.pbkdf2(pinBytes, salt, iterations, 32),
     salt
   };
 }
@@ -236,7 +214,7 @@ export async function isPRFLikelySupported() {
 /**
  * Generate WebAuthn challenge
  */
-function generateChallenge() {
+async function generateChallenge() {
   return generateRandomBytes(32);
 }
 
@@ -274,8 +252,8 @@ export async function registerPasskey(options = {}) {
     userDisplayName = 'Wallet User'
   } = options;
 
-  const challenge = generateChallenge();
-  const userId = generateRandomBytes(16);
+  const challenge = await generateChallenge();
+  const userId = await generateRandomBytes(16);
   const prfInputs = createPRFInputs();
 
   const publicKeyCredentialCreationOptions = {
@@ -327,9 +305,7 @@ export async function registerPasskey(options = {}) {
     // PRF not available — derive key material from credential ID + a fixed salt.
     const rawId = new Uint8Array(credential.rawId);
     const salt = new TextEncoder().encode('wallet-storage-credid-fallback-v1');
-    const base = await crypto.subtle.importKey('raw', rawId, 'HKDF', false, ['deriveBits']);
-    const bits = await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt, info: new Uint8Array(0) }, base, 256);
-    keyMaterial = new Uint8Array(bits);
+    keyMaterial = await hkdfDerive(rawId, salt, new Uint8Array(0), 32);
   }
 
   return {
@@ -350,7 +326,7 @@ export async function authenticatePasskey(credentialId) {
     throw new Error('Passkeys are not supported on this device');
   }
 
-  const challenge = generateChallenge();
+  const challenge = await generateChallenge();
   const prfInputs = createPRFInputs();
   const credentialIdBytes = base64ToUint8Array(credentialId);
 
@@ -390,9 +366,7 @@ export async function authenticatePasskey(credentialId) {
     // PRF not available — derive key material from credential ID + a fixed salt.
     const rawId = new Uint8Array(assertion.rawId);
     const salt = new TextEncoder().encode('wallet-storage-credid-fallback-v1');
-    const base = await crypto.subtle.importKey('raw', rawId, 'HKDF', false, ['deriveBits']);
-    const bits = await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt, info: new Uint8Array(0) }, base, 256);
-    keyMaterial = new Uint8Array(bits);
+    keyMaterial = await hkdfDerive(rawId, salt, new Uint8Array(0), 32);
   }
 
   return { keyMaterial, hasPRF };
@@ -408,47 +382,37 @@ export async function authenticatePasskey(credentialId) {
 async function encryptData(data, encryptionKey, aad) {
   const encoder = new TextEncoder();
   const plaintext = encoder.encode(JSON.stringify(data));
-  const iv = generateRandomBytes(AES_GCM_IV_LENGTH);
-
-  const cryptoKey = await crypto.subtle.importKey(
-    'raw',
-    encryptionKey,
-    { name: 'AES-GCM' },
-    false,
-    ['encrypt']
+  const iv = await generateRandomBytes(AES_GCM_IV_LENGTH);
+  const wallet = await getWallet();
+  const { ciphertext, tag } = wallet.utils.aesGcm.encrypt(
+    asUint8Array(encryptionKey),
+    plaintext,
+    iv,
+    aad ? asUint8Array(aad) : new Uint8Array(0)
   );
+  const sealed = new Uint8Array(ciphertext.length + tag.length);
+  sealed.set(ciphertext, 0);
+  sealed.set(tag, ciphertext.length);
 
-  const alg = { name: 'AES-GCM', iv };
-  if (aad) alg.additionalData = aad;
-
-  const ciphertext = await crypto.subtle.encrypt(
-    alg,
-    cryptoKey,
-    plaintext
-  );
-
-  return { iv, ciphertext: new Uint8Array(ciphertext) };
+  return { iv, ciphertext: sealed };
 }
 
 /**
  * Decrypt data using AES-256-GCM
  */
 async function decryptData(ciphertext, encryptionKey, iv, aad) {
-  const cryptoKey = await crypto.subtle.importKey(
-    'raw',
-    encryptionKey,
-    { name: 'AES-GCM' },
-    false,
-    ['decrypt']
-  );
+  const sealed = asUint8Array(ciphertext);
+  if (sealed.length <= AES_GCM_TAG_LENGTH) {
+    throw new Error('Ciphertext is too short');
+  }
 
-  const alg = { name: 'AES-GCM', iv };
-  if (aad) alg.additionalData = aad;
-
-  const plaintext = await crypto.subtle.decrypt(
-    alg,
-    cryptoKey,
-    ciphertext
+  const wallet = await getWallet();
+  const plaintext = wallet.utils.aesGcm.decrypt(
+    asUint8Array(encryptionKey),
+    sealed.subarray(0, sealed.length - AES_GCM_TAG_LENGTH),
+    sealed.subarray(sealed.length - AES_GCM_TAG_LENGTH),
+    asUint8Array(iv),
+    aad ? asUint8Array(aad) : new Uint8Array(0)
   );
 
   const decoder = new TextDecoder();

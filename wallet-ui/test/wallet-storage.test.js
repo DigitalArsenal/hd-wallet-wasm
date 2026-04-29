@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import initHDWallet from 'hd-wallet-wasm';
 import WalletStorage, { StorageMethod } from '../src/wallet-storage.js';
 
 class FakeLocalStorage {
@@ -39,40 +40,33 @@ function base64ToBytes(b64) {
   return out;
 }
 
+let walletPromise = null;
+function getWallet() {
+  if (!walletPromise) walletPromise = initHDWallet();
+  return walletPromise;
+}
+
 async function hkdfDerive(ikm, saltBytes, infoStr, length) {
-  const keyMaterial = await crypto.subtle.importKey('raw', ikm, 'HKDF', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits(
-    {
-      name: 'HKDF',
-      hash: 'SHA-256',
-      salt: saltBytes,
-      info: new TextEncoder().encode(infoStr),
-    },
-    keyMaterial,
-    length * 8
-  );
-  return new Uint8Array(bits);
+  const wallet = await getWallet();
+  return wallet.utils.hkdf(ikm, saltBytes, new TextEncoder().encode(infoStr), length);
 }
 
 async function legacyEncryptPinV2(pin, walletData, saltBytes) {
+  const wallet = await getWallet();
   const pinBytes = new TextEncoder().encode(pin);
-  const keyMaterial = await crypto.subtle.importKey('raw', pinBytes, 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', hash: 'SHA-256', salt: saltBytes, iterations: 100000 },
-    keyMaterial,
-    256
-  );
-  const km = new Uint8Array(bits);
+  const km = wallet.utils.pbkdf2(pinBytes, saltBytes, 100000, 32);
 
   const hkdfSalt = new TextEncoder().encode('wallet-storage-v2');
   const encryptionKey = await hkdfDerive(km, hkdfSalt, 'pin-encryption-key', 32);
   const iv = await hkdfDerive(km, hkdfSalt, 'pin-encryption-iv', 12);
 
-  const cryptoKey = await crypto.subtle.importKey('raw', encryptionKey, { name: 'AES-GCM' }, false, ['encrypt']);
   const plaintext = new TextEncoder().encode(JSON.stringify(walletData));
-  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, cryptoKey, plaintext);
+  const { ciphertext, tag } = wallet.utils.aesGcm.encrypt(encryptionKey, plaintext, iv);
+  const sealed = new Uint8Array(ciphertext.length + tag.length);
+  sealed.set(ciphertext, 0);
+  sealed.set(tag, ciphertext.length);
 
-  return new Uint8Array(ciphertext);
+  return sealed;
 }
 
 describe('wallet-storage (PIN)', () => {
@@ -127,7 +121,7 @@ describe('wallet-storage (PIN)', () => {
   it('decrypts legacy v2 deterministic-IV blobs and upgrades to v3', async () => {
     const pin = '123456';
     const walletData = { type: 'masterSeed', masterSeed: [9, 8, 7] };
-    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const salt = (await getWallet()).utils.getRandomBytes(16);
     const ciphertext = await legacyEncryptPinV2(pin, walletData, salt);
 
     storage.setItem(ENCRYPTED_DATA_KEY, JSON.stringify({
@@ -151,4 +145,3 @@ describe('wallet-storage (PIN)', () => {
     expect(base64ToBytes(upgraded.iv).length).toBe(12);
   });
 });
-

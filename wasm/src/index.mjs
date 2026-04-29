@@ -1130,8 +1130,7 @@ try {
 /**
  * SECURITY FIX [HIGH-05]: WASM Module Integrity Verification
  *
- * Verify the integrity of a WASM module before loading.
- * This helps prevent supply chain attacks where the WASM binary is tampered with.
+ * Verify the integrity of a WASM module using the package WASM SHA-256 helper.
  *
  * @param {ArrayBuffer|Uint8Array} wasmBytes - The WASM binary
  * @param {string} expectedHash - Expected SHA-256 hash in hex format
@@ -1146,10 +1145,7 @@ export async function verifyWasmIntegrity(wasmBytes, expectedHash) {
 
   const bytes = wasmBytes instanceof Uint8Array ? wasmBytes : new Uint8Array(wasmBytes);
 
-  // Use SubtleCrypto for hash computation
-  const hashBuffer = await crypto.subtle.digest('SHA-256', bytes);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  const hashHex = await computeWasmHash(bytes);
 
   if (hashHex.toLowerCase() !== expectedHash.toLowerCase()) {
     throw new Error(
@@ -1163,18 +1159,20 @@ export async function verifyWasmIntegrity(wasmBytes, expectedHash) {
   return true;
 }
 
+function bytesToHex(bytes) {
+  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+
 /**
- * Compute SHA-256 hash of WASM module
- * Use this during build to get the hash for integrity verification.
+ * Compute SHA-256 hash of bytes with the package WASM implementation.
  *
  * @param {ArrayBuffer|Uint8Array} wasmBytes - The WASM binary
  * @returns {Promise<string>} SHA-256 hash in hex format
  */
 export async function computeWasmHash(wasmBytes) {
   const bytes = wasmBytes instanceof Uint8Array ? wasmBytes : new Uint8Array(wasmBytes);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', bytes);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  const wallet = await init();
+  return bytesToHex(wallet.utils.sha256(bytes));
 }
 
 /**
