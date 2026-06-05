@@ -1196,6 +1196,8 @@ body:has(#hd-wallet-ui-container .modal.active) #hd-wallet-ui-container .nav-bar
   display: flex;
   flex-direction: column;
   gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 #hd-wallet-ui-container .account-header-top {
@@ -1216,6 +1218,7 @@ body:has(#hd-wallet-ui-container .modal.active) #hd-wallet-ui-container .nav-bar
   align-items: center;
   gap: 10px;
   margin-top: 4px;
+  width: 100%;
   min-width: 0;
 }
 
@@ -1958,12 +1961,16 @@ body:has(#hd-wallet-ui-container .modal.active) #hd-wallet-ui-container .nav-bar
   justify-content: center;
   gap: 6px;
   margin-top: 10px;
+  width: 100%;
+  max-width: 100%;
 }
 
 #hd-wallet-ui-container .ph-xpub-text {
   font-size: 11px;
   color: var(--white-40);
-  max-width: 200px;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
