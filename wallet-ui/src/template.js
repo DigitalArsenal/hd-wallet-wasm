@@ -3,7 +3,7 @@ export function getModalHTML() {
   <!-- Keys Modal -->
   <div id="keys-modal" class="modal">
   <div class="modal-glass modal-wide">
-      <div class="modal-header"><div class="account-header-info"><div class="account-header-top"><h3>Account</h3><h3 class="account-total-value" id="account-total-value"></h3></div><div class="account-address-row"><span class="account-address-label">xpub</span><code class="account-address-display" id="account-address-display"></code><button class="account-address-copy" id="account-address-copy" title="Copy xpub"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div><div class="account-address-row" id="account-peerid-row" style="display:none"><span class="account-address-label">PeerID</span><code class="account-address-display" id="account-peerid-display"></code><button class="account-address-copy" id="account-peerid-copy" title="Copy PeerID"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div></div><button class="modal-close">&times;</button></div>
+      <div class="modal-header"><div class="account-header-info"><div class="account-header-top"><h3>Account</h3><h3 class="account-total-value" id="account-total-value"></h3></div><div class="account-wallet-row"><select id="account-wallet-select" class="glass-input compact account-wallet-select" aria-label="Select wallet"></select><button id="account-wallet-manage-btn" class="glass-btn small">Manage</button></div></div><button class="modal-close">&times;</button></div>
       <div class="modal-tabs">
         <button class="modal-tab active" data-modal-tab="vcard-tab-content">Identity</button>
         <button class="modal-tab" data-modal-tab="trust-tab-content">Trust Map</button>
@@ -19,21 +19,6 @@ export function getModalHTML() {
             <div class="ph-portfolio">
               <div class="ph-portfolio-value" id="wallet-bond-value">$0.00</div>
               <div class="ph-portfolio-label">Total Balance</div>
-              <div class="ph-portfolio-xpub">
-                <code id="wallet-tab-xpub" class="ph-xpub-text truncate"></code>
-                <button class="ph-xpub-copy copy-key-btn" data-copy="wallet-tab-xpub" title="Copy xPub"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
-              </div>
-              <div class="ph-portfolio-xpub" id="ph-portfolio-peerid-row" style="display:none">
-                <code id="wallet-tab-peerid" class="ph-xpub-text truncate"></code>
-                <button class="ph-xpub-copy copy-key-btn" data-copy="wallet-tab-peerid" title="Copy PeerID"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
-              </div>
-            </div>
-
-            <div class="wallet-selector-row">
-              <div class="wallet-selector-control">
-                <select id="wallet-active-select" class="glass-input compact wallet-selector-input"></select>
-                <button id="wallet-manage-btn" class="glass-btn small">Manage</button>
-              </div>
             </div>
 
             <!-- Action Buttons Row -->
@@ -42,28 +27,6 @@ export function getModalHTML() {
                 <div class="ph-action-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></div>
                 <span>Scan</span>
               </button>
-              <div class="ph-action-wrap" id="wallet-send-action">
-                <button class="ph-action-btn" id="wallet-send-btn">
-                  <div class="ph-action-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></div>
-                  <span>Send</span>
-                </button>
-                <div class="ph-action-menu" id="wallet-send-menu">
-                  <button class="ph-action-menu-item" type="button" data-chain="BTC">Bitcoin (BTC)</button>
-                  <button class="ph-action-menu-item" type="button" data-chain="ETH">Ethereum (ETH)</button>
-                  <button class="ph-action-menu-item" type="button" data-chain="SOL">Solana (SOL)</button>
-                </div>
-              </div>
-              <div class="ph-action-wrap" id="wallet-receive-action">
-                <button class="ph-action-btn" id="wallet-receive-btn-main">
-                  <div class="ph-action-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg></div>
-                  <span>Receive</span>
-                </button>
-                <div class="ph-action-menu" id="wallet-receive-menu">
-                  <button class="ph-action-menu-item" type="button" data-chain="BTC">Bitcoin (BTC)</button>
-                  <button class="ph-action-menu-item" type="button" data-chain="ETH">Ethereum (ETH)</button>
-                  <button class="ph-action-menu-item" type="button" data-chain="SOL">Solana (SOL)</button>
-                </div>
-              </div>
               <button class="ph-action-btn" id="wallet-export-btn-main">
                 <div class="ph-action-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></div>
                 <span>Export</span>
@@ -87,6 +50,22 @@ export function getModalHTML() {
                 </svg>
                 <p>No tokens yet</p>
                 <p class="ph-token-empty-sub">Log in and tap Scan to discover your accounts</p>
+              </div>
+            </div>
+            <div id="wallet-asset-action-overlay" class="wallet-asset-action-overlay" style="display:none;">
+              <div class="wallet-asset-action-card">
+                <div class="wallet-asset-action-header">
+                  <div>
+                    <h4 id="wallet-asset-action-title"></h4>
+                    <div id="wallet-asset-action-path" class="wallet-asset-action-path"></div>
+                  </div>
+                  <button id="wallet-asset-action-close" class="modal-close" type="button">&times;</button>
+                </div>
+                <code id="wallet-asset-action-address" class="wallet-asset-action-address"></code>
+                <div class="wallet-asset-action-buttons">
+                  <button id="wallet-asset-send" class="glass-btn primary">Send</button>
+                  <button id="wallet-asset-receive" class="glass-btn">Receive</button>
+                </div>
               </div>
             </div>
           </div>
@@ -238,6 +217,19 @@ export function getModalHTML() {
                 <div class="identity-card-detail" id="identity-card-org"></div>
                 <div class="identity-card-detail" id="identity-card-email"></div>
                 <div class="identity-card-detail" id="identity-card-phone"></div>
+              </div>
+            </div>
+
+            <div class="identity-wallet-keys">
+              <div class="identity-wallet-key-row">
+                <span class="identity-wallet-key-label">XPUB</span>
+                <code id="identity-wallet-xpub" class="identity-wallet-key-value truncate"></code>
+                <button class="identity-wallet-copy copy-key-btn" data-copy="identity-wallet-xpub" title="Copy XPUB"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+              </div>
+              <div class="identity-wallet-key-row">
+                <span class="identity-wallet-key-label">PeerID</span>
+                <code id="identity-wallet-peerid" class="identity-wallet-key-value truncate"></code>
+                <button class="identity-wallet-copy copy-key-btn" data-copy="identity-wallet-peerid" title="Copy PeerID"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
               </div>
             </div>
 

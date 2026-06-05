@@ -526,6 +526,50 @@ function deriveAccountPeerId() {
   }
 }
 
+function getWalletIdentityPath(wallet = getCurrentWallet()) {
+  if (!wallet) return "m/44'/0'/0'";
+  return `m/44'/0'/${wallet.accountIndex}'`;
+}
+
+function getCurrentWalletIdentity(wallet = getCurrentWallet()) {
+  if (!state.hdRoot || !wallet) return { xpub: '', peerId: '', path: getWalletIdentityPath(wallet) };
+  const path = getWalletIdentityPath(wallet);
+  try {
+    const accountKey = deriveHDKey(path);
+    return {
+      xpub: accountKey?.toXpub?.() || '',
+      peerId: accountKey?.peerIdString?.() || '',
+      path,
+    };
+  } catch (e) {
+    console.warn('Failed to derive wallet identity keys:', e);
+    return { xpub: '', peerId: '', path };
+  }
+}
+
+function getCurrentWalletSigningAccounts(wallet = getCurrentWallet()) {
+  if (!wallet) return [];
+  return state.activeAccounts.filter(a => a.active && getAccountWalletId(a) === wallet.id && isSigningAccountForWallet(a, wallet));
+}
+
+function getCurrentWalletSignatureKey(wallet = getCurrentWallet()) {
+  if (!state.hdRoot || !wallet) return null;
+  const accountIndex = wallet.accountIndex;
+  try {
+    const path = buildSigningPath(501, accountIndex, 0);
+    const derived = deriveHDKey(path);
+    return {
+      privateKey: derived.privateKey(),
+      accountIndex,
+      index: 0,
+      path,
+    };
+  } catch (e) {
+    console.warn('Failed to derive selected wallet signature key:', e);
+    return null;
+  }
+}
+
 function updatePathDisplay() {
   const coin = $('hd-coin')?.value;
   const account = $('hd-account')?.value || '0';
@@ -778,29 +822,41 @@ function updateCustomPathDefault() {
 }
 
 function renderWalletSelector() {
-  const select = $('wallet-active-select');
-  if (!select) return;
+  const selects = [$('account-wallet-select'), $('wallet-active-select')].filter(Boolean);
+  if (selects.length === 0) return;
   ensureWalletNamesNormalized();
 
   const currentWallet = getCurrentWallet();
   if (!currentWallet) {
-    select.innerHTML = '';
+    selects.forEach((select) => { select.innerHTML = ''; });
     return;
   }
   state.activeWalletId = currentWallet.id;
 
-  select.innerHTML = '';
   const displayCurrency = state.walletFiatCurrency || getSelectedCurrency();
   const activeWallets = getActiveWallets();
-  activeWallets.forEach((wallet) => {
-    const option = document.createElement('option');
-    option.value = String(wallet.id);
-    const walletValue = state.walletFiatTotals[wallet.id] ?? 0;
-    option.textContent = `${wallet.name} (${formatCurrencyValue(walletValue, displayCurrency)})`;
-    select.appendChild(option);
+  selects.forEach((select) => {
+    select.innerHTML = '';
+    activeWallets.forEach((wallet) => {
+      const option = document.createElement('option');
+      option.value = String(wallet.id);
+      const walletValue = state.walletFiatTotals[wallet.id] ?? 0;
+      option.textContent = `${wallet.name} (${formatCurrencyValue(walletValue, displayCurrency)})`;
+      select.appendChild(option);
+    });
+    select.value = String(state.activeWalletId);
   });
-  select.value = String(state.activeWalletId);
   updateCustomPathWalletLabel();
+  updateIdentityWalletKeys();
+}
+
+function updateIdentityWalletKeys() {
+  const identity = getCurrentWalletIdentity();
+  const xpubEl = $('identity-wallet-xpub');
+  const peerIdEl = $('identity-wallet-peerid');
+
+  if (xpubEl) setTruncatedValue(xpubEl, identity.xpub || 'N/A');
+  if (peerIdEl) setTruncatedValue(peerIdEl, identity.peerId || 'N/A');
 }
 
 function sleep(ms) {
@@ -1221,6 +1277,7 @@ function hideWalletOverlays() {
 function showWalletMainView() {
   const main = $('wallet-main-view');
   hideWalletOverlays();
+  closeAssetActionOverlay();
   if (main) main.style.display = 'block';
 }
 
@@ -1523,6 +1580,49 @@ function closeWalletActionMenus() {
   $('wallet-receive-menu')?.classList.remove('visible');
 }
 
+function closeAssetActionOverlay() {
+  const overlay = $('wallet-asset-action-overlay');
+  if (overlay) overlay.style.display = 'none';
+  state.selectedWalletAssetIdx = null;
+}
+
+function showAssetActionOverlay(acct, idx) {
+  const overlay = $('wallet-asset-action-overlay');
+  if (!overlay || !acct) return;
+
+  state.selectedWalletAssetIdx = idx;
+  const icon = CHAIN_ICONS[acct.name] || { symbol: '?' };
+  const fullName = CHAIN_FULL_NAMES[acct.name] || acct.name;
+  const pathLabel = acct.path || `m/44'/${acct.coinType}'/${acct.account}'/0/${acct.index}`;
+
+  const titleEl = $('wallet-asset-action-title');
+  const pathEl = $('wallet-asset-action-path');
+  const addressEl = $('wallet-asset-action-address');
+  if (titleEl) titleEl.textContent = `${icon.symbol} ${fullName}`;
+  if (pathEl) pathEl.textContent = pathLabel;
+  if (addressEl) {
+    addressEl.textContent = acct.address || '';
+    addressEl.title = acct.address || '';
+  }
+
+  const sendBtn = $('wallet-asset-send');
+  const receiveBtn = $('wallet-asset-receive');
+  if (sendBtn) {
+    sendBtn.onclick = () => {
+      closeAssetActionOverlay();
+      showSendView(idx);
+    };
+  }
+  if (receiveBtn) {
+    receiveBtn.onclick = () => {
+      closeAssetActionOverlay();
+      showReceiveModal(acct);
+    };
+  }
+
+  overlay.style.display = 'flex';
+}
+
 function renderAccountsList() {
   const listEl = $('wallet-accounts-list');
   const emptyEl = $('wallet-accounts-empty');
@@ -1571,7 +1671,7 @@ function renderAccountsList() {
       '</div>';
 
     row.addEventListener('click', () => {
-      showReceiveModal(acct);
+      showAssetActionOverlay(acct, idx);
     });
 
     listEl.appendChild(row);
@@ -2559,21 +2659,6 @@ function login(keys) {
     if (xpubEl) {
       setTruncatedValue(xpubEl, state.hdRoot.toXpub() || 'N/A');
     }
-    // Populate wallet tab xpub display
-    const walletTabXpubEl = $('wallet-tab-xpub');
-    if (walletTabXpubEl) {
-      setTruncatedValue(walletTabXpubEl, state.hdRoot.toXpub() || 'N/A');
-    }
-    // Populate wallet tab PeerID display
-    const walletTabPeerIdEl = $('wallet-tab-peerid');
-    const peerIdRow = $('ph-portfolio-peerid-row');
-    if (walletTabPeerIdEl && peerIdRow) {
-      const peerIdStr = deriveAccountPeerId();
-      if (peerIdStr) {
-        setTruncatedValue(walletTabPeerIdEl, peerIdStr);
-        peerIdRow.style.display = '';
-      }
-    }
     populateAccountAddressDropdown();
     if (xprvEl) {
       xprvEl.textContent = 'Hidden (click reveal)';
@@ -2817,43 +2902,9 @@ function downloadData(data, filename, mimeType) {
 // Wallet Address Population & Balance Fetching
 // =============================================================================
 
-// Account header — show xpub only
 function populateAccountAddressDropdown() {
-  const addrEl = $('account-address-display');
-  if (!addrEl) return;
-
-  const xpubStr = state.hdRoot ? state.hdRoot.toXpub() : '';
-  addrEl.textContent = `${xpubStr.slice(0,10)}...${xpubStr.slice(-10)}`;
-  addrEl.title = xpubStr;
-
-  const copyBtn = $('account-address-copy');
-  if (copyBtn) {
-    copyBtn.onclick = async () => {
-      if (xpubStr && await safeCopyText(xpubStr)) {
-        copyBtn.title = 'Copied!';
-        setTimeout(() => { copyBtn.title = 'Copy xpub'; }, 1500);
-      }
-    };
-  }
-
-  // Populate PeerID row (derived from account-level secp256k1 key)
-  const peerIdStr = deriveAccountPeerId();
-  const peerIdRow = $('account-peerid-row');
-  const peerIdEl = $('account-peerid-display');
-  if (peerIdStr && peerIdRow && peerIdEl) {
-    peerIdRow.style.display = '';
-    peerIdEl.textContent = `${peerIdStr.slice(0,8)}...${peerIdStr.slice(-8)}`;
-    peerIdEl.title = peerIdStr;
-  }
-  const peerCopyBtn = $('account-peerid-copy');
-  if (peerCopyBtn) {
-    peerCopyBtn.onclick = async () => {
-      if (peerIdStr && await safeCopyText(peerIdStr)) {
-        peerCopyBtn.title = 'Copied!';
-        setTimeout(() => { peerCopyBtn.title = 'Copy PeerID'; }, 1500);
-      }
-    };
-  }
+  renderWalletSelector();
+  updateIdentityWalletKeys();
 }
 
 function populateWalletAddresses() {
@@ -3312,10 +3363,11 @@ function generateVCard(info, { skipPhoto = false } = {}) {
   }
 
   if (info.includeKeys && state.wallet?.x25519) {
+    const identity = getCurrentWalletIdentity();
     person.KEY = [
-      // Always include xPub
-      ...(state.hdRoot?.toXpub ? [{
-        XPUB: state.hdRoot.toXpub(),
+      // Always include the selected wallet xPub.
+      ...(identity.xpub ? [{
+        XPUB: identity.xpub,
         LABEL: '',
       }] : []),
       // X25519 encryption key
@@ -3324,8 +3376,7 @@ function generateVCard(info, { skipPhoto = false } = {}) {
         LABEL: 'X25519',
       },
       // Active accounts from wallet scan
-      ...state.activeAccounts
-        .filter(a => a.active && isSigningAccount(a))
+      ...getCurrentWalletSigningAccounts()
         .flatMap(a => {
           const entries = [];
           const pathLabel = a.path || `m/44'/${a.coinType}'/${a.account}'/0/${a.index}`;
@@ -3346,8 +3397,9 @@ function generateVCard(info, { skipPhoto = false } = {}) {
           return entries;
         }),
     ];
-  } else if (info.xpubOnly && state.hdRoot?.toXpub) {
-    person.KEY = [{ XPUB: state.hdRoot.toXpub(), LABEL: '' }];
+  } else if (info.xpubOnly) {
+    const identity = getCurrentWalletIdentity();
+    if (identity.xpub) person.KEY = [{ XPUB: identity.xpub, LABEL: '' }];
   }
 
   const note = info.includeKeys
@@ -3399,15 +3451,16 @@ function getSignableBody(vcardText) {
 }
 
 function signVCard(vcardText) {
-  if (!state.wallet?.ed25519?.privateKey) return vcardText;
+  const signatureKey = getCurrentWalletSignatureKey();
+  if (!signatureKey?.privateKey) return vcardText;
 
   const body = getSignableBody(vcardText);
   const messageBytes = new TextEncoder().encode(body);
-  const signature = hdWallet().curves.ed25519.sign(messageBytes, state.wallet.ed25519.privateKey);
+  const signature = hdWallet().curves.ed25519.sign(messageBytes, signatureKey.privateKey);
   const sigB64 = toBase64(signature);
 
-  // Encode signature + derivation path (coinType=501, account=0, index=0)
-  const sigValue = `${sigB64}:501:0:0`;
+  // Encode signature + selected wallet derivation path.
+  const sigValue = `${sigB64}:501:${signatureKey.accountIndex}:${signatureKey.index}`;
 
   // Find highest itemN and key index
   let maxItem = 0;
@@ -4650,10 +4703,12 @@ function setupMainAppHandlers() {
       if (targetEl) {
         try {
           let value = '';
-          if (targetId === 'wallet-xpub' || targetId === 'wallet-tab-xpub') {
+          if (targetId === 'wallet-xpub') {
             value = state.hdRoot?.toXpub?.() || '';
-          } else if (targetId === 'wallet-tab-peerid') {
-            value = deriveAccountPeerId() || '';
+          } else if (targetId === 'identity-wallet-xpub') {
+            value = getCurrentWalletIdentity().xpub || '';
+          } else if (targetId === 'identity-wallet-peerid') {
+            value = getCurrentWalletIdentity().peerId || '';
           } else if (targetId === 'wallet-xprv') {
             if (targetEl.dataset.revealed !== 'true') {
               alert('Reveal the xprv first to copy it.');
@@ -4746,74 +4801,42 @@ function setupMainAppHandlers() {
   });
 
   // Wallet tab controls
-  $('wallet-active-select')?.addEventListener('change', (e) => {
+  const handleWalletSelectChange = (e) => {
     const walletId = Number.parseInt(e.target.value, 10);
     if (Number.isNaN(walletId)) return;
     state.activeWalletId = walletId;
     closeWalletActionMenus();
+    closeAssetActionOverlay();
     renderWalletSelector();
     renderAccountsList();
     updateCustomPathDefault();
+  };
+  $('account-wallet-select')?.addEventListener('change', handleWalletSelectChange);
+  $('wallet-active-select')?.addEventListener('change', handleWalletSelectChange);
+  $('account-wallet-manage-btn')?.addEventListener('click', () => {
+    closeWalletActionMenus();
+    closeAssetActionOverlay();
+    const walletTab = _root.querySelector?.('.modal-tab[data-modal-tab="wallet-tab-content"]');
+    if (walletTab) walletTab.click();
+    showWalletsView();
   });
   $('wallet-manage-btn')?.addEventListener('click', () => {
     closeWalletActionMenus();
+    closeAssetActionOverlay();
     showWalletsView();
   });
   $('wallet-scan-btn')?.addEventListener('click', () => {
     scanActiveAccounts();
   });
-  const sendAction = $('wallet-send-action');
-  const receiveAction = $('wallet-receive-action');
-  $('wallet-send-btn')?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    updateWalletActionMenus();
-    const sendMenu = $('wallet-send-menu');
-    const receiveMenu = $('wallet-receive-menu');
-    if (!sendMenu || !receiveMenu) return;
-    const nextVisible = !sendMenu.classList.contains('visible');
-    receiveMenu.classList.remove('visible');
-    sendMenu.classList.toggle('visible', nextVisible);
-  });
-  $('wallet-receive-btn-main')?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    updateWalletActionMenus();
-    const sendMenu = $('wallet-send-menu');
-    const receiveMenu = $('wallet-receive-menu');
-    if (!sendMenu || !receiveMenu) return;
-    const nextVisible = !receiveMenu.classList.contains('visible');
-    sendMenu.classList.remove('visible');
-    receiveMenu.classList.toggle('visible', nextVisible);
-  });
-  $qa('#wallet-send-menu .ph-action-menu-item').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const chain = btn.dataset.chain;
-      const acct = getWalletAccountForChain(chain);
-      closeWalletActionMenus();
-      if (!acct) return;
-      showSendView(state.activeAccounts.indexOf(acct));
-    });
-  });
-  $qa('#wallet-receive-menu .ph-action-menu-item').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const chain = btn.dataset.chain;
-      const acct = getWalletAccountForChain(chain);
-      closeWalletActionMenus();
-      if (!acct) return;
-      showReceiveModal(acct);
-    });
-  });
-  _root.addEventListener('click', (e) => {
-    if (sendAction?.contains(e.target) || receiveAction?.contains(e.target)) return;
-    closeWalletActionMenus();
-  });
+  $('wallet-asset-action-close')?.addEventListener('click', closeAssetActionOverlay);
   $('wallet-export-btn-main')?.addEventListener('click', () => {
     closeWalletActionMenus();
+    closeAssetActionOverlay();
     showExportView();
   });
   $('wallet-advanced-btn-main')?.addEventListener('click', () => {
     closeWalletActionMenus();
+    closeAssetActionOverlay();
     showAdvancedView();
   });
   $('wallet-wallets-back')?.addEventListener('click', () => {
