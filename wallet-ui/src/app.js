@@ -28,6 +28,8 @@ window.Buffer = Buffer;
 
 import { getModalHTML } from './template.js';
 import WalletStorage, { StorageMethod } from './wallet-storage.js';
+import { safeCopyText } from './clipboard.js';
+import { normalizeTabHash } from './hash.js';
 
 import {
   cryptoConfig,
@@ -74,14 +76,7 @@ const $ = (id) => {
   return null;
 };
 
-export function normalizeTabHash(rawHash) {
-  return String(rawHash || '')
-    .replace(/^\/+/g, '')
-    .split(/[/?#]/)[0]
-    .replace(/[^a-z0-9_-]/gi, '')
-    .replace(/-tab$/i, '')
-    .toLowerCase();
-}
+export { normalizeTabHash };
 
 const $q = (sel) => _root.querySelector(sel) || (_root !== document ? document.querySelector(sel) : null);
 const $qa = (sel) => {
@@ -1612,9 +1607,7 @@ async function handleAccountAction(action, idx) {
       showReceiveModal(acct);
       break;
     case 'copy':
-      try {
-        await navigator.clipboard.writeText(acct.address);
-      } catch {}
+      await safeCopyText(acct.address);
       break;
     case 'toggle':
       toggleAccountActive(idx);
@@ -1669,7 +1662,7 @@ async function showReceiveModal(acct) {
   overlay.style.display = 'flex';
 
   overlay.querySelector('#wallet-receive-copy')?.addEventListener('click', () => {
-    navigator.clipboard.writeText(acct.address).catch(() => {});
+    void safeCopyText(acct.address);
   }, { once: true });
 
   overlay.querySelector('#wallet-receive-close')?.addEventListener('click', () => {
@@ -2835,12 +2828,10 @@ function populateAccountAddressDropdown() {
 
   const copyBtn = $('account-address-copy');
   if (copyBtn) {
-    copyBtn.onclick = () => {
-      if (xpubStr) {
-        navigator.clipboard.writeText(xpubStr).then(() => {
-          copyBtn.title = 'Copied!';
-          setTimeout(() => { copyBtn.title = 'Copy xpub'; }, 1500);
-        });
+    copyBtn.onclick = async () => {
+      if (xpubStr && await safeCopyText(xpubStr)) {
+        copyBtn.title = 'Copied!';
+        setTimeout(() => { copyBtn.title = 'Copy xpub'; }, 1500);
       }
     };
   }
@@ -2856,12 +2847,10 @@ function populateAccountAddressDropdown() {
   }
   const peerCopyBtn = $('account-peerid-copy');
   if (peerCopyBtn) {
-    peerCopyBtn.onclick = () => {
-      if (peerIdStr) {
-        navigator.clipboard.writeText(peerIdStr).then(() => {
-          peerCopyBtn.title = 'Copied!';
-          setTimeout(() => { peerCopyBtn.title = 'Copy PeerID'; }, 1500);
-        });
+    peerCopyBtn.onclick = async () => {
+      if (peerIdStr && await safeCopyText(peerIdStr)) {
+        peerCopyBtn.title = 'Copied!';
+        setTimeout(() => { peerCopyBtn.title = 'Copy PeerID'; }, 1500);
       }
     };
   }
@@ -4683,9 +4672,12 @@ function setupMainAppHandlers() {
           if (!value) {
             throw new Error('Nothing to copy');
           }
-          await navigator.clipboard.writeText(value);
-          btn.classList.add('copied');
-          setTimeout(() => btn.classList.remove('copied'), 1500);
+          if (await safeCopyText(value)) {
+            btn.classList.add('copied');
+            setTimeout(() => btn.classList.remove('copied'), 1500);
+          } else {
+            throw new Error('Clipboard unavailable');
+          }
         } catch (err) {
           console.error('Copy failed:', err);
         }
@@ -5050,7 +5042,9 @@ function setupMainAppHandlers() {
   $('copy-vcard')?.addEventListener('click', async () => {
     const vcard = state._exportedVCard || '';
     try {
-      await navigator.clipboard.writeText(vcard);
+      if (!await safeCopyText(vcard)) {
+        throw new Error('Clipboard unavailable');
+      }
       const btn = $('copy-vcard');
       if (btn) {
         btn.textContent = 'Copied!';
@@ -5697,7 +5691,7 @@ function setupTrustHandlers() {
   $('encrypt-copy-bundle')?.addEventListener('click', () => {
     const bundle = $('encrypt-bundle')?.value;
     if (bundle) {
-      navigator.clipboard.writeText(bundle).catch(() => {});
+      void safeCopyText(bundle);
     }
   });
 
@@ -5853,7 +5847,8 @@ function setupHomepageHandlers() {
     btn.addEventListener('click', () => {
       const code = btn.closest('.code-block')?.querySelector('code');
       if (code) {
-        navigator.clipboard.writeText(code.textContent).then(() => {
+        safeCopyText(code.textContent).then((copied) => {
+          if (!copied) return;
           btn.title = 'Copied!';
           setTimeout(() => { btn.title = 'Copy code'; }, 2000);
         });

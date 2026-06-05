@@ -1216,6 +1216,11 @@ body:has(#hd-wallet-ui-container .modal.active) #hd-wallet-ui-container .nav-bar
   align-items: center;
   gap: 10px;
   margin-top: 4px;
+  min-width: 0;
+}
+
+#hd-wallet-ui-container .account-address-label {
+  flex: 0 0 auto;
 }
 
 #hd-wallet-ui-container .account-address-select {
@@ -1238,9 +1243,9 @@ body:has(#hd-wallet-ui-container .modal.active) #hd-wallet-ui-container .nav-bar
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 280px;
-  flex: 1;
-  min-width: 0;
+  flex: 1 1 auto;
+  min-width: 12ch;
+  width: 100%;
 }
 
 #hd-wallet-ui-container .account-address-copy {
@@ -1248,10 +1253,13 @@ body:has(#hd-wallet-ui-container .modal.active) #hd-wallet-ui-container .nav-bar
   border: none;
   color: var(--white-30);
   cursor: pointer;
+  height: 24px;
   padding: 2px;
+  width: 24px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
+  justify-content: center;
 }
 #hd-wallet-ui-container .account-address-copy:hover {
   color: var(--white-70);
@@ -1259,7 +1267,7 @@ body:has(#hd-wallet-ui-container .modal.active) #hd-wallet-ui-container .nav-bar
 
 @media (max-width: 600px) {
   #hd-wallet-ui-container .account-address-display {
-    max-width: 140px;
+    min-width: 10ch;
   }
 }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeTabHash } from '../src/app.js';
+import { normalizeTabHash } from '../src/hash.js';
 
 describe('normalizeTabHash', () => {
   it('normalizes leading slash hashes to tab ids', () => {
