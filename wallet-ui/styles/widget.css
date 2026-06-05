@@ -1239,9 +1239,14 @@ body:has(#hd-wallet-ui-container .modal.active) #hd-wallet-ui-container .nav-bar
 }
 
 #hd-wallet-ui-container .account-address-display {
+  box-sizing: border-box;
   font-family: var(--font-mono, 'SF Mono', monospace);
   font-size: 11px;
-  color: var(--white-50);
+  color: var(--white-90);
+  background: var(--white-05);
+  border: 1px solid var(--glass-border);
+  border-radius: 6px;
+  padding: 2px 6px;
   letter-spacing: 0.04em;
   white-space: nowrap;
   overflow: hidden;
@@ -1966,8 +1971,13 @@ body:has(#hd-wallet-ui-container .modal.active) #hd-wallet-ui-container .nav-bar
 }
 
 #hd-wallet-ui-container .ph-xpub-text {
+  box-sizing: border-box;
   font-size: 11px;
-  color: var(--white-40);
+  color: var(--white-90);
+  background: var(--white-05);
+  border: 1px solid var(--glass-border);
+  border-radius: 6px;
+  padding: 2px 6px;
   flex: 1 1 auto;
   min-width: 0;
   width: 100%;

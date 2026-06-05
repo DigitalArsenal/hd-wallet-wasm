@@ -23,7 +23,11 @@ describe('account header address field styles', () => {
     expect(labelRule).toContain('flex: 0 0 auto');
     expect(displayRule).toContain('flex: 1 1 auto');
     expect(displayRule).toContain('min-width: 12ch');
+    expect(displayRule).toContain('background: var(--white-05)');
+    expect(displayRule).toContain('border: 1px solid var(--glass-border)');
+    expect(displayRule).toContain('color: var(--white-90)');
     expect(displayRule).not.toContain('max-width');
+    expect(displayRule).not.toContain('color: var(--white-50)');
     expect(copyRule).toContain('width: 24px');
   });
 
@@ -36,6 +40,8 @@ describe('account header address field styles', () => {
     expect(infoRule).toContain('min-width: 0');
     expect(displayRule).toContain('flex: 1 1 auto');
     expect(displayRule).toContain('min-width: 12ch');
+    expect(displayRule).toContain('background: var(--white-05)');
+    expect(displayRule).toContain('color: var(--white-90)');
     expect(displayRule).not.toContain('max-width');
   });
 
@@ -48,6 +54,10 @@ describe('account header address field styles', () => {
     expect(valueRule).toContain('flex: 1 1 auto');
     expect(valueRule).toContain('min-width: 0');
     expect(valueRule).toContain('width: 100%');
+    expect(valueRule).toContain('background: var(--white-05)');
+    expect(valueRule).toContain('border: 1px solid var(--glass-border)');
+    expect(valueRule).toContain('color: var(--white-90)');
     expect(valueRule).not.toContain('max-width: 200px');
+    expect(valueRule).not.toContain('color: var(--white-40)');
   });
 });
