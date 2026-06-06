@@ -1187,11 +1187,6 @@ body:has(#hd-wallet-ui-container .modal.active) #hd-wallet-ui-container .nav-bar
   user-drag: none;
 }
 
-#hd-wallet-ui-container .modal-header h3 {
-  font-size: 18px;
-  font-weight: 600;
-}
-
 #hd-wallet-ui-container .account-header-info {
   display: flex;
   flex-direction: column;
@@ -1200,24 +1195,15 @@ body:has(#hd-wallet-ui-container .modal.active) #hd-wallet-ui-container .nav-bar
   min-width: 0;
 }
 
-#hd-wallet-ui-container .account-header-top {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-}
-
-#hd-wallet-ui-container .account-total-value {
-  font-weight: 500;
-  color: #4ade80;
-  letter-spacing: 0.02em;
-  opacity: 0.9;
+#hd-wallet-ui-container .account-modal-header {
+  position: relative;
+  padding-right: 56px;
 }
 
 #hd-wallet-ui-container .account-wallet-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-top: 4px;
   width: 100%;
   min-width: 0;
 }
@@ -1236,10 +1222,6 @@ body:has(#hd-wallet-ui-container .modal.active) #hd-wallet-ui-container .nav-bar
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='none' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 6l4.5 4 4.5-4' stroke='rgba(255,255,255,0.9)' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 11px center;
-}
-
-#hd-wallet-ui-container #account-wallet-manage-btn {
-  flex: 0 0 auto;
 }
 
 @media (max-width: 600px) {
@@ -1265,17 +1247,23 @@ body:has(#hd-wallet-ui-container .modal.active) #hd-wallet-ui-container .nav-bar
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--white-10);
+  background: transparent;
   border: none;
-  border-radius: 50%;
   color: var(--white);
-  font-size: 20px;
   cursor: pointer;
-  transition: background 0.2s;
+  padding: 0;
+  transition: color 0.2s, opacity 0.2s;
 }
 
 #hd-wallet-ui-container .modal-close:hover {
-  background: var(--white-20);
+  color: var(--white-80);
+  opacity: 0.9;
+}
+
+#hd-wallet-ui-container .account-modal-close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
 }
 
 #hd-wallet-ui-container .modal-body {

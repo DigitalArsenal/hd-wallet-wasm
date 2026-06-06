@@ -841,13 +841,22 @@ function renderWalletSelector() {
       const option = document.createElement('option');
       option.value = String(wallet.id);
       const walletValue = state.walletFiatTotals[wallet.id] ?? 0;
-      option.textContent = `${wallet.name} (${formatCurrencyValue(walletValue, displayCurrency)})`;
+      option.textContent = wallet.id === state.activeWalletId
+        ? wallet.name
+        : `${wallet.name} (${formatCurrencyValue(walletValue, displayCurrency)})`;
       select.appendChild(option);
     });
     select.value = String(state.activeWalletId);
   });
   updateCustomPathWalletLabel();
   updateIdentityWalletKeys();
+}
+
+function updateWalletBondDisplay(currency = state.walletFiatCurrency || getSelectedCurrency()) {
+  const valueEl = $('wallet-bond-value');
+  const wallet = getCurrentWallet();
+  const walletValue = wallet ? state.walletFiatTotals?.[wallet.id] ?? 0 : 0;
+  if (valueEl) valueEl.textContent = formatCurrencyValue(walletValue, currency);
 }
 
 function updateIdentityWalletKeys() {
@@ -2128,7 +2137,6 @@ async function updateWalletBondTotal() {
     const currency = getSelectedCurrency();
     const prices = await fetchCryptoPrices(currency);
 
-    let total = 0;
     const walletTotals = {};
     let hasPositiveBalance = false;
     let missingPriceForFundedAccount = false;
@@ -2145,27 +2153,20 @@ async function updateWalletBondTotal() {
       }
 
       const fiatValue = bal * price;
-      total += fiatValue;
       const walletId = getAccountWalletId(acct);
       walletTotals[walletId] = (walletTotals[walletId] || 0) + fiatValue;
     }
 
-    if (hasPositiveBalance && total <= 0 && missingPriceForFundedAccount) {
+    const pricedTotal = Object.values(walletTotals).reduce((sum, v) => sum + (Number.isFinite(v) ? v : 0), 0);
+    if (hasPositiveBalance && pricedTotal <= 0 && missingPriceForFundedAccount) {
       throw new Error('Funded accounts found but fiat pricing is unavailable');
     }
 
     state.walletFiatTotals = walletTotals;
     state.walletFiatCurrency = currency;
 
-    const formatted = formatCurrencyValue(total, currency);
-    if (valueEl) valueEl.textContent = formatted;
+    updateWalletBondDisplay(currency);
     renderWalletSelector();
-
-    // Also update the header bond total
-    const accountTotalEl = $('account-total-value');
-    if (accountTotalEl) {
-      accountTotalEl.textContent = 'Bond: ' + formatted;
-    }
   } catch (e) {
     console.warn('Bond total calculation failed:', e);
     // Keep last known totals if pricing endpoint is temporarily unavailable.
@@ -2173,10 +2174,7 @@ async function updateWalletBondTotal() {
     const cachedTotal = Object.values(cachedTotals).reduce((sum, v) => sum + (Number.isFinite(v) ? v : 0), 0);
     if (cachedTotal > 0) {
       const displayCurrency = state.walletFiatCurrency || getSelectedCurrency();
-      const formatted = formatCurrencyValue(cachedTotal, displayCurrency);
-      if (valueEl) valueEl.textContent = formatted;
-      const accountTotalEl = $('account-total-value');
-      if (accountTotalEl) accountTotalEl.textContent = 'Bond: ' + formatted;
+      updateWalletBondDisplay(displayCurrency);
     } else if (valueEl && !valueEl.textContent) {
       valueEl.textContent = '$0.00';
     }
@@ -4276,7 +4274,7 @@ function setupMainAppHandlers() {
   // Modal close handlers
   $qa('.modal').forEach(modal => {
     modal.addEventListener('click', (e) => {
-      if (e.target === modal || e.target.classList.contains('modal-close')) {
+      if (e.target === modal || e.target.closest?.('.modal-close')) {
         modal.classList.remove('active');
       }
     });
@@ -4285,7 +4283,7 @@ function setupMainAppHandlers() {
   // Account modal tab switching
   $qa('.modal-tab[data-modal-tab]').forEach(tab => {
     tab.addEventListener('click', () => {
-      $qa('.modal-tab[data-modal-tab]').forEach(t => t.classList.remove('active'));
+      $qa('.modal-tab').forEach(t => t.classList.remove('active'));
       $qa('.modal-tab-content').forEach(c => c.classList.remove('active'));
       tab.classList.add('active');
       const target = $(tab.dataset.modalTab);
@@ -4808,16 +4806,19 @@ function setupMainAppHandlers() {
     closeWalletActionMenus();
     closeAssetActionOverlay();
     renderWalletSelector();
+    updateWalletBondDisplay();
     renderAccountsList();
     updateCustomPathDefault();
   };
   $('account-wallet-select')?.addEventListener('change', handleWalletSelectChange);
   $('wallet-active-select')?.addEventListener('change', handleWalletSelectChange);
-  $('account-wallet-manage-btn')?.addEventListener('click', () => {
+  $('wallet-manage-tab')?.addEventListener('click', () => {
     closeWalletActionMenus();
     closeAssetActionOverlay();
-    const walletTab = _root.querySelector?.('.modal-tab[data-modal-tab="wallet-tab-content"]');
-    if (walletTab) walletTab.click();
+    $qa('.modal-tab').forEach(t => t.classList.remove('active'));
+    $qa('.modal-tab-content').forEach(c => c.classList.remove('active'));
+    $('wallet-manage-tab')?.classList.add('active');
+    $('wallet-tab-content')?.classList.add('active');
     showWalletsView();
   });
   $('wallet-manage-btn')?.addEventListener('click', () => {

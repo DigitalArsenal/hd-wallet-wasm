@@ -3,12 +3,13 @@ export function getModalHTML() {
   <!-- Keys Modal -->
   <div id="keys-modal" class="modal">
   <div class="modal-glass modal-wide">
-      <div class="modal-header"><div class="account-header-info"><div class="account-header-top"><h3>Account</h3><h3 class="account-total-value" id="account-total-value"></h3></div><div class="account-wallet-row"><select id="account-wallet-select" class="glass-input compact account-wallet-select" aria-label="Select wallet"></select><button id="account-wallet-manage-btn" class="glass-btn small">Manage</button></div></div><button class="modal-close">&times;</button></div>
+      <div class="modal-header account-modal-header"><div class="account-header-info"><div class="account-wallet-row"><select id="account-wallet-select" class="glass-input compact account-wallet-select" aria-label="Select wallet"></select></div></div><button class="modal-close account-modal-close" type="button" aria-label="Close"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
       <div class="modal-tabs">
         <button class="modal-tab active" data-modal-tab="vcard-tab-content">Identity</button>
         <button class="modal-tab" data-modal-tab="trust-tab-content">Trust Map</button>
         <button class="modal-tab" data-modal-tab="messaging-tab-content">Messaging</button>
         <button class="modal-tab" data-modal-tab="wallet-tab-content">Wallet</button>
+        <button class="modal-tab" id="wallet-manage-tab" type="button">Manage</button>
       </div>
       <div class="modal-body">
         <!-- Wallet Tab -->
@@ -18,7 +19,7 @@ export function getModalHTML() {
             <!-- Portfolio Value (Phantom-style hero) -->
             <div class="ph-portfolio">
               <div class="ph-portfolio-value" id="wallet-bond-value">$0.00</div>
-              <div class="ph-portfolio-label">Total Balance</div>
+              <div class="ph-portfolio-label">Bond</div>
             </div>
 
             <!-- Action Buttons Row -->
@@ -59,7 +60,7 @@ export function getModalHTML() {
                     <h4 id="wallet-asset-action-title"></h4>
                     <div id="wallet-asset-action-path" class="wallet-asset-action-path"></div>
                   </div>
-                  <button id="wallet-asset-action-close" class="modal-close" type="button">&times;</button>
+                  <button id="wallet-asset-action-close" class="modal-close" type="button" aria-label="Close"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
                 </div>
                 <code id="wallet-asset-action-address" class="wallet-asset-action-address"></code>
                 <div class="wallet-asset-action-buttons">
@@ -548,7 +549,7 @@ export function getModalHTML() {
   <!-- Login Modal -->
   <div id="login-modal" class="modal">
     <div class="modal-glass login-modal-content">
-      <div class="modal-header"><h3>Login</h3><button class="modal-close">&times;</button></div>
+      <div class="modal-header"><h3>Login</h3><button class="modal-close" type="button" aria-label="Close"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
       <div id="wallet-info-box" class="wallet-info-box">
         <div id="wallet-info-expanded" class="wallet-info-expanded"><div class="wallet-info-content"><strong>Decentralized Wallet</strong> — Your credentials never leave your browser.</div><button class="wallet-info-close" id="wallet-info-dismiss" title="Dismiss">&times;</button></div>
         <div id="wallet-info-collapsed" class="wallet-info-collapsed" style="display:none"><span>Decentralized Wallet</span><div class="wallet-info-icon-wrap"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="0.75"/><text x="8" y="8" text-anchor="middle" dominant-baseline="central" font-size="11" fill="currentColor">i</text></svg></div></div>

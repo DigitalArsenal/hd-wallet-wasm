@@ -1,6 +1,6 @@
 {
   "name": "hd-wallet-ui",
-  "version": "2.0.10",
+  "version": "2.0.11",
   "description": "HD Wallet modal UI — login, keys, identity, trust map, and security bond. Attach to any button in your app.",
   "type": "module",
   "main": "src/app.js",

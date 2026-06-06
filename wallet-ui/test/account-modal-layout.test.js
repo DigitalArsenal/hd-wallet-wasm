@@ -13,9 +13,31 @@ describe('account modal wallet layout', () => {
     const template = read('src/template.js');
 
     expect(template).toContain('id="account-wallet-select"');
-    expect(template).toContain('id="account-wallet-manage-btn"');
     expect(template).not.toContain('id="account-address-display"');
     expect(template).not.toContain('id="account-peerid-display"');
+    expect(template).not.toContain('<h3>Account</h3>');
+    expect(template).not.toContain('id="account-total-value"');
+    expect(template).not.toContain('id="account-wallet-manage-btn"');
+  });
+
+  it('puts wallet management beside the Wallet tab instead of in the header', () => {
+    const template = read('src/template.js');
+    const app = read('src/app.js');
+
+    expect(template).toContain('id="wallet-manage-tab"');
+    expect(template).toContain('data-modal-tab="wallet-tab-content"');
+    expect(app).toContain("$('wallet-manage-tab')?.addEventListener('click'");
+  });
+
+  it('shows Bond for the selected wallet and keeps the selected dropdown label amount-free', () => {
+    const template = read('src/template.js');
+    const app = read('src/app.js');
+
+    expect(template).toContain('<div class="ph-portfolio-label">Bond</div>');
+    expect(app).toContain('function updateWalletBondDisplay');
+    expect(app).toContain('state.walletFiatTotals?.[wallet.id]');
+    expect(app).toContain('wallet.id === state.activeWalletId');
+    expect(app).toContain('? wallet.name');
   });
 
   it('keeps selected wallet identity keys in the Identity tab', () => {
@@ -44,5 +66,18 @@ describe('account modal wallet layout', () => {
     expect(activeRule).toContain('background:');
     expect(activeRule).toContain('border-color:');
     expect(activeRule).not.toContain('border-bottom-color');
+  });
+
+  it('uses a bare icon-only close control in the account modal header', () => {
+    const template = read('src/template.js');
+    const css = read('styles/main.css');
+    const closeRule = css.match(/\.modal-close\s*\{[^}]+\}/)?.[0] ?? '';
+
+    expect(template).toContain('class="modal-close account-modal-close"');
+    expect(template).toContain('aria-label="Close"');
+    expect(template).not.toContain('<button class="modal-close">&times;</button>');
+    expect(closeRule).toContain('background: transparent');
+    expect(closeRule).toContain('border: none');
+    expect(closeRule).not.toContain('border-radius: 50%');
   });
 });
