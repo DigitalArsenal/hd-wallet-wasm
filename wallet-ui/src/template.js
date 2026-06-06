@@ -3,7 +3,7 @@ export function getModalHTML() {
   <!-- Keys Modal -->
   <div id="keys-modal" class="modal">
   <div class="modal-glass modal-wide">
-      <div class="modal-header account-modal-header"><div class="account-header-info"><div class="account-wallet-row"><select id="account-wallet-select" class="glass-input compact account-wallet-select" aria-label="Select wallet"></select></div></div><button class="modal-close account-modal-close" type="button" aria-label="Close"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
+      <div class="modal-header account-modal-header"><div class="account-header-info"><div class="account-wallet-row"><select id="account-wallet-select" class="glass-input compact account-wallet-select" aria-label="Select wallet"></select></div><div class="account-wallet-summary"><div class="ph-portfolio-value" id="wallet-bond-value">$0.00</div><div class="ph-portfolio-label">Bond</div></div></div><button class="modal-close account-modal-close" type="button" aria-label="Close"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
       <div class="modal-tabs">
         <button class="modal-tab active" data-modal-tab="vcard-tab-content">Identity</button>
         <button class="modal-tab" data-modal-tab="trust-tab-content">Trust Map</button>
@@ -16,12 +16,6 @@ export function getModalHTML() {
         <div id="wallet-tab-content" class="modal-tab-content">
           <!-- Main Wallet View -->
           <div id="wallet-main-view">
-            <!-- Portfolio Value (Phantom-style hero) -->
-            <div class="ph-portfolio">
-              <div class="ph-portfolio-value" id="wallet-bond-value">$0.00</div>
-              <div class="ph-portfolio-label">Bond</div>
-            </div>
-
             <!-- Action Buttons Row -->
             <div class="ph-actions">
               <button class="ph-action-btn" id="wallet-scan-btn">
@@ -197,7 +191,7 @@ export function getModalHTML() {
                   <video id="vcard-camera-video" autoplay playsinline style="display:none;width:100%;height:100%;object-fit:contain;"></video>
                   <div id="vcard-photo-actions" class="photo-actions">
                     <label class="glass-btn small" for="vcard-photo-input">Upload</label>
-                    <button id="vcard-camera-btn" class="glass-btn small" style="display:none;">Take Photo</button>
+                    <button id="vcard-camera-btn" class="glass-btn small" style="display:none;">Use Camera</button>
                     <button id="vcard-camera-capture" class="glass-btn small primary" style="display:none;">Capture</button>
                     <button id="vcard-camera-cancel" class="glass-btn small" style="display:none;">Cancel</button>
                     <button id="vcard-photo-remove" class="glass-btn small" style="display:none;">Remove</button>

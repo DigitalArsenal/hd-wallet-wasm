@@ -1190,28 +1190,33 @@ body:has(#hd-wallet-ui-container .modal.active) #hd-wallet-ui-container .nav-bar
 #hd-wallet-ui-container .account-header-info {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 8px;
   flex: 1 1 auto;
   min-width: 0;
 }
 
 #hd-wallet-ui-container .account-modal-header {
   position: relative;
+  justify-content: center;
+  min-height: 118px;
   padding-right: 56px;
 }
 
 #hd-wallet-ui-container .account-wallet-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  width: 100%;
+  justify-content: center;
+  gap: 8px;
+  width: auto;
   min-width: 0;
 }
 
 #hd-wallet-ui-container .account-wallet-select.glass-input.compact {
-  flex: 1 1 auto;
-  min-width: 180px;
-  width: 100%;
+  flex: 0 0 auto;
+  min-width: 0;
+  width: auto;
+  max-width: min(260px, calc(100vw - 112px));
   height: 32px;
   font-size: 13px;
   padding: 4px 34px 4px 10px;
@@ -1224,6 +1229,10 @@ body:has(#hd-wallet-ui-container .modal.active) #hd-wallet-ui-container .nav-bar
   background-position: right 11px center;
 }
 
+#hd-wallet-ui-container .account-wallet-summary {
+  text-align: center;
+}
+
 @media (max-width: 600px) {
   #hd-wallet-ui-container .account-wallet-row {
     gap: 8px;
@@ -1231,6 +1240,7 @@ body:has(#hd-wallet-ui-container .modal.active) #hd-wallet-ui-container .nav-bar
 
   #hd-wallet-ui-container .account-wallet-select.glass-input.compact {
     min-width: 0;
+    max-width: calc(100vw - 96px);
   }
 }
 

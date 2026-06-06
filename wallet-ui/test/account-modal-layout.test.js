@@ -40,6 +40,32 @@ describe('account modal wallet layout', () => {
     expect(app).toContain('? wallet.name');
   });
 
+  it('places a compact wallet picker above the large current wallet balance in the account header', () => {
+    const template = read('src/template.js');
+    const css = read('styles/main.css');
+    const app = read('src/app.js');
+    const header = template.match(/<div class="modal-header account-modal-header">[\s\S]+?<div class="modal-tabs">/)?.[0] ?? '';
+    const selectRule = css.match(/\.account-wallet-select\.glass-input\.compact\s*\{[^}]+\}/)?.[0] ?? '';
+
+    expect(header).toContain('id="account-wallet-select"');
+    expect(header).toContain('class="account-wallet-summary"');
+    expect(header).toContain('id="wallet-bond-value"');
+    expect(header.indexOf('id="account-wallet-select"')).toBeLessThan(header.indexOf('id="wallet-bond-value"'));
+    expect(template.match(/id="wallet-bond-value"/g)).toHaveLength(1);
+    expect(selectRule).toContain('width: auto');
+    expect(selectRule).toContain('max-width:');
+    expect(selectRule).not.toContain('width: 100%');
+    expect(app).toContain('fitWalletSelectorToSelectedLabel');
+  });
+
+  it('labels the vCard camera action as Use Camera', () => {
+    const template = read('src/template.js');
+
+    expect(template).toContain('id="vcard-camera-btn"');
+    expect(template).toContain('Use Camera');
+    expect(template).not.toContain('>Take Photo<');
+  });
+
   it('keeps selected wallet identity keys in the Identity tab', () => {
     const template = read('src/template.js');
 
