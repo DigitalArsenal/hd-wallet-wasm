@@ -23,6 +23,7 @@ class FakeLocalStorage {
 const STORAGE_PREFIX = 'wallet_storage_';
 const METADATA_KEY = `${STORAGE_PREFIX}metadata`;
 const ENCRYPTED_DATA_KEY = `${STORAGE_PREFIX}encrypted`;
+const PASSKEY_CREDENTIAL_KEY = `${STORAGE_PREFIX}passkey_credential`;
 
 function bytesToBase64(bytes) {
   let binary = '';
@@ -143,5 +144,23 @@ describe('wallet-storage (PIN)', () => {
     expect(upgradedMeta.version).toBe(3);
     expect(typeof upgraded.iv).toBe('string');
     expect(base64ToBytes(upgraded.iv).length).toBe(12);
+  });
+
+  it('clearStorage removes current and legacy stored wallet credentials', () => {
+    storage.setItem(METADATA_KEY, '{}');
+    storage.setItem(ENCRYPTED_DATA_KEY, '{}');
+    storage.setItem(PASSKEY_CREDENTIAL_KEY, '{}');
+    storage.setItem('encrypted_wallet', '{}');
+    storage.setItem('passkey_credential', '{}');
+    storage.setItem('passkey_wallet', '{}');
+
+    WalletStorage.clearStorage();
+
+    expect(storage.getItem(METADATA_KEY)).toBeNull();
+    expect(storage.getItem(ENCRYPTED_DATA_KEY)).toBeNull();
+    expect(storage.getItem(PASSKEY_CREDENTIAL_KEY)).toBeNull();
+    expect(storage.getItem('encrypted_wallet')).toBeNull();
+    expect(storage.getItem('passkey_credential')).toBeNull();
+    expect(storage.getItem('passkey_wallet')).toBeNull();
   });
 });

@@ -2596,6 +2596,36 @@ async function generatePKIKeyPairs() {
 // Login / Logout
 // =============================================================================
 
+function hideStoredWalletLoginUI() {
+  const storedTab = $('stored-tab');
+  if (storedTab) storedTab.style.display = 'none';
+
+  const pinSect = $('stored-pin-section');
+  if (pinSect) pinSect.style.display = 'block';
+
+  const psSect = $('stored-passkey-section');
+  if (psSect) psSect.style.display = 'none';
+
+  const divider = $('stored-divider');
+  if (divider) divider.style.display = 'none';
+
+  const dateEl = $('stored-wallet-date');
+  if (dateEl) dateEl.textContent = '';
+
+  const unlockPin = $('pin-input-unlock');
+  if (unlockPin) unlockPin.value = '';
+
+  const unlockBtn = $('unlock-stored-wallet');
+  if (unlockBtn) unlockBtn.disabled = true;
+
+  $qa('.method-tab').forEach(t => t.classList.remove('active'));
+  $qa('.method-content').forEach(c => c.classList.remove('active'));
+  const pwMethod = $('password-method');
+  if (pwMethod) pwMethod.classList.add('active');
+  const pwTab = $q('.method-tab[data-method="password"]');
+  if (pwTab) pwTab.classList.add('active');
+}
+
 function login(keys) {
   state.loggedIn = true;
   state.wallet = keys;
@@ -2786,7 +2816,10 @@ function logout() {
   state.masterSeed = null;
   state.hdRoot = null;
   state.mnemonic = null;
+  state.addresses = { btc: null, eth: null, sol: null };
 
+  WalletStorage.clearStorage();
+  hideStoredWalletLoginUI();
   localStorage.removeItem(PKI_STORAGE_KEY);
 
   // Update hero stats
@@ -2823,6 +2856,9 @@ function logout() {
   // Clear HD wallet UI
   const derivedResult = $('derived-result');
   if (derivedResult) derivedResult.style.display = 'none';
+
+  $('login-modal')?.classList.remove('active');
+  $('keys-modal')?.classList.remove('active');
 }
 
 // =============================================================================

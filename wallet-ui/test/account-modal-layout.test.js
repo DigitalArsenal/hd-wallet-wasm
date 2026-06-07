@@ -141,6 +141,8 @@ describe('account modal wallet layout', () => {
     expect(app).not.toContain("$('account-logout')?.addEventListener('click', logout)");
     expect(app).toContain('logout() {');
     expect(app).toContain('logout();');
+    expect(app).toContain('WalletStorage.clearStorage();');
+    expect(app).toContain('hideStoredWalletLoginUI();');
     expect(app).toContain('if (state.loggedIn) {');
     expect(app).toContain("document.getElementById('keys-modal')");
   });
