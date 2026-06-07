@@ -129,4 +129,28 @@ describe('account modal wallet layout', () => {
     expect(closeRule).toContain('border: none');
     expect(closeRule).not.toContain('border-radius: 50%');
   });
+
+  it('exposes logout in embedded account modal and keeps openLogin on account when authenticated', () => {
+    const template = read('src/template.js');
+    const app = read('src/app.js');
+
+    expect(template).toContain('id="account-logout"');
+    expect(template).toContain('aria-label="Logout"');
+    expect(app).toContain("$('account-logout')?.addEventListener('click', logout)");
+    expect(app).toContain('if (state.loggedIn) {');
+    expect(app).toContain("document.getElementById('keys-modal')");
+  });
+
+  it('centers and compacts the wallet info banner', () => {
+    const css = read('styles/main.css');
+    const expandedRule = css.match(/\.wallet-info-expanded\s*\{[^}]+\}/)?.[0] ?? '';
+    const closeRule = css.match(/\.wallet-info-close\s*\{[^}]+\}/)?.[0] ?? '';
+
+    expect(expandedRule).toContain('align-items: center');
+    expect(expandedRule).toContain('padding: 6px 24px');
+    expect(expandedRule).toContain('min-height: 30px');
+    expect(closeRule).toContain('display: inline-flex');
+    expect(closeRule).toContain('align-items: center');
+    expect(closeRule).toContain('justify-content: center');
+  });
 });

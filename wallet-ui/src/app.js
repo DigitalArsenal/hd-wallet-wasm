@@ -4272,6 +4272,7 @@ function setupMainAppHandlers() {
     $('login-modal')?.classList.add('active');
   });
   $('nav-logout')?.addEventListener('click', logout);
+  $('account-logout')?.addEventListener('click', logout);
   $('nav-keys')?.addEventListener('click', async () => {
     $('keys-modal')?.classList.add('active');
     if (state.loggedIn) {
@@ -6024,8 +6025,17 @@ export async function createWalletUI(rootElement, options = {}) {
   return {
     /** Open the login modal */
     openLogin() {
-      const modal = document.getElementById('login-modal');
-      if (modal) modal.classList.add('active');
+      if (state.loggedIn) {
+        const accountModal = document.getElementById('keys-modal');
+        if (accountModal) accountModal.classList.add('active');
+        return;
+      }
+      const loginModal = document.getElementById('login-modal');
+      if (loginModal) {
+        loginModal.classList.add('active');
+        const storedTab = loginModal.querySelector('[data-method="stored"]');
+        if (storedTab && storedTab.style.display !== 'none') storedTab.click();
+      }
     },
     /** Open the account / keys modal (requires login first) */
     openAccount() {
