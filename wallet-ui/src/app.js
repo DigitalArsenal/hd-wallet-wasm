@@ -4272,7 +4272,6 @@ function setupMainAppHandlers() {
     $('login-modal')?.classList.add('active');
   });
   $('nav-logout')?.addEventListener('click', logout);
-  $('account-logout')?.addEventListener('click', logout);
   $('nav-keys')?.addEventListener('click', async () => {
     $('keys-modal')?.classList.add('active');
     if (state.loggedIn) {
@@ -6041,6 +6040,10 @@ export async function createWalletUI(rootElement, options = {}) {
     openAccount() {
       const modal = document.getElementById('keys-modal');
       if (modal) modal.classList.add('active');
+    },
+    /** Clear the wallet session; host applications own any visible logout control */
+    logout() {
+      logout();
     },
     /** Remove all injected wallet UI elements from the DOM */
     destroy() {

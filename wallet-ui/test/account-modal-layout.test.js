@@ -77,7 +77,9 @@ describe('account modal wallet layout', () => {
     expect(walletRowRule).toContain('justify-content: flex-start');
     expect(summaryRule).toContain('text-align: left');
     expect(balanceLineRule).toContain('align-items: center');
+    expect(balanceLineRule).toContain('gap: 16px');
     expect(valueRule).toContain('color: #4ade80');
+    expect(valueRule).toContain('font-size: 25px');
     expect(labelRule).toContain('font-size: 18px');
   });
 
@@ -130,13 +132,15 @@ describe('account modal wallet layout', () => {
     expect(closeRule).not.toContain('border-radius: 50%');
   });
 
-  it('exposes logout in embedded account modal and keeps openLogin on account when authenticated', () => {
+  it('keeps logout out of the embedded wallet UI and exposes it as controller API', () => {
     const template = read('src/template.js');
     const app = read('src/app.js');
 
-    expect(template).toContain('id="account-logout"');
-    expect(template).toContain('aria-label="Logout"');
-    expect(app).toContain("$('account-logout')?.addEventListener('click', logout)");
+    expect(template).not.toContain('id="account-logout"');
+    expect(template).not.toContain('account-logout-btn');
+    expect(app).not.toContain("$('account-logout')?.addEventListener('click', logout)");
+    expect(app).toContain('logout() {');
+    expect(app).toContain('logout();');
     expect(app).toContain('if (state.loggedIn) {');
     expect(app).toContain("document.getElementById('keys-modal')");
   });

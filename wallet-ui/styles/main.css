@@ -1205,35 +1205,7 @@ body:has(.modal.active) .nav-bar {
   position: relative;
   align-items: center;
   min-height: 118px;
-  padding-right: 92px;
-}
-
-.account-header-actions {
-  position: absolute;
-  top: 12px;
-  right: 14px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.account-logout-btn {
-  width: 32px;
-  height: 32px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  color: var(--white);
-  cursor: pointer;
-  padding: 0;
-  transition: color 0.2s, opacity 0.2s;
-}
-
-.account-logout-btn:hover {
-  color: var(--white-80);
-  opacity: 0.9;
+  padding-right: 56px;
 }
 
 .account-wallet-row {
@@ -1269,11 +1241,12 @@ body:has(.modal.active) .nav-bar {
 .account-wallet-balance-line {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 16px;
 }
 
 .account-wallet-summary .ph-portfolio-value {
   color: #4ade80;
+  font-size: 25px;
 }
 
 .account-wallet-summary .ph-portfolio-label {
@@ -1320,7 +1293,9 @@ body:has(.modal.active) .nav-bar {
 }
 
 .account-modal-close {
-  position: static;
+  position: absolute;
+  top: 12px;
+  right: 14px;
 }
 
 .modal-body {
