@@ -62,6 +62,7 @@ describe('account modal wallet layout', () => {
     const template = read('src/template.js');
     const css = read('styles/main.css');
     const headerInfoRule = css.match(/\.account-header-info\s*\{[^}]+\}/)?.[0] ?? '';
+    const modalHeaderRule = css.match(/\.account-modal-header\s*\{[^}]+\}/)?.[0] ?? '';
     const walletRowRule = css.match(/\.account-wallet-row\s*\{[^}]+\}/)?.[0] ?? '';
     const summaryRule = css.match(/\.account-wallet-summary\s*\{[^}]+\}/)?.[0] ?? '';
     const balanceLineRule = css.match(/\.account-wallet-balance-line\s*\{[^}]+\}/)?.[0] ?? '';
@@ -71,11 +72,13 @@ describe('account modal wallet layout', () => {
     expect(template).toContain('class="account-wallet-balance-line"');
     expect(template.indexOf('id="wallet-bond-value"')).toBeLessThan(template.indexOf('<div class="ph-portfolio-label">Bond</div>'));
     expect(headerInfoRule).toContain('align-items: flex-start');
+    expect(headerInfoRule).toContain('justify-content: center');
+    expect(modalHeaderRule).toContain('align-items: center');
     expect(walletRowRule).toContain('justify-content: flex-start');
     expect(summaryRule).toContain('text-align: left');
-    expect(balanceLineRule).toContain('align-items: baseline');
+    expect(balanceLineRule).toContain('align-items: center');
     expect(valueRule).toContain('color: #4ade80');
-    expect(labelRule).toContain('font-size: 26px');
+    expect(labelRule).toContain('font-size: 18px');
   });
 
   it('labels the vCard camera action as Use Camera', () => {
