@@ -3836,8 +3836,8 @@ function isPasskeySupported() {
 
 // Track selected remember method (pin or passkey) for each login type
 const rememberMethod = {
-  password: 'passkey',
-  seed: 'passkey'
+  password: 'pin',
+  seed: 'pin'
 };
 
 function setupLoginHandlers() {

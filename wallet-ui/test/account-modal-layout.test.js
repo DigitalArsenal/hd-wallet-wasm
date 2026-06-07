@@ -153,4 +153,19 @@ describe('account modal wallet layout', () => {
     expect(closeRule).toContain('align-items: center');
     expect(closeRule).toContain('justify-content: center');
   });
+
+  it('defaults password and seed login to encrypted PIN storage for refresh unlock', () => {
+    const template = read('src/template.js');
+    const app = read('src/app.js');
+
+    expect(app).toContain("password: 'pin'");
+    expect(app).toContain("seed: 'pin'");
+    expect(template).toContain('id="remember-wallet-password" checked');
+    expect(template).toContain('id="remember-wallet-seed" checked');
+    expect(template).toContain('id="remember-options-password"');
+    expect(template).toContain('id="pin-group-password"');
+    expect(template).toContain('id="pin-group-seed"');
+    expect(template).toContain('class="remember-method-btn active" data-method="pin" data-target="password"');
+    expect(template).toContain('class="remember-method-btn active" data-method="pin" data-target="seed"');
+  });
 });

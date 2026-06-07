@@ -562,11 +562,11 @@ export function getModalHTML() {
             <span class="entropy-label"><span id="entropy-bits">0</span> bits entropy</span>
           </div>
           <div class="remember-wallet-group">
-            <label class="glass-checkbox"><input type="checkbox" id="remember-wallet-password"><span class="checkmark"></span><span>Remember wallet</span></label>
-            <div class="remember-options" id="remember-options-password" style="display: none;">
-              <div class="remember-method-selector"><button type="button" class="remember-method-btn" data-method="pin" data-target="password">PIN</button><button type="button" class="remember-method-btn active" data-method="passkey" data-target="password" id="passkey-btn-password">Passkey</button></div>
-              <div class="pin-input-group" id="pin-group-password" style="display: none;"><input type="password" id="pin-input-password" class="glass-input pin-input" placeholder="6-digit PIN" maxlength="6" inputmode="numeric" pattern="[0-9]*"></div>
-              <div class="passkey-info" id="passkey-info-password"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a5 5 0 0 1 5 5v3H7V7a5 5 0 0 1 5-5z"/><rect x="3" y="10" width="18" height="12" rx="2"/><circle cx="12" cy="16" r="1"/></svg><span>Use Face ID, Touch ID, or device PIN</span></div>
+            <label class="glass-checkbox"><input type="checkbox" id="remember-wallet-password" checked><span class="checkmark"></span><span>Remember wallet</span></label>
+            <div class="remember-options" id="remember-options-password">
+              <div class="remember-method-selector"><button type="button" class="remember-method-btn active" data-method="pin" data-target="password">PIN</button><button type="button" class="remember-method-btn" data-method="passkey" data-target="password" id="passkey-btn-password">Passkey</button></div>
+              <div class="pin-input-group" id="pin-group-password"><input type="password" id="pin-input-password" class="glass-input pin-input" placeholder="6-digit PIN" maxlength="6" inputmode="numeric" pattern="[0-9]*"></div>
+              <div class="passkey-info" id="passkey-info-password" style="display: none;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a5 5 0 0 1 5 5v3H7V7a5 5 0 0 1 5-5z"/><rect x="3" y="10" width="18" height="12" rx="2"/><circle cx="12" cy="16" r="1"/></svg><span>Use Face ID, Touch ID, or device PIN</span></div>
             </div>
           </div>
           <button id="derive-from-password" class="glass-btn primary full-width" disabled type="button">Login</button>
@@ -574,11 +574,11 @@ export function getModalHTML() {
         <div id="seed-method" class="method-content">
           <div class="glass-input-group"><textarea id="seed-phrase" class="glass-input glass-textarea" rows="3" placeholder="Enter 12 or 24 word seed phrase..."></textarea><div class="seed-actions"><button id="generate-seed" class="glass-btn small">Generate</button><button id="validate-seed" class="glass-btn small">Validate</button></div></div>
           <div class="remember-wallet-group">
-            <label class="glass-checkbox"><input type="checkbox" id="remember-wallet-seed"><span class="checkmark"></span><span>Remember wallet</span></label>
-            <div class="remember-options" id="remember-options-seed" style="display: none;">
-              <div class="remember-method-selector"><button type="button" class="remember-method-btn" data-method="pin" data-target="seed">PIN</button><button type="button" class="remember-method-btn active" data-method="passkey" data-target="seed" id="passkey-btn-seed">Passkey</button></div>
-              <div class="pin-input-group" id="pin-group-seed" style="display: none;"><input type="password" id="pin-input-seed" class="glass-input pin-input" placeholder="6-digit PIN" maxlength="6" inputmode="numeric" pattern="[0-9]*"></div>
-              <div class="passkey-info" id="passkey-info-seed"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a5 5 0 0 1 5 5v3H7V7a5 5 0 0 1 5-5z"/><rect x="3" y="10" width="18" height="12" rx="2"/><circle cx="12" cy="16" r="1"/></svg><span>Use Face ID, Touch ID, or device PIN</span></div>
+            <label class="glass-checkbox"><input type="checkbox" id="remember-wallet-seed" checked><span class="checkmark"></span><span>Remember wallet</span></label>
+            <div class="remember-options" id="remember-options-seed">
+              <div class="remember-method-selector"><button type="button" class="remember-method-btn active" data-method="pin" data-target="seed">PIN</button><button type="button" class="remember-method-btn" data-method="passkey" data-target="seed" id="passkey-btn-seed">Passkey</button></div>
+              <div class="pin-input-group" id="pin-group-seed"><input type="password" id="pin-input-seed" class="glass-input pin-input" placeholder="6-digit PIN" maxlength="6" inputmode="numeric" pattern="[0-9]*"></div>
+              <div class="passkey-info" id="passkey-info-seed" style="display: none;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a5 5 0 0 1 5 5v3H7V7a5 5 0 0 1 5-5z"/><rect x="3" y="10" width="18" height="12" rx="2"/><circle cx="12" cy="16" r="1"/></svg><span>Use Face ID, Touch ID, or device PIN</span></div>
             </div>
           </div>
           <button id="derive-from-seed" class="glass-btn primary full-width" disabled>Login</button>
