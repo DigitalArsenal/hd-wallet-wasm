@@ -59,34 +59,156 @@ export function buildCanonicalPayload({
 // EPM Content Signing
 // =============================================================================
 
+// EntityType / KeyType enum labels (FlatBuffer order). The in-module verifier
+// emits these names, so we must too.
+const EPM_ENTITY_TYPE_NAMES = ['User', 'Node'];
+const EPM_KEY_TYPE_NAMES = ['Signing', 'Encryption'];
+
+// Whitespace set trimmed by the Go/C++ canonicalizer: space, tab, NL, CR, VT, FF.
+// (Deliberately NOT JS \s, which also strips NBSP/U+2028/etc. and would diverge.)
+function epmTrim(value) {
+  if (typeof value !== 'string') return '';
+  return value.replace(/^[ \t\n\r\x0b\f]+/, '').replace(/[ \t\n\r\x0b\f]+$/, '');
+}
+
+// Go addBytesString: trim, omit when empty.
+function epmAddStr(obj, key, value) {
+  const t = epmTrim(value);
+  if (t !== '') obj[key] = t;
+}
+
+// Trimmed non-empty strings -> array; attach only when non-empty.
+function epmAddStrArray(obj, key, values) {
+  if (!Array.isArray(values)) return;
+  const arr = [];
+  for (const v of values) {
+    const t = epmTrim(v);
+    if (t !== '') arr.push(t);
+  }
+  if (arr.length) obj[key] = arr;
+}
+
+function epmEnumName(value, names) {
+  if (typeof value === 'number') return names[value];
+  return value; // already a label, or undefined
+}
+
 /**
- * Build a canonical representation of EPM fields for content signing.
- * Excludes SIGNATURE and SIGNATURE_TIMESTAMP (those are the signature itself).
- * Includes CHAIN_PROOFS since they are part of the signed content.
+ * RFC 8785 (JCS) canonicalization: recursively sort object keys by UTF-16 code
+ * units, then ECMAScript JSON.stringify (minimal escaping, no HTML escaping of
+ * & < >, raw non-ASCII, integer numbers). Byte-identical to common/jcs in wasm.
+ */
+function epmJcsCanonicalize(value) {
+  const sortDeep = (v) => {
+    if (Array.isArray(v)) return v.map(sortDeep);
+    if (v && typeof v === 'object') {
+      const out = {};
+      for (const k of Object.keys(v).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
+        out[k] = sortDeep(v[k]);
+      }
+      return out;
+    }
+    return v;
+  };
+  return JSON.stringify(sortDeep(value));
+}
+
+/**
+ * Build the canonical EPM signing content. Byte-identical to the in-module
+ * verifier (common/epm BuildSigningContent + common/jcs Canonicalize), so a
+ * wallet signature over this content verifies isomorphically in the browser and
+ * on wasmedge. Mirrors the field set/rules exactly: trim + omit-empty strings,
+ * enum-label ENTITY_TYPE (always) / KEY_TYPE (Signing|Encryption only), nested
+ * ADDRESS, KEYS/CHAIN_PROOFS arrays, SIGNATURE_TIMESTAMP (integer, when nonzero),
+ * and SIGNATURE excluded.
  *
- * @param {Object} epm - EPM fields as a plain object
- * @returns {Uint8Array} UTF-8 encoded canonical representation
+ * @param {Object} epm - EPM fields as a plain object (schema UPPER_SNAKE keys;
+ *   ENTITY_TYPE/KEY_TYPE may be enum index or label)
+ * @returns {Uint8Array} UTF-8 encoded canonical (JCS) representation
  */
 export function buildEPMSigningContent(epm) {
-  // Extract all EPM fields except SIGNATURE and SIGNATURE_TIMESTAMP
-  const {
-    SIGNATURE: _sig,
-    SIGNATURE_TIMESTAMP: _ts,
-    signature: _sig2,
-    signature_timestamp: _ts2,
-    ...contentFields
-  } = epm;
+  const g = (k) => epm[k] ?? epm[k.toLowerCase()];
+  const content = {};
 
-  // Sort keys for deterministic output
-  const sorted = Object.keys(contentFields)
-    .sort()
-    .reduce((obj, key) => {
-      obj[key] = contentFields[key];
-      return obj;
-    }, {});
+  epmAddStr(content, 'DN', g('DN'));
+  epmAddStr(content, 'LEGAL_NAME', g('LEGAL_NAME'));
+  epmAddStr(content, 'FAMILY_NAME', g('FAMILY_NAME'));
+  epmAddStr(content, 'GIVEN_NAME', g('GIVEN_NAME'));
+  epmAddStr(content, 'ADDITIONAL_NAME', g('ADDITIONAL_NAME'));
+  epmAddStr(content, 'HONORIFIC_PREFIX', g('HONORIFIC_PREFIX'));
+  epmAddStr(content, 'HONORIFIC_SUFFIX', g('HONORIFIC_SUFFIX'));
+  epmAddStr(content, 'JOB_TITLE', g('JOB_TITLE'));
+  epmAddStr(content, 'OCCUPATION', g('OCCUPATION'));
+  epmAddStr(content, 'EMAIL', g('EMAIL'));
+  epmAddStr(content, 'TELEPHONE', g('TELEPHONE'));
 
-  const canonical = JSON.stringify(sorted);
-  return new TextEncoder().encode(canonical);
+  const addr = g('ADDRESS');
+  if (addr && typeof addr === 'object') {
+    const a = {};
+    const ag = (k) => addr[k] ?? addr[k.toLowerCase()];
+    epmAddStr(a, 'COUNTRY', ag('COUNTRY'));
+    epmAddStr(a, 'REGION', ag('REGION'));
+    epmAddStr(a, 'LOCALITY', ag('LOCALITY'));
+    epmAddStr(a, 'POSTAL_CODE', ag('POSTAL_CODE'));
+    epmAddStr(a, 'STREET', ag('STREET'));
+    epmAddStr(a, 'POST_OFFICE_BOX_NUMBER', ag('POST_OFFICE_BOX_NUMBER'));
+    if (Object.keys(a).length) content.ADDRESS = a;
+  }
+
+  epmAddStrArray(content, 'ALTERNATE_NAMES', g('ALTERNATE_NAMES'));
+
+  const keys = g('KEYS');
+  if (Array.isArray(keys)) {
+    const arr = [];
+    for (const k of keys) {
+      if (!k || typeof k !== 'object') continue;
+      const e = {};
+      const kg = (kk) => k[kk] ?? k[kk.toLowerCase()];
+      epmAddStr(e, 'PUBLIC_KEY', kg('PUBLIC_KEY'));
+      epmAddStr(e, 'XPUB', kg('XPUB'));
+      epmAddStr(e, 'ADDRESS_TYPE', kg('ADDRESS_TYPE'));
+      epmAddStr(e, 'KEY_ADDRESS', kg('KEY_ADDRESS'));
+      const kt = epmEnumName(kg('KEY_TYPE'), EPM_KEY_TYPE_NAMES);
+      if (kt === 'Signing' || kt === 'Encryption') e.KEY_TYPE = kt;
+      if (Object.keys(e).length) arr.push(e);
+    }
+    if (arr.length) content.KEYS = arr;
+  }
+
+  epmAddStrArray(content, 'MULTIFORMAT_ADDRESS', g('MULTIFORMAT_ADDRESS'));
+
+  // ENTITY_TYPE: always present, verbatim enum label (default User, the FB default).
+  const etRaw = g('ENTITY_TYPE');
+  const et = etRaw == null ? EPM_ENTITY_TYPE_NAMES[0] : epmEnumName(etRaw, EPM_ENTITY_TYPE_NAMES);
+  content.ENTITY_TYPE = typeof et === 'string' ? et : EPM_ENTITY_TYPE_NAMES[0];
+
+  const ts = g('SIGNATURE_TIMESTAMP');
+  const tsNum = Number(ts);
+  if (ts != null && Number.isFinite(tsNum) && tsNum !== 0) {
+    content.SIGNATURE_TIMESTAMP = Math.trunc(tsNum);
+  }
+
+  const proofs = g('CHAIN_PROOFS');
+  if (Array.isArray(proofs)) {
+    const arr = [];
+    for (const p of proofs) {
+      if (!p || typeof p !== 'object') continue;
+      const e = {};
+      const pg = (kk) => p[kk] ?? p[kk.toLowerCase()];
+      epmAddStr(e, 'CHAIN', pg('CHAIN'));
+      epmAddStr(e, 'ADDRESS', pg('ADDRESS'));
+      epmAddStr(e, 'PUBLIC_KEY', pg('PUBLIC_KEY'));
+      epmAddStr(e, 'KEY_PATH', pg('KEY_PATH'));
+      epmAddStr(e, 'SIGNATURE', pg('SIGNATURE'));
+      epmAddStr(e, 'SIGNED_PAYLOAD', pg('SIGNED_PAYLOAD'));
+      epmAddStr(e, 'ALGORITHM', pg('ALGORITHM'));
+      epmAddStr(e, 'ENCODING', pg('ENCODING'));
+      if (Object.keys(e).length) arr.push(e);
+    }
+    if (arr.length) content.CHAIN_PROOFS = arr;
+  }
+
+  return new TextEncoder().encode(epmJcsCanonicalize(content));
 }
 
 /**

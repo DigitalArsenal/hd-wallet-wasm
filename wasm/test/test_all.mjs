@@ -139,6 +139,9 @@ async function runTests() {
     console.log('\n\x1b[1mIsomorphic Tests:\x1b[0m');
     await import('./test_isomorphic.mjs');
 
+    console.log('\n\x1b[1mEPM Attestation (JCS) Tests:\x1b[0m');
+    await import('./test_epm_attestation.mjs');
+
     console.log('\n\x1b[1mLow-Priority Edge Case Tests (L1-L8):\x1b[0m');
     await import('./test_low_edge_cases.mjs');
 
