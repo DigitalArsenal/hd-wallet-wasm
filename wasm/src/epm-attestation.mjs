@@ -212,17 +212,25 @@ export function buildEPMSigningContent(epm) {
 }
 
 /**
- * Sign EPM content with an Ed25519 private key.
+ * Sign EPM content. Default curve is ed25519 (fast, the network default); pass
+ * `{ curve: 'secp256k1' }` to sign with secp256k1 (ECDSA-DER over sha256(content),
+ * byte-compatible with the Go/C++ EPM verifiers). The content canonicalization is
+ * identical for both curves; only the signature differs.
  *
  * @param {Object} wallet - Initialized HDWalletModule
  * @param {Object} epm - EPM fields as a plain object (without SIGNATURE/SIGNATURE_TIMESTAMP)
- * @param {Uint8Array} ed25519PrivateKey - 32-byte Ed25519 private key (seed)
+ * @param {Uint8Array} privateKey - 32-byte private key (ed25519 seed or secp256k1 key)
+ * @param {{ curve?: 'ed25519'|'secp256k1' }} [options]
  * @returns {{ signature: string, timestamp: number }} Hex signature and Unix timestamp
  */
-export function signEPMContent(wallet, epm, ed25519PrivateKey) {
+export function signEPMContent(wallet, epm, privateKey, options = {}) {
+  const curve = String(options.curve || 'ed25519').toLowerCase();
   const timestamp = Math.floor(Date.now() / 1000);
   const content = buildEPMSigningContent({ ...epm, SIGNATURE_TIMESTAMP: timestamp });
-  const sig = wallet.curves.ed25519.sign(content, ed25519PrivateKey);
+  const sig =
+    curve === 'secp256k1'
+      ? wallet.curves.secp256k1.sign(wallet.utils.sha256(content), privateKey)
+      : wallet.curves.ed25519.sign(content, privateKey);
   return {
     signature: wallet.utils.encodeHex(sig),
     timestamp,
@@ -230,20 +238,30 @@ export function signEPMContent(wallet, epm, ed25519PrivateKey) {
 }
 
 /**
- * Verify an EPM content signature.
+ * Verify an EPM content signature. Dispatches on the explicit `options.curve`,
+ * else infers from the public key length (32 = ed25519; 33/65 = secp256k1).
+ * secp256k1 is verified as ECDSA-DER over sha256(content), matching signEPMContent
+ * and the Go/C++ verifiers.
  *
  * @param {Object} wallet - Initialized HDWalletModule
  * @param {Object} epm - Full EPM object including SIGNATURE and SIGNATURE_TIMESTAMP
- * @param {Uint8Array} ed25519PublicKey - 32-byte Ed25519 public key
+ * @param {Uint8Array} publicKey - ed25519 (32B) or secp256k1 (33/65B) public key
+ * @param {{ curve?: 'ed25519'|'secp256k1' }} [options]
  * @returns {boolean} True if signature is valid
  */
-export function verifyEPMSignature(wallet, epm, ed25519PublicKey) {
+export function verifyEPMSignature(wallet, epm, publicKey, options = {}) {
   const sigHex = epm.SIGNATURE || epm.signature;
   if (!sigHex) return false;
 
   const content = buildEPMSigningContent(epm);
   const sig = wallet.utils.decodeHex(sigHex);
-  return wallet.curves.ed25519.verify(content, sig, ed25519PublicKey);
+  const curve = String(
+    options.curve || (publicKey && publicKey.length === 32 ? 'ed25519' : 'secp256k1'),
+  ).toLowerCase();
+  if (curve === 'secp256k1') {
+    return wallet.curves.secp256k1.verify(wallet.utils.sha256(content), sig, publicKey);
+  }
+  return wallet.curves.ed25519.verify(content, sig, publicKey);
 }
 
 // =============================================================================
