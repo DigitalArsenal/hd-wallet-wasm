@@ -6218,3 +6218,63 @@ a.chain-card:hover {
   color: var(--white);
   word-break: break-word;
 }
+
+/* ------------------------------------------------------------------ */
+/* Language switcher (top-10 language support)                        */
+/* ------------------------------------------------------------------ */
+.lang-switcher {
+  appearance: none;
+  -webkit-appearance: none;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.15));
+  border-radius: 8px;
+  color: var(--text-primary, #fff);
+  font-size: 0.85rem;
+  font-family: inherit;
+  padding: 0.4rem 1.8rem 0.4rem 0.7rem;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.55rem center;
+}
+.lang-switcher:hover {
+  background-color: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+.lang-switcher:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.4);
+}
+.lang-switcher option {
+  color: #111;
+  background: #fff;
+}
+@media (max-width: 720px) {
+  .lang-switcher { padding: 0.35rem 1.6rem 0.35rem 0.6rem; font-size: 0.8rem; }
+}
+
+/* ------------------------------------------------------------------ */
+/* RTL support (Arabic, Urdu)                                          */
+/* ------------------------------------------------------------------ */
+html[dir="rtl"] .lang-switcher {
+  padding: 0.4rem 0.7rem 0.4rem 1.8rem;
+  background-position: left 0.55rem center;
+}
+/* Inline text-align:left elements flip to the right under RTL */
+html[dir="rtl"] [style*="text-align:left"] { text-align: right !important; }
+html[dir="rtl"] [style*="text-align: left"] { text-align: right !important; }
+/* Code, cryptographic identifiers and addresses are always LTR */
+html[dir="rtl"] code,
+html[dir="rtl"] pre,
+html[dir="rtl"] .code-block,
+html[dir="rtl"] .code-block-header,
+html[dir="rtl"] .example-code,
+html[dir="rtl"] .derivation-path,
+html[dir="rtl"] .network-address-link code,
+html[dir="rtl"] .balance-value,
+html[dir="rtl"] .x509-tag {
+  direction: ltr;
+  unicode-bidi: embed;
+  text-align: left;
+}
