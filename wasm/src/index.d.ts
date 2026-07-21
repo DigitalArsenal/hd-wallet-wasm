@@ -142,6 +142,188 @@ export interface SdnPluginContract {
   verify_detached(request: { inputs: SdnPluginFrame[] }): SdnPluginInvocationResult;
 }
 
+declare const sdnIdentityHandleBrand: unique symbol;
+
+export interface SdnIdentityHandle {
+  readonly [sdnIdentityHandleBrand]: true;
+}
+
+export interface SdnWasmKeyDescriptor {
+  purpose: 'asset-review-approval' | 'contact-encryption' | 'sdn-authentication';
+  identityScheme: 'sdn-bip32-slip10-purpose-v1'
+    | 'sdn-fast-password-auth-v1-legacy' | 'sdn-bip39-auth-v1-legacy';
+  seedProfile: 'password-scrypt-v2' | 'password-fast-v1-legacy'
+    | 'bip39-mnemonic-v1-legacy';
+  signatureProfile: 'ed25519-over-sha256-jcs-v1'
+    | 'ed25519-raw-32-v1' | null;
+  curve: 'ed25519' | 'x25519';
+  derivation: 'slip10' | 'bip32-scalar-as-ed25519-seed';
+  path: string;
+  encoding: 'raw';
+  publicKeyHex: string;
+  bip32Fingerprint: null;
+  keyId: `sha256:${string}`;
+}
+
+export interface SdnWasmPublicIdentity {
+  schemaVersion: 1;
+  identityScheme: SdnWasmKeyDescriptor['identityScheme'];
+  seedProfile: SdnWasmKeyDescriptor['seedProfile'];
+  accountIndex: 0 | 1;
+  accountLabel: null;
+  accountXpub: string;
+  accountPeerId: string;
+  accountFingerprint: string;
+  keys: readonly SdnWasmKeyDescriptor[];
+}
+
+export type SdnRegistryRowId =
+  | 'sdn-node-console-v2'
+  | 'asset-review-authority-activation-v1'
+  | 'asset-review-decision-v1';
+
+export interface RawWalletSignature {
+  schemaVersion: 1;
+  keyId: `sha256:${string}`;
+  identityScheme: 'sdn-fast-password-auth-v1-legacy' | 'sdn-bip39-auth-v1-legacy';
+  algorithm: 'ed25519';
+  encoding: 'raw';
+  signatureProfile: 'ed25519-raw-32-v1';
+  signatureHex: string;
+}
+
+export interface CanonicalWalletSignature {
+  schemaVersion: 1;
+  keyId: `sha256:${string}`;
+  identityScheme: 'sdn-bip32-slip10-purpose-v1';
+  algorithm: 'ed25519';
+  encoding: 'raw';
+  signatureProfile: 'ed25519-over-sha256-jcs-v1';
+  canonicalEnvelope: string;
+  signedDigestSha256: string;
+  signatureHex: string;
+}
+
+export interface SdnLoginV2WireRequest {
+  audience: string;
+  challengeBase64url: string;
+  expiresAt: string;
+  issuedAt: string;
+  nonce: string;
+  protocolVersion: 2;
+}
+
+export interface ReviewedTransform {
+  translation: readonly [number, number, number];
+  rotation: readonly [number, number, number, number];
+  scale: readonly [number, number, number];
+  upAxis: 'X_UP' | 'Y_UP' | 'Z_UP';
+  sourceUnits: 'm' | 'cm' | 'mm' | 'km';
+  metersPerSourceUnit: number;
+}
+
+interface AssetReviewApprovalRequestBase {
+  protocolVersion: 1;
+  audience: 'asset-review:assets.ipfs.01';
+  requestOrigin: 'https://review.spacedatanetwork.org';
+  clientId: 'sdn-asset-review-v1';
+  challengeId: string;
+  nonce: string;
+  issuedAt: string;
+  expiresAt: string;
+  candidateKey: string;
+  modelCid: string;
+  modelSha256: string;
+  modelBytes: number;
+  metadataSha256: string;
+  previousDecisionHead: string | null;
+}
+
+export interface AssetReviewApproveRequest extends AssetReviewApprovalRequestBase {
+  decision: 'approve';
+  reviewedTransform: ReviewedTransform;
+  note: string | null;
+}
+
+export interface AssetReviewDisapproveRequest extends AssetReviewApprovalRequestBase {
+  decision: 'disapprove';
+  reason: string;
+}
+
+export type AssetReviewApprovalRequest =
+  | AssetReviewApproveRequest
+  | AssetReviewDisapproveRequest;
+
+export interface AssetReviewAuthorityActivationRequest {
+  protocolVersion: 1;
+  audience: 'asset-review-authority:assets.ipfs.01';
+  requestOrigin: 'https://review.spacedatanetwork.org';
+  clientId: 'sdn-asset-review-v1';
+  serviceInstance: 'assets.ipfs.01/asset-review-attestation';
+  purpose: 'asset-review-authority-activation';
+  nonce: string;
+  issuedAt: string;
+  expiresAt: string;
+  publicKeyHex: string;
+  keyId: `sha256:${string}`;
+  identityScheme: 'sdn-bip32-slip10-purpose-v1';
+  signatureProfile: 'ed25519-over-sha256-jcs-v1';
+}
+
+export interface RememberWalletSealInput {
+  passwordUtf8: Uint8Array;
+  prfOutput: Uint8Array;
+  hkdfSalt: Uint8Array;
+  nonce: Uint8Array;
+  canonicalAad: string;
+}
+
+export interface SdnIdentityCapabilities {
+  derivePasswordIdentity(input: {
+    usernameUtf8: Uint8Array;
+    passwordUtf8: Uint8Array;
+    accountIndex: 0 | 1;
+  }): Promise<{ handle: SdnIdentityHandle; identity: SdnWasmPublicIdentity }>;
+  deriveLegacyPasswordIdentity(input: {
+    usernameUtf8: Uint8Array;
+    passwordUtf8: Uint8Array;
+    accountIndex: 0 | 1;
+  }): Promise<{ handle: SdnIdentityHandle; identity: SdnWasmPublicIdentity }>;
+  importLegacyMnemonicIdentity(input: {
+    mnemonicUtf8: Uint8Array;
+    accountIndex: 0 | 1;
+  }): Promise<{ handle: SdnIdentityHandle; identity: SdnWasmPublicIdentity }>;
+  importRememberedIdentity(input: {
+    ciphertextAndTag: Uint8Array;
+    prfOutput: Uint8Array;
+    hkdfSalt: Uint8Array;
+    nonce: Uint8Array;
+    canonicalUsernameUtf8: Uint8Array;
+    canonicalAad: string;
+  }): { handle: SdnIdentityHandle; identity: SdnWasmPublicIdentity };
+  signSdnLoginV1(handle: SdnIdentityHandle, challenge: Uint8Array): RawWalletSignature;
+  signSdnLoginV2(
+    handle: SdnIdentityHandle,
+    request: SdnLoginV2WireRequest,
+    registryRow: 'sdn-node-console-v2',
+  ): CanonicalWalletSignature;
+  signAssetReviewAuthorityActivation(
+    handle: SdnIdentityHandle,
+    request: AssetReviewAuthorityActivationRequest,
+    registryRow: 'asset-review-authority-activation-v1',
+  ): CanonicalWalletSignature;
+  signAssetReviewDecision(
+    handle: SdnIdentityHandle,
+    request: AssetReviewApprovalRequest,
+    registryRow: 'asset-review-decision-v1',
+  ): CanonicalWalletSignature;
+  sealRememberedIdentity(
+    handle: SdnIdentityHandle,
+    input: RememberWalletSealInput,
+  ): Uint8Array;
+  destroySdnIdentity(handle: SdnIdentityHandle): void;
+}
+
 // =============================================================================
 // Module Types
 // =============================================================================
@@ -218,6 +400,9 @@ export interface HDWalletModule {
 
   // Canonical SDN plugin-facing contract
   plugin: SdnPluginContract;
+
+  // Purpose-separated, instance-bound SDN wallet capabilities
+  readonly sdn: SdnIdentityCapabilities;
 
   // Aligned binary API for efficient batch operations
   aligned: AlignedAPI;

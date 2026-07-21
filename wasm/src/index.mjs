@@ -19,6 +19,7 @@ import {
   SDN_PLUGIN_MANIFEST_EXPORTS
 } from './sdn-plugin.mjs';
 import { HD_WALLET_SDN_PLUGIN_MANIFEST } from './sdn-plugin-manifest-source.mjs';
+import { createSdnTypedCapabilities } from './sdn-typed.mjs';
 
 // =============================================================================
 // Enums (matching TypeScript definitions)
@@ -4586,6 +4587,12 @@ function createModule(wasm) {
     }
   };
 
+  Object.defineProperty(module, 'sdn', {
+    value: createSdnTypedCapabilities(wasm),
+    enumerable: true,
+    writable: false,
+    configurable: false,
+  });
   module.plugin = createSdnPluginContract({ wallet: module, wasm });
   return module;
 }

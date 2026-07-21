@@ -617,6 +617,21 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
     endif()
     string(JOIN "," EXPORTED_FUNCS_STR ${WASM_EXPORTED_FUNCTIONS})
 
+    set(BROWSER_EXPORTED_FUNCTIONS
+      ${WASM_EXPORTED_FUNCTIONS}
+      "_hd_sdn_derive_password_identity"
+      "_hd_sdn_derive_legacy_password_identity"
+      "_hd_sdn_import_legacy_mnemonic_identity"
+      "_hd_sdn_import_remembered_identity"
+      "_hd_sdn_sign_login_v1"
+      "_hd_sdn_sign_login_v2"
+      "_hd_sdn_sign_asset_review_authority_activation"
+      "_hd_sdn_sign_asset_review_decision"
+      "_hd_sdn_seal_remembered_identity"
+      "_hd_sdn_destroy_identity"
+    )
+    string(JOIN "," BROWSER_EXPORTED_FUNCS_STR ${BROWSER_EXPORTED_FUNCTIONS})
+
     # =========================================================================
     # libsecp256k1 - Bitcoin Core's secp256k1 (replaces Crypto++ EC in WASM)
     # Crypto++ ECP::ScalarMultiply is unreliable in 32-bit WASM due to
@@ -1003,10 +1018,21 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
     # Target: JavaScript ES6 module (browsers and Node.js)
     # =========================================================================
     add_executable(hd_wallet_wasm_js ${HD_WALLET_WASM_SOURCES})
+    target_sources(hd_wallet_wasm_js PRIVATE
+      src/password_profile.cpp
+      src/sdn_identity.cpp
+      src/sdn_identity_secrets.cpp
+      src/canonical_json.cpp
+    )
     target_include_directories(hd_wallet_wasm_js PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}/include
+      ${CMAKE_CURRENT_SOURCE_DIR}/generated
       ${CMAKE_CURRENT_SOURCE_DIR}/generated/aligned
       $<$<BOOL:${HD_WALLET_USE_OPENSSL}>:${OPENSSL_FIPS_INCLUDE}>
+    )
+    target_compile_features(hd_wallet_wasm_js PRIVATE cxx_std_20)
+    target_compile_definitions(hd_wallet_wasm_js PRIVATE
+      HD_WALLET_SDN_TYPED_API=1
     )
     target_compile_options(hd_wallet_wasm_js PRIVATE ${WASM_COMPILE_OPTIONS} -fexceptions)
     target_link_libraries(hd_wallet_wasm_js PRIVATE cryptopp secp256k1)
@@ -1016,7 +1042,7 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
     set_target_properties(hd_wallet_wasm_js PROPERTIES
       OUTPUT_NAME "hd-wallet"
       SUFFIX ".js"
-      RUNTIME_OUTPUT_DIRECTORY "${WASM_OUTPUT_DIR}"
+      RUNTIME_OUTPUT_DIRECTORY "${WASM_OUTPUT_DIR}/browser"
     )
     target_link_options(hd_wallet_wasm_js PRIVATE
       -sWASM=1
@@ -1030,7 +1056,7 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       -sSTACK_SIZE=2MB
       -sERROR_ON_UNDEFINED_SYMBOLS=0
       -Wno-undefined
-      "-sEXPORTED_FUNCTIONS=[${EXPORTED_FUNCS_STR}]"
+      "-sEXPORTED_FUNCTIONS=[${BROWSER_EXPORTED_FUNCS_STR}]"
       -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,getValue,setValue,UTF8ToString,stringToUTF8,lengthBytesUTF8,HEAPU8,HEAP32
       -sENVIRONMENT=web,worker
       -sNO_EXIT_RUNTIME=1
@@ -1046,10 +1072,21 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
     # Target: Single-file version (inlined WASM)
     # =========================================================================
     add_executable(hd_wallet_wasm_inline ${HD_WALLET_WASM_SOURCES})
+    target_sources(hd_wallet_wasm_inline PRIVATE
+      src/password_profile.cpp
+      src/sdn_identity.cpp
+      src/sdn_identity_secrets.cpp
+      src/canonical_json.cpp
+    )
     target_include_directories(hd_wallet_wasm_inline PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}/include
+      ${CMAKE_CURRENT_SOURCE_DIR}/generated
       ${CMAKE_CURRENT_SOURCE_DIR}/generated/aligned
       $<$<BOOL:${HD_WALLET_USE_OPENSSL}>:${OPENSSL_FIPS_INCLUDE}>
+    )
+    target_compile_features(hd_wallet_wasm_inline PRIVATE cxx_std_20)
+    target_compile_definitions(hd_wallet_wasm_inline PRIVATE
+      HD_WALLET_SDN_TYPED_API=1
     )
     target_compile_options(hd_wallet_wasm_inline PRIVATE ${WASM_COMPILE_OPTIONS} -fexceptions)
     target_link_libraries(hd_wallet_wasm_inline PRIVATE cryptopp secp256k1)
@@ -1074,7 +1111,7 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       -sSTACK_SIZE=2MB
       -sERROR_ON_UNDEFINED_SYMBOLS=0
       -Wno-undefined
-      "-sEXPORTED_FUNCTIONS=[${EXPORTED_FUNCS_STR}]"
+      "-sEXPORTED_FUNCTIONS=[${BROWSER_EXPORTED_FUNCS_STR}]"
       -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,getValue,setValue,UTF8ToString,stringToUTF8,lengthBytesUTF8,HEAPU8,HEAP32
       -sENVIRONMENT=web,worker
       -sNO_EXIT_RUNTIME=1
@@ -1109,7 +1146,7 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
         "${WASM_OUTPUT_DIR}/hd-wallet-inline.js"
         "${WASM_NPM_DIR}/hd-wallet.js"
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${WASM_OUTPUT_DIR}/hd-wallet.wasm"
+        "${WASM_OUTPUT_DIR}/browser/hd-wallet.wasm"
         "${WASM_NPM_DIR}/hd-wallet.wasm"
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${WASM_OUTPUT_DIR}/hd-wallet-wasi.wasm"
