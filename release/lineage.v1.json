@@ -1,0 +1,7 @@
+{
+  "requiredAncestors": {
+    "uiLifecycleV2019": "537ac9a08c12fb62a7152007bce9898efb6f9204",
+    "walletCoreV2021": "3c4258a8fa3ef9bc5a86c786231bf5f3c5c568c9"
+  },
+  "schemaVersion": 1
+}

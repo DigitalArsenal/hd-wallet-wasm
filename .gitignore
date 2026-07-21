@@ -45,7 +45,6 @@ test/dart/.dart_tool/pub/
 
 # NPM
 node_modules/
-package-lock.json
 *.log
 
 # Temporary files

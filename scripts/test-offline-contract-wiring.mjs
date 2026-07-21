@@ -24,9 +24,8 @@ for (const command of [
 
 const rootTest = packageJson.scripts?.test ?? '';
 assert(
-  rootTest.indexOf('npm run test:offline-contracts') !== -1 &&
-    rootTest.indexOf('npm run test:offline-contracts') < rootTest.indexOf('npm run test:artifact'),
-  'root npm test must run offline contracts before artifact-dependent suites',
+  rootTest.startsWith('npm run test:offline-contracts'),
+  'root npm test must start with offline contracts',
 );
 
 const preflightCall = localCi.indexOf('if ! run_offline_contracts; then');

@@ -1,6 +1,6 @@
 {
   "name": "hd-wallet-ui",
-  "version": "2.0.19",
+  "version": "2.0.22",
   "description": "HD Wallet modal UI — login, keys, identity, trust map, and security bond. Attach to any button in your app.",
   "type": "module",
   "main": "src/app.js",
@@ -40,7 +40,7 @@
     "buffer": "^6.0.3",
     "flatbuffers": "^25.9.23",
     "flatc-wasm": "^26.1.32",
-    "hd-wallet-wasm": "file:../wasm",
+    "hd-wallet-wasm": "2.0.22",
     "qrcode": "^1.5.3",
     "spacedatastandards.org": "^1.93.3",
     "vcard-cryptoperson": "^1.1.11"
