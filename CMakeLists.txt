@@ -133,6 +133,7 @@ set(HD_WALLET_HEADERS
   include/hd_wallet/error.h
   include/hd_wallet/utils.h
   include/hd_wallet/secure_memory.h
+  include/hd_wallet/password_profile.h
   # BIP Standards
   include/hd_wallet/bip39.h
   include/hd_wallet/bip32.h
@@ -176,6 +177,7 @@ set(HD_WALLET_SOURCES
   src/utils.cpp
   src/secure_memory.cpp
   src/error.cpp
+  src/password_profile.cpp
   # BIP Standards
   src/bip39.cpp
   src/bip32.cpp
@@ -225,7 +227,16 @@ if(NOT EMSCRIPTEN)
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/generated/aligned>
       $<INSTALL_INTERFACE:include>
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/generated
   )
+  target_compile_features(hd_wallet PUBLIC cxx_std_20)
+
+  if(HD_WALLET_BUILD_TESTS)
+    target_compile_definitions(hd_wallet PRIVATE
+      HD_WALLET_PASSWORD_PROFILE_TESTING=1
+    )
+  endif()
 
   if(HD_WALLET_USE_CRYPTOPP)
     target_link_libraries(hd_wallet PUBLIC cryptopp)
@@ -1211,6 +1222,36 @@ if(HD_WALLET_BUILD_TESTS AND NOT EMSCRIPTEN)
   )
 
   add_test(NAME hd_wallet_tests COMMAND hd_wallet_tests)
+
+  add_executable(test_password_profile
+    test/test_main.cpp
+    test/test_password_profile.cpp
+  )
+  target_link_libraries(test_password_profile PRIVATE hd_wallet)
+  target_include_directories(test_password_profile PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/test
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_compile_definitions(test_password_profile PRIVATE
+    HD_WALLET_PASSWORD_PROFILE_TESTING=1
+  )
+
+  add_executable(test_sdn_vectors
+    test/test_main.cpp
+    test/test_sdn_vectors.cpp
+  )
+  target_link_libraries(test_sdn_vectors PRIVATE hd_wallet)
+  target_include_directories(test_sdn_vectors PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/test
+  )
+  target_compile_definitions(test_sdn_vectors PRIVATE
+    TEST_VECTORS_PATH="${CMAKE_BINARY_DIR}/test_data"
+  )
+
+  add_test(NAME test_password_profile COMMAND test_password_profile)
+  add_test(NAME test_sdn_vectors COMMAND test_sdn_vectors)
 
   message(STATUS "Tests enabled: hd_wallet_tests")
 endif()
