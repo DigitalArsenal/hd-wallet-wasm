@@ -1172,6 +1172,7 @@ if(HD_WALLET_BUILD_TESTS AND NOT EMSCRIPTEN)
 
   add_executable(hd_wallet_tests
     test/test_main.cpp
+    test/test_version.cpp
     test/test_bip39.cpp
     test/test_bip32.cpp
     test/test_curves.cpp

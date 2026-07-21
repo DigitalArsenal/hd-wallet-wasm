@@ -5,6 +5,14 @@ import path from 'node:path';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const expectedVersion = '2.0.22';
+const [expectedVersionMajor, expectedVersionMinor, expectedVersionPatch] = expectedVersion
+  .split('.')
+  .map(Number);
+const expectedVersionComponents = {
+  major: expectedVersionMajor,
+  minor: expectedVersionMinor,
+  patch: expectedVersionPatch,
+};
 const expectedWorkspaces = ['wasm', 'wallet-ui', 'wallet-ui/relay'];
 const expectedRelayPackage = {
   name: '@sdn/wallet-relay',
@@ -101,6 +109,8 @@ const relayPackage = parseJson('wallet-ui/relay/package.json');
 const rootLock = parseJson('package-lock.json');
 const lineage = parseJson('release/lineage.v1.json');
 const cmakeLists = readFileSync(path.join(repositoryRoot, 'CMakeLists.txt'), 'utf8');
+const configHeader = readFileSync(path.join(repositoryRoot, 'include/hd_wallet/config.h'), 'utf8');
+const wasmIndex = readFileSync(path.join(repositoryRoot, 'wasm/src/index.mjs'), 'utf8');
 
 for (const [label, packageVersion] of [
   ['root', rootPackage.version],
@@ -123,15 +133,49 @@ assert.deepEqual(relayPackage, expectedRelayPackage);
 
 function readCmakeVersionComponent(component) {
   const match = cmakeLists.match(
-    new RegExp(`set\\(HD_WALLET_VERSION_${component}\\s+(\\d+)\\)`),
+    new RegExp(`^\\s*set\\(HD_WALLET_VERSION_${component}\\s+(\\d+)\\s*\\)\\s*$`, 'm'),
   );
   assert(match, `CMakeLists.txt must define HD_WALLET_VERSION_${component}`);
   return Number(match[1]);
 }
 
-assert.equal(readCmakeVersionComponent('MAJOR'), 2);
-assert.equal(readCmakeVersionComponent('MINOR'), 0);
-assert.equal(readCmakeVersionComponent('PATCH'), 22);
+function readConfigVersionComponent(component) {
+  const match = configHeader.match(
+    new RegExp(`^#define\\s+HD_WALLET_VERSION_${component}\\s+(\\d+)\\s*$`, 'm'),
+  );
+  assert(match, `include/hd_wallet/config.h must define HD_WALLET_VERSION_${component}`);
+  return Number(match[1]);
+}
+
+const configVersionStringMatch = configHeader.match(
+  /^#define\s+HD_WALLET_VERSION_STRING\s+"([^"]+)"\s*$/m,
+);
+assert(configVersionStringMatch, 'include/hd_wallet/config.h must define HD_WALLET_VERSION_STRING');
+const wasmJSDocVersionMatch = wasmIndex.match(/^\s*\*\s+@version\s+(\S+)\s*$/m);
+assert(wasmJSDocVersionMatch, 'wasm/src/index.mjs must declare an @version JSDoc value');
+
+assert.deepEqual(
+  {
+    cmake: {
+      major: readCmakeVersionComponent('MAJOR'),
+      minor: readCmakeVersionComponent('MINOR'),
+      patch: readCmakeVersionComponent('PATCH'),
+    },
+    publicConfig: {
+      major: readConfigVersionComponent('MAJOR'),
+      minor: readConfigVersionComponent('MINOR'),
+      patch: readConfigVersionComponent('PATCH'),
+      string: configVersionStringMatch[1],
+    },
+    wasmJSDoc: wasmJSDocVersionMatch[1],
+  },
+  {
+    cmake: expectedVersionComponents,
+    publicConfig: { ...expectedVersionComponents, string: expectedVersion },
+    wasmJSDoc: expectedVersion,
+  },
+  'CMake, public runtime config, and WASM wrapper versions must stay synchronized',
+);
 
 for (const nestedLock of [
   'wasm/package-lock.json',
@@ -184,8 +228,9 @@ const incompleteRegistryPackagePaths = Object.entries(rootLock.packages ?? {})
     ([packagePath, metadata]) =>
       packagePath.includes('node_modules/') &&
       metadata?.link !== true &&
-      typeof metadata?.version === 'string' &&
-      (typeof metadata.resolved !== 'string' ||
+      (typeof metadata?.version !== 'string' ||
+        metadata.version.length === 0 ||
+        typeof metadata.resolved !== 'string' ||
         metadata.resolved.length === 0 ||
         typeof metadata.integrity !== 'string' ||
         metadata.integrity.length === 0),

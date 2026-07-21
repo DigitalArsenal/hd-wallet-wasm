@@ -1,8 +1,13 @@
 import { defineConfig } from 'vite';
-import { resolve } from 'path';
+import { createRequire } from 'module';
+import { dirname, resolve } from 'path';
+import { fileURLToPath } from 'url';
 import { readFileSync } from 'fs';
 
-const pkg = JSON.parse(readFileSync(resolve(__dirname, '..', 'wasm', 'package.json'), 'utf-8'));
+const configDir = dirname(fileURLToPath(import.meta.url));
+const pkg = JSON.parse(readFileSync(resolve(configDir, '..', 'wasm', 'package.json'), 'utf-8'));
+const require = createRequire(import.meta.url);
+const sdsPackageRoot = dirname(require.resolve('spacedatastandards.org/package.json'));
 
 export default defineConfig({
   root: '.',
@@ -12,8 +17,8 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@wallet': resolve(__dirname, 'src'),
-      '@sds': resolve(__dirname, 'node_modules', 'spacedatastandards.org'),
+      '@wallet': resolve(configDir, 'src'),
+      '@sds': sdsPackageRoot,
     },
   },
   optimizeDeps: {
@@ -24,7 +29,7 @@ export default defineConfig({
     outDir: 'dist',
     rollupOptions: {
       input: {
-        main: resolve(__dirname, 'index.html'),
+        main: resolve(configDir, 'index.html'),
       },
       external: ['fs', 'url', 'path', 'module', 'crypto'],
       onwarn(warning, warn) {
@@ -41,8 +46,8 @@ export default defineConfig({
     open: true,
     fs: {
       allow: [
-        resolve(__dirname, '..'),
-        resolve(__dirname, 'node_modules', 'spacedatastandards.org'),
+        resolve(configDir, '..'),
+        sdsPackageRoot,
       ],
     },
     proxy: {

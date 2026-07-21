@@ -88,7 +88,7 @@ await testAsync('verifyWasmIntegrity accepts and rejects hashes correctly', asyn
 });
 
 test('module metadata APIs return typed values', () => {
-  assert(wallet.getVersion().length > 0, 'Version string should be non-empty');
+  assertEqual(wallet.getVersion(), '2.0.22', 'Version string should match the release contract');
   assert(typeof wallet.hasCryptopp() === 'boolean', 'hasCryptopp should return boolean');
   assert(typeof wallet.isFipsMode() === 'boolean', 'isFipsMode should return boolean');
 
