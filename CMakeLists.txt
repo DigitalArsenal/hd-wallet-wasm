@@ -1170,6 +1170,24 @@ if(HD_WALLET_BUILD_TESTS AND NOT EMSCRIPTEN)
     COPYONLY
   )
 
+  configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/sdn-wallet-vectors.v1.json
+    ${CMAKE_BINARY_DIR}/test_data/sdn-wallet-vectors.v1.json
+    COPYONLY
+  )
+
+  configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/sdn-operation-wire-v1.json
+    ${CMAKE_BINARY_DIR}/test_data/sdn-operation-wire-v1.json
+    COPYONLY
+  )
+
+  configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/release/protocol/asset-review-v1.json
+    ${CMAKE_BINARY_DIR}/test_data/asset-review-v1.json
+    COPYONLY
+  )
+
   add_executable(hd_wallet_tests
     test/test_main.cpp
     test/test_version.cpp

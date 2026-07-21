@@ -1,0 +1,194 @@
+{
+  "schemaVersion": 1,
+  "reviewedTransform": {
+    "metersPerSourceUnit": {
+      "cm": 0.01,
+      "km": 1000,
+      "m": 1,
+      "mm": 0.001
+    },
+    "quaternionNormTolerance": 0.000001,
+    "scaleComponentExclusiveMin": 0,
+    "scaleComponentInclusiveMax": 1000000,
+    "translationComponentAbsMax": 1000000,
+    "upAxes": [
+      "X_UP",
+      "Y_UP",
+      "Z_UP"
+    ]
+  },
+  "boundaryVectors": {
+    "baseTransform": {
+      "translation": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "sourceUnits": "m",
+      "metersPerSourceUnit": 1,
+      "upAxis": "Y_UP"
+    },
+    "translationComponents": [
+      {
+        "name": "below-min",
+        "value": -1000000.0000000001,
+        "expected": "reject"
+      },
+      {
+        "name": "min",
+        "value": -1000000,
+        "expected": "accept"
+      },
+      {
+        "name": "max",
+        "value": 1000000,
+        "expected": "accept"
+      },
+      {
+        "name": "above-max",
+        "value": 1000000.0000000001,
+        "expected": "reject"
+      }
+    ],
+    "scaleComponents": [
+      {
+        "name": "negative-min-subnormal",
+        "value": -5e-324,
+        "expected": "reject"
+      },
+      {
+        "name": "zero",
+        "value": 0,
+        "expected": "reject"
+      },
+      {
+        "name": "min-positive-subnormal",
+        "value": 5e-324,
+        "expected": "accept"
+      },
+      {
+        "name": "max",
+        "value": 1000000,
+        "expected": "accept"
+      },
+      {
+        "name": "above-max",
+        "value": 1000000.0000000001,
+        "expected": "reject"
+      }
+    ],
+    "rotations": [
+      {
+        "name": "below-negative-tolerance",
+        "value": [
+          0,
+          0,
+          0,
+          0.999999
+        ],
+        "expected": "reject"
+      },
+      {
+        "name": "negative-tolerance",
+        "value": [
+          0,
+          0,
+          0,
+          0.9999990000000001
+        ],
+        "expected": "accept"
+      },
+      {
+        "name": "positive-tolerance",
+        "value": [
+          0,
+          0,
+          0,
+          1.000001
+        ],
+        "expected": "accept"
+      },
+      {
+        "name": "above-positive-tolerance",
+        "value": [
+          0,
+          0,
+          0,
+          1.0000010000000001
+        ],
+        "expected": "reject"
+      }
+    ],
+    "unitPairs": [
+      {
+        "name": "meters",
+        "sourceUnits": "m",
+        "metersPerSourceUnit": 1,
+        "expected": "accept"
+      },
+      {
+        "name": "centimeters",
+        "sourceUnits": "cm",
+        "metersPerSourceUnit": 0.01,
+        "expected": "accept"
+      },
+      {
+        "name": "millimeters",
+        "sourceUnits": "mm",
+        "metersPerSourceUnit": 0.001,
+        "expected": "accept"
+      },
+      {
+        "name": "kilometers",
+        "sourceUnits": "km",
+        "metersPerSourceUnit": 1000,
+        "expected": "accept"
+      },
+      {
+        "name": "wrong-meters",
+        "sourceUnits": "m",
+        "metersPerSourceUnit": 0.01,
+        "expected": "reject"
+      },
+      {
+        "name": "unsupported-feet",
+        "sourceUnits": "ft",
+        "metersPerSourceUnit": 0.3048,
+        "expected": "reject"
+      }
+    ],
+    "upAxes": [
+      {
+        "name": "x-up",
+        "value": "X_UP",
+        "expected": "accept"
+      },
+      {
+        "name": "y-up",
+        "value": "Y_UP",
+        "expected": "accept"
+      },
+      {
+        "name": "z-up",
+        "value": "Z_UP",
+        "expected": "accept"
+      },
+      {
+        "name": "invalid-w-up",
+        "value": "W_UP",
+        "expected": "reject"
+      }
+    ]
+  }
+}
