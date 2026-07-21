@@ -1,5 +1,15 @@
 import assert from 'node:assert/strict';
-import { createHash, createPublicKey, verify as verifySignature } from 'node:crypto';
+import {
+  createCipheriv,
+  createDecipheriv,
+  createECDH,
+  createHash,
+  createHmac,
+  createPublicKey,
+  hkdfSync,
+  scryptSync,
+  verify as verifySignature,
+} from 'node:crypto';
 import {
   closeSync,
   constants as fsConstants,
@@ -26,6 +36,7 @@ const INTEGRITY_PATH = 'test/fixtures/fixture-integrity.json';
 const INTEGRITY_PATHS = [
   'release/protocol/asset-review-v1.json',
   'test/fixtures/sdn-operation-wire-v1.json',
+  'test/fixtures/sdn-remember-wallet-v2.json',
   'test/fixtures/sdn-wallet-vectors.v1.json',
   'test/fixtures/trezor-bip39-vectors.json',
   'test/fixtures/trezor-bip39-vectors.source.json',
@@ -45,6 +56,47 @@ const SERVICE_INSTANCE = 'assets.ipfs.01/asset-review-attestation';
 const AUTH_AUDIENCE = 'sdn-login:sdn.spaceaware.io';
 const AUTH_CLIENT = 'sdn-node-console-v1';
 const AUTH_ORIGIN = 'https://sdn.spaceaware.io';
+const REMEMBER_STORAGE_PROFILE = 'webauthn-prf-hkdf-sha256-aes256gcm-v2';
+const SECP256K1_ORDER = BigInt(
+  '0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141',
+);
+const BASE58_ALPHABET =
+  '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+const EXPECTED_LEADING_ZERO_FINGERPRINT = {
+  accountIndex: 501,
+  accountXpub:
+    'xpub6D9SXNXfAWuAKZhu14UostmrUDJp9zrk9uPEd3Jm1E8e5XbdPidEWEButSeJ829RZbMiBc3v9rQEJ8xL45qZHcYjmo3nUcTpSB9N9Ls5hLe',
+  peerId: '16Uiu2HAmJquqND17wV5bsc91L1rHjckRZwNj9YxxJDfPTKp9mT4S',
+  fingerprint: '00611cc1',
+};
+const EXPECTED_REMEMBER_WALLET = {
+  schemaVersion: 1,
+  profile: REMEMBER_STORAGE_PROFILE,
+  prfOutputHex:
+    '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f',
+  hkdfSaltHex:
+    '202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f',
+  nonceHex: '404142434445464748494a4b',
+  credentialIdBase64url:
+    'oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr8',
+  canonicalUsername: 'alice_01',
+  usernameSha256:
+    '661eac7c194c79f1d07fb7f1570303d615debd059051059a1326344f748a727b',
+  identityScheme: IDENTITY_SCHEME,
+  seedProfile: PASSWORD_PROFILE,
+  passwordUtf8Hex:
+    '436f727265637420486f727365204261747465727920537461706c6521',
+  derivedSeedHex:
+    'c63fbe791b92d91eb828eab4b203cffe7f333e9d200ec2355d77c7796c080f79c9ed753af213bf155512e3c667c3be26a22c1c599cbae52cb44add279559fe5b',
+  canonicalAad:
+    '{"credentialIdBase64url":"oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr8","identityScheme":"sdn-bip32-slip10-purpose-v1","schemaVersion":2,"seedProfile":"password-scrypt-v2","storageProfile":"webauthn-prf-hkdf-sha256-aes256gcm-v2","usernameSha256":"661eac7c194c79f1d07fb7f1570303d615debd059051059a1326344f748a727b"}',
+  canonicalPlaintext:
+    '{"identityScheme":"sdn-bip32-slip10-purpose-v1","passwordBase64url":"Q29ycmVjdCBIb3JzZSBCYXR0ZXJ5IFN0YXBsZSE","seedProfile":"password-scrypt-v2","username":"alice_01"}',
+  wrappingKeyHex:
+    '8f7504aae664d8ec10d03b4d3875012f28b176f3b1d31de97ddc308c51f1f78f',
+  ciphertextAndTagHex:
+    '097cf85a7e2500ce6b4038905bd0bcdf8d169729c9941622ecee486424ebddc89780e4c6ede8f3fd701a341eaa1954d73cc5d47fb170b503e48df9e5ea01aec9b8610b95905eadbe66ab2456eae2e210037f6481b8b2e9ead5ed4f2dfe90583d39cb96a50caedc4eb960539cdb24e350b504ac71c1d64726084a758791ba59faab02dccfcb41cc3cddcf4c897f7d9e67429322763e3ca8e9086a18c6f6bb15e9ca7c24814313b5d53f29aa892804660f11129655fe787b',
+};
 
 const encoder = new TextEncoder();
 const fatalDecoder = new TextDecoder('utf-8', {
@@ -56,9 +108,132 @@ const hex = (value) => Buffer.from(value).toString('hex');
 const unhex = (value) => Buffer.from(value, 'hex');
 const sha256 = (value) => createHash('sha256').update(value).digest();
 const sha256Hex = (value) => sha256(value).toString('hex');
+const hash160 = (value) => createHash('ripemd160').update(sha256(value)).digest();
 const range = (start) => Buffer.from(
   Array.from({ length: 32 }, (_, index) => start + index),
 );
+
+function hmacSha512(key, data) {
+  return createHmac('sha512', key).update(data).digest();
+}
+
+function uint32(value) {
+  assert(Number.isInteger(value) && value >= 0 && value <= 0xffffffff);
+  const encoded = Buffer.alloc(4);
+  encoded.writeUInt32BE(value);
+  return encoded;
+}
+
+function scalarFromBytes(bytes) {
+  assert.equal(bytes.length, 32);
+  return BigInt(`0x${bytes.toString('hex')}`);
+}
+
+function scalarToBytes(value) {
+  assert(value > 0n && value < SECP256K1_ORDER);
+  return Buffer.from(value.toString(16).padStart(64, '0'), 'hex');
+}
+
+function compressedSecp256k1PublicKey(privateKey) {
+  const ecdh = createECDH('secp256k1');
+  ecdh.setPrivateKey(privateKey);
+  return ecdh.getPublicKey(undefined, 'compressed');
+}
+
+function base58(bytes) {
+  assert(Buffer.isBuffer(bytes) && bytes.length > 0);
+  let value = BigInt(`0x${bytes.toString('hex')}`);
+  let encoded = '';
+  while (value > 0n) {
+    encoded = BASE58_ALPHABET[Number(value % 58n)] + encoded;
+    value /= 58n;
+  }
+  let leadingZeroes = 0;
+  while (leadingZeroes < bytes.length && bytes[leadingZeroes] === 0) {
+    leadingZeroes += 1;
+  }
+  return `${'1'.repeat(leadingZeroes)}${encoded}`;
+}
+
+function base58Check(payload) {
+  const checksum = sha256(sha256(payload)).subarray(0, 4);
+  return base58(Buffer.concat([payload, checksum]));
+}
+
+function bip32Master(seed) {
+  const digest = hmacSha512(utf8('Bitcoin seed'), seed);
+  const privateKey = digest.subarray(0, 32);
+  const scalar = scalarFromBytes(privateKey);
+  assert(scalar > 0n && scalar < SECP256K1_ORDER, 'valid BIP-32 master scalar');
+  return {
+    privateKey: Buffer.from(privateKey),
+    chainCode: Buffer.from(digest.subarray(32)),
+    depth: 0,
+    childNumber: 0,
+    parentFingerprint: Buffer.alloc(4),
+  };
+}
+
+function bip32HardenedChild(parent, childNumber) {
+  assert(
+    Number.isInteger(childNumber)
+      && childNumber >= 0x80000000
+      && childNumber <= 0xffffffff,
+    'BIP-32 child must be hardened',
+  );
+  const parentPublicKey = compressedSecp256k1PublicKey(parent.privateKey);
+  const digest = hmacSha512(
+    parent.chainCode,
+    Buffer.concat([Buffer.from([0]), parent.privateKey, uint32(childNumber)]),
+  );
+  const tweak = scalarFromBytes(digest.subarray(0, 32));
+  assert(tweak < SECP256K1_ORDER, 'valid BIP-32 child tweak');
+  const scalar = (tweak + scalarFromBytes(parent.privateKey)) % SECP256K1_ORDER;
+  assert.notEqual(scalar, 0n, 'valid BIP-32 child scalar');
+  return {
+    privateKey: scalarToBytes(scalar),
+    chainCode: Buffer.from(digest.subarray(32)),
+    depth: parent.depth + 1,
+    childNumber,
+    parentFingerprint: hash160(parentPublicKey).subarray(0, 4),
+  };
+}
+
+function deriveBip32Account(seed, accountIndex) {
+  assert(Number.isInteger(accountIndex) && accountIndex >= 0 && accountIndex < 0x80000000);
+  let node = bip32Master(seed);
+  for (const component of [44, 0, accountIndex]) {
+    node = bip32HardenedChild(node, 0x80000000 + component);
+  }
+  return node;
+}
+
+function xpubFromNode(node) {
+  assert.equal(node.depth, 3);
+  const payload = Buffer.concat([
+    Buffer.from('0488b21e', 'hex'),
+    Buffer.from([node.depth]),
+    node.parentFingerprint,
+    uint32(node.childNumber),
+    node.chainCode,
+    compressedSecp256k1PublicKey(node.privateKey),
+  ]);
+  assert.equal(payload.length, 78);
+  return base58Check(payload);
+}
+
+function libp2pSecp256k1PeerId(publicKey) {
+  assert.equal(publicKey.length, 33);
+  const publicKeyMessage = Buffer.concat([
+    Buffer.from([0x08, 0x02, 0x12, 0x21]),
+    publicKey,
+  ]);
+  assert.equal(publicKeyMessage.length, 37);
+  return base58(Buffer.concat([
+    Buffer.from([0x00, publicKeyMessage.length]),
+    publicKeyMessage,
+  ]));
+}
 
 function absolute(relativePath) {
   assert.equal(typeof relativePath, 'string', 'fixture path must be a string');
@@ -1046,12 +1221,44 @@ function verifyWalletVectors() {
   exactKeys(vectors.leadingZeroFingerprint, [
     'accountIndex', 'accountXpub', 'peerId', 'fingerprint',
   ], 'leading-zero fingerprint');
-  assert.deepEqual(vectors.leadingZeroFingerprint, {
-    accountIndex: 1,
-    accountXpub: 'xpub6BsrjbAKk2fyj16rqvwst2yh42rwfW3qmSg4nz6dPhRWWTop133fAdzRioTMK1KKk9HVLs3cYvsrxeQnwNuPH4kN8Wj3GhfeAC5GnwhGDan',
-    peerId: '16Uiu2HAmRsk99krNTSoMYhNdoVsA2751NDZcwkS8qtW178iJCK4b',
-    fingerprint: '57f94879',
-  });
+  assert.deepEqual(
+    vectors.leadingZeroFingerprint,
+    EXPECTED_LEADING_ZERO_FINGERPRINT,
+    'leading-zero fingerprint reviewed literals',
+  );
+  const aliceSeed = lowerHex(
+    vectors.newIdentity.passwordVectors[0].seedHex,
+    64,
+    'leading-zero account source seed',
+  );
+  const leadingZeroNode = deriveBip32Account(
+    aliceSeed,
+    EXPECTED_LEADING_ZERO_FINGERPRINT.accountIndex,
+  );
+  const leadingZeroPublicKey = compressedSecp256k1PublicKey(
+    leadingZeroNode.privateKey,
+  );
+  assert.equal(
+    leadingZeroPublicKey.toString('hex'),
+    '035bf2677f87797e04f19b852ba5e7af455fb795754ad1dbcb8233468b411171af',
+    'leading-zero compressed secp256k1 public key',
+  );
+  const leadingZeroHash160 = hash160(leadingZeroPublicKey);
+  assert.equal(
+    leadingZeroHash160.subarray(0, 4).toString('hex'),
+    vectors.leadingZeroFingerprint.fingerprint,
+    'leading-zero HASH160 fingerprint prefix',
+  );
+  assert.equal(
+    xpubFromNode(leadingZeroNode),
+    vectors.leadingZeroFingerprint.accountXpub,
+    'leading-zero independently serialized xpub',
+  );
+  assert.equal(
+    libp2pSecp256k1PeerId(leadingZeroPublicKey),
+    vectors.leadingZeroFingerprint.peerId,
+    'leading-zero independently serialized libp2p Peer ID',
+  );
   exactKeys(vectors.validationCases, ['username', 'password', 'identityImport'], 'validation cases');
   assert.equal(vectors.validationCases.username.length, 14, 'username validation count');
   assert.equal(vectors.validationCases.password.length, 40, 'password validation count');
@@ -1088,6 +1295,173 @@ function verifyWalletVectors() {
     { identityScheme: 'sdn-bip39-auth-v1-legacy', seedProfile: 'bip39-mnemonic-v1-legacy', rawV1: true, jcsV2: false, authorityActivation: false, decision: false },
   ]);
   return vectors;
+}
+
+function verifyRememberWallet(vectors) {
+  const fixture = parseJsonFixture('test/fixtures/sdn-remember-wallet-v2.json');
+  exactKeys(fixture, [
+    'schemaVersion', 'profile', 'prfOutputHex', 'hkdfSaltHex', 'nonceHex',
+    'credentialIdBase64url', 'canonicalUsername', 'usernameSha256',
+    'identityScheme', 'seedProfile', 'passwordUtf8Hex', 'derivedSeedHex', 'canonicalAad',
+    'canonicalPlaintext', 'wrappingKeyHex', 'ciphertextAndTagHex',
+  ], 'remember-wallet KAT');
+  assert.deepEqual(
+    fixture,
+    EXPECTED_REMEMBER_WALLET,
+    'remember-wallet reviewed literals',
+  );
+
+  const prfOutput = lowerHex(fixture.prfOutputHex, 32, 'remember-wallet PRF output');
+  const hkdfSalt = lowerHex(fixture.hkdfSaltHex, 32, 'remember-wallet HKDF salt');
+  const nonce = lowerHex(fixture.nonceHex, 12, 'remember-wallet nonce');
+  assert.equal(hex(prfOutput), hex(range(0)), 'remember-wallet PRF byte range');
+  assert.equal(hex(hkdfSalt), hex(range(0x20)), 'remember-wallet salt byte range');
+  assert.equal(
+    hex(nonce),
+    hex(range(0x40).subarray(0, 12)),
+    'remember-wallet nonce byte range',
+  );
+  const credentialId = canonicalBase64url32(
+    fixture.credentialIdBase64url,
+    'remember-wallet credential ID',
+  );
+  assert.equal(
+    hex(credentialId),
+    hex(range(0xa0)),
+    'remember-wallet credential ID byte range',
+  );
+  assert.equal(fixture.canonicalUsername, 'alice_01');
+  assert.equal(
+    sha256Hex(utf8(fixture.canonicalUsername)),
+    fixture.usernameSha256,
+    'remember-wallet username SHA-256',
+  );
+  assert.equal(fixture.identityScheme, IDENTITY_SCHEME);
+  assert.equal(fixture.seedProfile, PASSWORD_PROFILE);
+  const expectedPassword = utf8('Correct Horse Battery Staple!');
+  const password = lowerHex(
+    fixture.passwordUtf8Hex,
+    expectedPassword.length,
+    'remember-wallet password',
+  );
+  assert.deepEqual(password, expectedPassword, 'remember-wallet exact password bytes');
+  const expectedDerivedSeed = lowerHex(
+    fixture.derivedSeedHex,
+    64,
+    'remember-wallet derived seed',
+  );
+  const alice = vectors.newIdentity.passwordVectors.find(
+    (row) => row.name === 'alice-account-source',
+  );
+  assert(alice, 'remember-wallet alice source vector');
+  assert.equal(
+    fixture.passwordUtf8Hex,
+    alice.passwordUtf8Hex,
+    'remember-wallet frozen v2 password',
+  );
+  assert.equal(
+    fixture.derivedSeedHex,
+    alice.seedHex,
+    'remember-wallet frozen v2 derived seed',
+  );
+  const scryptSalt = utf8(
+    `sdn-hd-wallet/password-scrypt-v2\0${fixture.canonicalUsername}`,
+  );
+  const derivedSeed = scryptSync(password, scryptSalt, 64, {
+    N: 65536,
+    r: 8,
+    p: 1,
+    maxmem: 256 * 1024 * 1024,
+  });
+  assert.deepEqual(
+    derivedSeed,
+    expectedDerivedSeed,
+    'remember-wallet independently derived scrypt seed',
+  );
+
+  scanJsonNoDuplicates(fixture.canonicalAad);
+  assert.equal(
+    jcs(JSON.parse(fixture.canonicalAad)),
+    fixture.canonicalAad,
+    'remember-wallet canonical AAD bytes',
+  );
+  const aad = JSON.parse(fixture.canonicalAad);
+  exactKeys(aad, [
+    'credentialIdBase64url', 'identityScheme', 'schemaVersion', 'seedProfile',
+    'storageProfile', 'usernameSha256',
+  ], 'remember-wallet AAD');
+  assert.deepEqual(aad, {
+    credentialIdBase64url: fixture.credentialIdBase64url,
+    identityScheme: fixture.identityScheme,
+    schemaVersion: 2,
+    seedProfile: fixture.seedProfile,
+    storageProfile: fixture.profile,
+    usernameSha256: fixture.usernameSha256,
+  });
+
+  scanJsonNoDuplicates(fixture.canonicalPlaintext);
+  assert.equal(
+    jcs(JSON.parse(fixture.canonicalPlaintext)),
+    fixture.canonicalPlaintext,
+    'remember-wallet canonical plaintext bytes',
+  );
+  const plaintextObject = JSON.parse(fixture.canonicalPlaintext);
+  exactKeys(plaintextObject, [
+    'identityScheme', 'passwordBase64url', 'seedProfile', 'username',
+  ], 'remember-wallet plaintext');
+  assert.equal(
+    Object.hasOwn(plaintextObject, 'seedBase64url'),
+    false,
+    'remember-wallet plaintext must not contain a raw seed',
+  );
+  assert.deepEqual(plaintextObject, {
+    identityScheme: fixture.identityScheme,
+    passwordBase64url: password.toString('base64url'),
+    seedProfile: fixture.seedProfile,
+    username: fixture.canonicalUsername,
+  });
+
+  const info = utf8(
+    `hd-wallet-ui/remember-wallet-v2\0${fixture.canonicalUsername}`,
+  );
+  const wrappingKey = Buffer.from(
+    hkdfSync('sha256', prfOutput, hkdfSalt, info, 32),
+  );
+  assert.equal(
+    wrappingKey.toString('hex'),
+    fixture.wrappingKeyHex,
+    'remember-wallet independently derived HKDF key',
+  );
+
+  const aadBytes = utf8(fixture.canonicalAad);
+  const plaintext = utf8(fixture.canonicalPlaintext);
+  const expectedCiphertextAndTag = lowerHex(
+    fixture.ciphertextAndTagHex,
+    plaintext.length + 16,
+    'remember-wallet ciphertext and tag',
+  );
+  const cipher = createCipheriv('aes-256-gcm', wrappingKey, nonce, {
+    authTagLength: 16,
+  });
+  cipher.setAAD(aadBytes, { plaintextLength: plaintext.length });
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const ciphertextAndTag = Buffer.concat([ciphertext, cipher.getAuthTag()]);
+  assert.deepEqual(
+    ciphertextAndTag,
+    expectedCiphertextAndTag,
+    'remember-wallet independently sealed AES-256-GCM bytes',
+  );
+
+  const decipher = createDecipheriv('aes-256-gcm', wrappingKey, nonce, {
+    authTagLength: 16,
+  });
+  decipher.setAAD(aadBytes, { plaintextLength: plaintext.length });
+  decipher.setAuthTag(expectedCiphertextAndTag.subarray(-16));
+  const opened = Buffer.concat([
+    decipher.update(expectedCiphertextAndTag.subarray(0, -16)),
+    decipher.final(),
+  ]);
+  assert.deepEqual(opened, plaintext, 'remember-wallet independently opened plaintext');
 }
 
 const expectedCanonicalCases = new Map([
@@ -1450,10 +1824,11 @@ try {
   verifyIntegrity();
   verifySources();
   const vectors = verifyWalletVectors();
+  verifyRememberWallet(vectors);
   verifyOperationWire(vectors);
   verifyProtocol();
   console.log(
-    'PASS: seven immutable fixture entries, 14/40/15 validation rows, and 6+1+2 operation cases verified',
+    'PASS: eight immutable fixture entries, 14/40/15 validation rows, one remembered-wallet KAT, and 6+1+2 operation cases verified',
   );
 } catch (error) {
   console.error(`FAIL: ${error.message}`);

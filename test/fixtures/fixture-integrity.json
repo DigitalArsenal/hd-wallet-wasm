@@ -13,9 +13,14 @@
       "sha256": "f81924055c9b64d839c702257215c5a77861843388327deeddd5929c31e7cc46"
     },
     {
+      "path": "test/fixtures/sdn-remember-wallet-v2.json",
+      "bytes": 1864,
+      "sha256": "1fb4cdea378b180765fd09ee0912026cef38f1e7504568131eccb9f7f1063a69"
+    },
+    {
       "path": "test/fixtures/sdn-wallet-vectors.v1.json",
-      "bytes": 36958,
-      "sha256": "2287a41481e1878f9c6ba6996f6e8a81b02abe4dd95ee07900ae956df41095a4"
+      "bytes": 36960,
+      "sha256": "63fc032f3243d18b5ce5e47a4d82ad1ebc7c5213e9c8323b1899763c436e8bc1"
     },
     {
       "path": "test/fixtures/trezor-bip39-vectors.json",

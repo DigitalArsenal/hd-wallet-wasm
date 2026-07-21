@@ -206,10 +206,10 @@
     }
   ],
   "leadingZeroFingerprint": {
-    "accountIndex": 1,
-    "accountXpub": "xpub6BsrjbAKk2fyj16rqvwst2yh42rwfW3qmSg4nz6dPhRWWTop133fAdzRioTMK1KKk9HVLs3cYvsrxeQnwNuPH4kN8Wj3GhfeAC5GnwhGDan",
-    "peerId": "16Uiu2HAmRsk99krNTSoMYhNdoVsA2751NDZcwkS8qtW178iJCK4b",
-    "fingerprint": "57f94879"
+    "accountIndex": 501,
+    "accountXpub": "xpub6D9SXNXfAWuAKZhu14UostmrUDJp9zrk9uPEd3Jm1E8e5XbdPidEWEButSeJ829RZbMiBc3v9rQEJ8xL45qZHcYjmo3nUcTpSB9N9Ls5hLe",
+    "peerId": "16Uiu2HAmJquqND17wV5bsc91L1rHjckRZwNj9YxxJDfPTKp9mT4S",
+    "fingerprint": "00611cc1"
   },
   "validationCases": {
     "username": [
