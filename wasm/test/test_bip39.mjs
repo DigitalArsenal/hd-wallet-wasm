@@ -3,29 +3,22 @@
  */
 
 import init, { Language } from '../src/index.mjs';
-import { test, testAsync, assert, assertEqual, bytesToHex, hexToBytes } from './test_all.mjs';
+import { test, testAsync, skip, assert, assertEqual, bytesToHex, hexToBytes } from './test_all.mjs';
 
-// Initialize WASM module
-let wallet;
+// Initialize WASM module. Failure is fatal because this suite requires it.
+const wallet = await init();
 
-try {
-  wallet = await init();
-
-  // Inject entropy for mnemonic generation
-  const entropy = new Uint8Array(32);
-  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
-    crypto.getRandomValues(entropy);
-  } else {
-    // Fallback for older Node.js
-    const { randomBytes } = await import('crypto');
-    const buf = randomBytes(32);
-    entropy.set(buf);
-  }
-  wallet.injectEntropy(entropy);
-} catch (error) {
-  console.log('  Skipping BIP-39 tests: WASM module not available');
-  process.exit(0);
+// Inject entropy for mnemonic generation
+const entropy = new Uint8Array(32);
+if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+  crypto.getRandomValues(entropy);
+} else {
+  // Fallback for older Node.js
+  const { randomBytes } = await import('crypto');
+  const buf = randomBytes(32);
+  entropy.set(buf);
 }
+wallet.injectEntropy(entropy);
 
 // Test mnemonic generation
 test('generate 12-word mnemonic', () => {
@@ -142,15 +135,15 @@ test('21-word mnemonic (224-bit entropy)', () => {
   assert(wallet.mnemonic.validate(mnemonic), 'Generated mnemonic should be valid');
 });
 
-// Test Japanese mnemonic
-test('Japanese mnemonic generation', () => {
-  try {
-    const mnemonic = wallet.mnemonic.generate(12, Language.JAPANESE);
+// Test Japanese mnemonic when the optional wordlist is compiled in.
+const japaneseTestName = 'Japanese mnemonic generation';
+try {
+  const mnemonic = wallet.mnemonic.generate(12, Language.JAPANESE);
+  test(japaneseTestName, () => {
     const words = mnemonic.split('\u3000'); // Japanese space
     assertEqual(words.length, 12, 'Expected 12 words');
     assert(wallet.mnemonic.validate(mnemonic, Language.JAPANESE), 'Japanese mnemonic should be valid');
-  } catch (e) {
-    // Skip if Japanese not supported
-    console.log('    (Japanese wordlist not available, skipped)');
-  }
-});
+  });
+} catch (error) {
+  skip(japaneseTestName, `Japanese wordlist not compiled (${error.message})`);
+}

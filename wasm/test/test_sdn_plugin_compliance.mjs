@@ -24,13 +24,7 @@ const generatedManifestBytes = new Uint8Array(Buffer.from(manifestBase64, 'base6
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-let wallet;
-try {
-  wallet = await init();
-} catch (error) {
-  console.log('  Skipping SDN plugin compliance tests: WASM module not available');
-  process.exit(0);
-}
+const wallet = await init();
 
 function buildFrame(portId, schemaName, fileIdentifier, payload, overrides = {}) {
   return {

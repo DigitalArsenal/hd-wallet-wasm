@@ -68,7 +68,7 @@ jobs:
         run: emcmake cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DHD_WALLET_BUILD_WASM=ON
 
       - name: Build WASM targets
-        run: cmake --build build --parallel $(nproc)
+        run: cmake --build build --parallel $(nproc) --target hd_wallet_wasm_npm
 
       - name: Verify WASM output
         run: |
@@ -78,16 +78,17 @@ jobs:
           test -f build/wasm/hd-wallet-wasi.wasm
           test -f build/wasm/hd-wallet.js
           test -f build/wasm/hd-wallet-inline.js
+          test -f wasm/dist/hd-wallet.js
+          test -f wasm/dist/hd-wallet.wasm
+          test -f wasm/dist/hd-wallet-wasi.wasm
+          test -f wasm/dist/index.d.ts
 
       - name: Upload WASM artifacts
         uses: actions/upload-artifact@v4
         with:
           name: wasm-build
           path: |
-            build/wasm/hd-wallet.wasm
-            build/wasm/hd-wallet-wasi.wasm
-            build/wasm/hd-wallet.js
-            build/wasm/hd-wallet-inline.js
+            wasm/dist/
           retention-days: 7
 
   # NPM package build and test
@@ -115,6 +116,10 @@ jobs:
 
       - name: Copy TypeScript definitions
         run: cp wasm/src/index.d.ts wasm/dist/
+
+      - name: Verify packaged WASM entrypoint
+        run: node test/test_bundle_browser_artifact.mjs
+        working-directory: wasm
 
       - name: Install npm dependencies
         run: npm install --ignore-scripts

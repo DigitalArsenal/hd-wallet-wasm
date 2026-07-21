@@ -5,13 +5,7 @@
 import init, { Curve } from '../src/index.mjs';
 import { test, assert, assertEqual, bytesToHex, hexToBytes } from './test_all.mjs';
 
-let wallet;
-try {
-  wallet = await init();
-} catch (error) {
-  console.log('  Skipping libp2p tests: WASM module not available');
-  process.exit(0);
-}
+const wallet = await init();
 
 // =============================================================================
 // Protobuf / Multihash Structure Tests

@@ -14,13 +14,7 @@ import init, {
 
 import { test, assert, assertEqual, bytesToHex, hexToBytes } from './test_all.mjs';
 
-let wallet;
-try {
-  wallet = await init();
-} catch (error) {
-  console.log('  Skipping transaction tests: WASM module not available');
-  process.exit(0);
-}
+const wallet = await init();
 
 test('Bitcoin tx: build, sign, serialize, parse, and compute txid', () => {
   const priv = hexToBytes('0000000000000000000000000000000000000000000000000000000000000001');
@@ -252,4 +246,3 @@ test('Ethereum tx (EIP-1559): serialize -> parse -> re-serialize round-trip', ()
   parsed.destroy();
   tx.destroy();
 });
-

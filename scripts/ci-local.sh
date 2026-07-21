@@ -108,13 +108,15 @@ run_npm() {
     return
   fi
 
-  step "NPM: Copy WASM artifacts"
-  mkdir -p "$ROOT/wasm/dist"
-  cp "$ROOT/build-wasi/wasm/hd-wallet.wasm" "$ROOT/wasm/dist/" 2>/dev/null || true
-  cp "$ROOT/build-wasi/wasm/hd-wallet-wasi.wasm" "$ROOT/wasm/dist/" 2>/dev/null || true
-  cp "$ROOT/build-wasi/wasm/hd-wallet.js" "$ROOT/wasm/dist/" 2>/dev/null || true
-  cp "$ROOT/build-wasi/wasm/hd-wallet-inline.js" "$ROOT/wasm/dist/" 2>/dev/null || true
-  cp "$ROOT/wasm/src/index.d.ts" "$ROOT/wasm/dist/" 2>/dev/null || true
+  step "NPM: Stage canonical package artifacts"
+  if cmake --build "$ROOT/build-wasi" --target hd_wallet_wasm_npm \
+    --parallel "$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)" 2>&1 \
+    && cp "$ROOT/build-wasi/wasm/hd-wallet-inline.js" "$ROOT/wasm/dist/hd-wallet-inline.js"; then
+    pass "canonical npm artifact staging"
+  else
+    fail "canonical npm artifact staging"
+    return
+  fi
 
   step "NPM: Install dependencies"
   (cd "$ROOT/wasm" && npm install --ignore-scripts 2>&1) || true

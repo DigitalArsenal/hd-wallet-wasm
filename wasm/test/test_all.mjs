@@ -13,15 +13,14 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const jsPath = join(__dirname, '../dist/hd-wallet.js');
 
 if (!existsSync(jsPath)) {
-  console.log('WASM module not built yet. Skipping tests.');
-  console.log('Run "npm run build" to build the WASM module first.');
-  process.exit(0);
+  throw new Error(`WASM package entrypoint missing: ${jsPath}. Run "npm run build" first.`);
 }
 
 // Track results
 let totalTests = 0;
 let passedTests = 0;
 let failedTests = 0;
+let skippedTests = 0;
 const failures = [];
 
 /**
@@ -53,6 +52,13 @@ export async function testAsync(name, fn) {
     console.log(`  \x1b[31m✗\x1b[0m ${name}`);
     console.log(`    ${error.message}`);
   }
+}
+
+export function skip(name, reason) {
+  totalTests++;
+  skippedTests++;
+  console.log(`  \x1b[33m↷\x1b[0m ${name}`);
+  console.log(`    SKIP: ${reason}`);
 }
 
 export function assert(condition, message = 'Assertion failed') {
@@ -163,8 +169,9 @@ async function runTests() {
   console.log('\n\x1b[1mSummary:\x1b[0m');
   console.log(`  Total: ${totalTests}`);
   console.log(`  \x1b[32mPassed: ${passedTests}\x1b[0m`);
+  console.log(`  \x1b[31mFailed: ${failedTests}\x1b[0m`);
+  console.log(`  \x1b[33mSkipped: ${skippedTests}\x1b[0m`);
   if (failedTests > 0) {
-    console.log(`  \x1b[31mFailed: ${failedTests}\x1b[0m`);
     console.log('\n\x1b[1mFailures:\x1b[0m');
     for (const { name, error } of failures) {
       console.log(`  - ${name}: ${error.message}`);

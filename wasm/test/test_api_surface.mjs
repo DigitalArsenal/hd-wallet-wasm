@@ -28,13 +28,7 @@ import init, {
 
 import { test, testAsync, assert, assertEqual, assertDeepEqual, bytesToHex, hexToBytes } from './test_all.mjs';
 
-let wallet;
-try {
-  wallet = await init();
-} catch (error) {
-  console.log('  Skipping API surface tests: WASM module not available');
-  process.exit(0);
-}
+const wallet = await init();
 
 function expectHdWalletError(fn, code) {
   let threw = false;

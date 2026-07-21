@@ -5,15 +5,8 @@
 import init, { Curve } from '../src/index.mjs';
 import { test, testAsync, assert, assertEqual, bytesToHex, hexToBytes } from './test_all.mjs';
 
-// Initialize WASM module
-let wallet;
-
-try {
-  wallet = await init();
-} catch (error) {
-  console.log('  Skipping BIP-32 tests: WASM module not available');
-  process.exit(0);
-}
+// Initialize WASM module. Failure is fatal because this suite requires it.
+const wallet = await init();
 
 // BIP-32 Test Vector 1
 // Seed: 000102030405060708090a0b0c0d0e0f

@@ -7,14 +7,9 @@ import init, {
   X509Encoding,
 } from '../src/index.mjs';
 
-import { test, assert, assertEqual, bytesToHex } from './test_all.mjs';
+import { test, skip, assert, assertEqual, bytesToHex } from './test_all.mjs';
 
-let wallet;
-try {
-  wallet = await init();
-} catch (error) {
-  console.log('  Skipping X.509 tests: WASM module not available');
-}
+const wallet = await init();
 
 function hexToBytes(hex) {
   const out = new Uint8Array(hex.length / 2);
@@ -25,7 +20,9 @@ function hexToBytes(hex) {
 }
 
 if (!wallet?.x509?.isAvailable?.()) {
-  console.log('  Skipping X.509 tests: OpenSSL-backed X.509 support not available in this build');
+  const reason = 'OpenSSL-backed X.509 support not available in this build';
+  skip('X.509: private key PEM, self-signed certificate, and encoding conversion round-trip', reason);
+  skip('X.509: issuer-signed certificate and PKCS#12 import/export round-trip', reason);
 } else {
   test('X.509: private key PEM, self-signed certificate, and encoding conversion round-trip', () => {
     const certPrivateKey = wallet.x509.generatePrivateKey(Curve.P256);
