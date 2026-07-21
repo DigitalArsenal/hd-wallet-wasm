@@ -1,12 +1,25 @@
 import assert from 'node:assert/strict';
 import { createHash, createPublicKey, verify as verifySignature } from 'node:crypto';
-import { lstatSync, readFileSync } from 'node:fs';
+import {
+  closeSync,
+  constants as fsConstants,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+} from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '..',
+);
+const repositoryRealRoot = realpathSync.native(repositoryRoot);
+assert(
+  Number.isInteger(fsConstants.O_NOFOLLOW) && fsConstants.O_NOFOLLOW !== 0,
+  'fixture verification requires a nonzero O_NOFOLLOW',
 );
 
 const INTEGRITY_PATH = 'test/fixtures/fixture-integrity.json';
@@ -48,20 +61,84 @@ const range = (start) => Buffer.from(
 );
 
 function absolute(relativePath) {
+  assert.equal(typeof relativePath, 'string', 'fixture path must be a string');
+  assert(relativePath.length > 0, 'fixture path must not be empty');
+  assert.equal(
+    relativePath.includes('\\'),
+    false,
+    `${relativePath} must use POSIX separators`,
+  );
+  assert.equal(
+    path.posix.normalize(relativePath),
+    relativePath,
+    `${relativePath} must be a normalized POSIX relative path`,
+  );
+  assert.equal(path.isAbsolute(relativePath), false, `${relativePath} must be relative`);
   const resolved = path.resolve(repositoryRoot, relativePath);
+  const repositoryRelative = path.relative(repositoryRoot, resolved);
   assert(
-    resolved.startsWith(`${repositoryRoot}${path.sep}`),
+    repositoryRelative !== '..'
+      && !repositoryRelative.startsWith(`..${path.sep}`)
+      && !path.isAbsolute(repositoryRelative),
     `${relativePath} escapes the repository`,
   );
   return resolved;
 }
 
+function assertSafeFixturePath(relativePath, resolved) {
+  const repositoryRelative = path.relative(repositoryRoot, resolved);
+  const components = repositoryRelative.split(path.sep);
+  let candidate = repositoryRoot;
+  let finalStat;
+  for (let index = 0; index < components.length; index += 1) {
+    candidate = path.join(candidate, components[index]);
+    const stat = lstatSync(candidate);
+    assert(
+      !stat.isSymbolicLink(),
+      `${relativePath} contains symlink component ${components
+        .slice(0, index + 1)
+        .join(path.sep)}`,
+    );
+    if (index < components.length - 1) {
+      assert(
+        stat.isDirectory(),
+        `${relativePath} parent ${components.slice(0, index + 1).join(path.sep)} must be a directory`,
+      );
+    } else {
+      assert(stat.isFile(), `${relativePath} must be a regular file`);
+      finalStat = stat;
+    }
+  }
+  assert.equal(
+    realpathSync.native(resolved),
+    path.join(repositoryRealRoot, repositoryRelative),
+    `${relativePath} real path must remain inside the repository`,
+  );
+  return finalStat;
+}
+
 function readRegularFixture(relativePath) {
   const resolved = absolute(relativePath);
-  const stat = lstatSync(resolved);
-  assert(stat.isFile(), `${relativePath} must be a regular file`);
-  assert(!stat.isSymbolicLink(), `${relativePath} must not be a symlink`);
-  const bytes = readFileSync(resolved);
+  assertSafeFixturePath(relativePath, resolved);
+  let descriptor;
+  let bytes;
+  try {
+    descriptor = openSync(
+      resolved,
+      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
+    );
+    const openedStat = fstatSync(descriptor);
+    assert(openedStat.isFile(), `${relativePath} opened object must be a regular file`);
+    const pathStat = assertSafeFixturePath(relativePath, resolved);
+    assert.equal(openedStat.dev, pathStat.dev, `${relativePath} device changed during open`);
+    assert.equal(openedStat.ino, pathStat.ino, `${relativePath} inode changed during open`);
+    bytes = readFileSync(descriptor);
+    const finalStat = assertSafeFixturePath(relativePath, resolved);
+    assert.equal(openedStat.dev, finalStat.dev, `${relativePath} device changed during read`);
+    assert.equal(openedStat.ino, finalStat.ino, `${relativePath} inode changed during read`);
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
   assert(bytes.length > 0, `${relativePath} must not be empty`);
   assert.notDeepEqual(
     [...bytes.subarray(0, 3)],
@@ -73,6 +150,21 @@ function readRegularFixture(relativePath) {
   assert.notEqual(bytes.at(-2), 0x0a, `${relativePath} must have one final LF`);
   fatalDecoder.decode(bytes);
   return bytes;
+}
+
+function isJsonNoncharacter(codePoint) {
+  return Number.isInteger(codePoint)
+    && codePoint >= 0
+    && codePoint <= 0x10ffff
+    && (
+      (codePoint >= 0xfdd0 && codePoint <= 0xfdef)
+      || (codePoint & 0xffff) === 0xfffe
+      || (codePoint & 0xffff) === 0xffff
+    );
+}
+
+function codePointLabel(codePoint) {
+  return `U+${codePoint.toString(16).toUpperCase().padStart(4, '0')}`;
 }
 
 function scanJsonNoDuplicates(raw) {
@@ -101,12 +193,17 @@ function scanJsonNoDuplicates(raw) {
         const value = JSON.parse(raw.slice(start, cursor));
         for (let index = 0; index < value.length; index += 1) {
           const unit = value.charCodeAt(index);
+          let codePoint = unit;
           if (unit >= 0xd800 && unit <= 0xdbff) {
             const next = value.charCodeAt(index + 1);
             if (!(next >= 0xdc00 && next <= 0xdfff)) fail('unpaired surrogate');
+            codePoint = 0x10000 + ((unit - 0xd800) << 10) + (next - 0xdc00);
             index += 1;
           } else if (unit >= 0xdc00 && unit <= 0xdfff) {
             fail('unpaired surrogate');
+          }
+          if (isJsonNoncharacter(codePoint)) {
+            fail(`JSON noncharacter ${codePointLabel(codePoint)}`);
           }
         }
         return value;
@@ -222,10 +319,37 @@ function parseJsonFixture(relativePath, { pretty = true } = {}) {
   return value;
 }
 
+function jcsString(value, label) {
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index);
+    let codePoint = unit;
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      assert(
+        next >= 0xdc00 && next <= 0xdfff,
+        `${label} contains an unpaired surrogate`,
+      );
+      codePoint = 0x10000 + ((unit - 0xd800) << 10) + (next - 0xdc00);
+      index += 1;
+    } else {
+      assert(
+        !(unit >= 0xdc00 && unit <= 0xdfff),
+        `${label} contains an unpaired surrogate`,
+      );
+    }
+    assert(
+      !isJsonNoncharacter(codePoint),
+      `${label} contains JSON noncharacter ${codePointLabel(codePoint)}`,
+    );
+  }
+  return JSON.stringify(value);
+}
+
 function jcs(value) {
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') {
+  if (value === null || typeof value === 'boolean') {
     return JSON.stringify(value);
   }
+  if (typeof value === 'string') return jcsString(value, 'JCS string');
   if (typeof value === 'number') {
     assert(Number.isFinite(value), 'JCS number must be finite');
     return JSON.stringify(value);
@@ -236,9 +360,43 @@ function jcs(value) {
     .sort()
     .map((key) => {
       assert.notEqual(value[key], undefined, `undefined JCS field ${key}`);
-      return `${JSON.stringify(key)}:${jcs(value[key])}`;
+      return `${jcsString(key, 'JCS object key')}:${jcs(value[key])}`;
     })
     .join(',')}}`;
+}
+
+function verifyNoncharacterRejection() {
+  const codePoints = [
+    ...Array.from({ length: 0x20 }, (_, index) => 0xfdd0 + index),
+    ...Array.from(
+      { length: 0x11 },
+      (_, plane) => [plane * 0x10000 + 0xfffe, plane * 0x10000 + 0xffff],
+    ).flat(),
+  ];
+  for (const codePoint of codePoints) {
+    const value = String.fromCodePoint(codePoint);
+    const label = `U+${codePoint.toString(16).toUpperCase().padStart(4, '0')}`;
+    assert.throws(
+      () => scanJsonNoDuplicates(JSON.stringify({ [value]: 'safe' })),
+      /JSON noncharacter/u,
+      `scanner key ${label}`,
+    );
+    assert.throws(
+      () => scanJsonNoDuplicates(JSON.stringify({ safe: value })),
+      /JSON noncharacter/u,
+      `scanner value ${label}`,
+    );
+    assert.throws(
+      () => jcs({ [value]: 'safe' }),
+      /JSON noncharacter/u,
+      `JCS key ${label}`,
+    );
+    assert.throws(
+      () => jcs({ safe: value }),
+      /JSON noncharacter/u,
+      `JCS value ${label}`,
+    );
+  }
 }
 
 function exactKeys(value, expected, label) {
@@ -1288,6 +1446,7 @@ function verifyProtocol() {
 }
 
 try {
+  verifyNoncharacterRejection();
   verifyIntegrity();
   verifySources();
   const vectors = verifyWalletVectors();
