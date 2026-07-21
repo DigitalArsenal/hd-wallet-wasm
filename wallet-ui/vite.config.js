@@ -9,6 +9,40 @@ const pkg = JSON.parse(readFileSync(resolve(configDir, '..', 'wasm', 'package.js
 const require = createRequire(import.meta.url);
 const sdsPackageRoot = dirname(require.resolve('spacedatastandards.org/package.json'));
 
+export function createReleaseLibraryConfig({
+  entry,
+  fileName,
+  format,
+  name,
+  outDir,
+}) {
+  return defineConfig({
+    base: './',
+    build: {
+      assetsInlineLimit: 0,
+      cssCodeSplit: false,
+      emptyOutDir: false,
+      lib: {
+        entry,
+        fileName: () => fileName,
+        formats: [format],
+        ...(name ? { name } : {}),
+      },
+      minify: 'esbuild',
+      outDir,
+      rollupOptions: {
+        output: {
+          inlineDynamicImports: true,
+        },
+      },
+      sourcemap: false,
+      target: 'es2022',
+    },
+    configFile: false,
+    publicDir: false,
+  });
+}
+
 export default defineConfig({
   root: '.',
   base: './',
@@ -32,6 +66,10 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
+    // Registry verification intentionally uses top-level await before any
+    // wallet-origin credentials can render. Keep the generated demo/docs
+    // target aligned with that security boundary.
+    target: 'es2022',
     rollupOptions: {
       input: {
         main: resolve(configDir, 'index.html'),

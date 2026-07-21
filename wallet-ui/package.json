@@ -3,20 +3,45 @@
   "version": "2.0.22",
   "description": "HD Wallet modal UI — login, keys, identity, trust map, and security bond. Attach to any button in your app.",
   "type": "module",
-  "main": "src/app.js",
-  "module": "src/app.js",
+  "main": "./dist/compat/index.js",
+  "module": "./dist/compat/index.js",
+  "types": "./dist/compat/index.d.ts",
   "exports": {
-    ".": "./src/app.js",
-    "./lib": "./src/lib.js",
-    "./styles": "./styles/widget.css",
-    "./styles/demo": "./styles/main.css"
+    ".": {
+      "types": "./dist/compat/index.d.ts",
+      "import": "./dist/compat/index.js"
+    },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "import": "./dist/client/index.js"
+    },
+    "./client/asset-review": {
+      "types": "./dist/client/asset-review.d.ts",
+      "import": "./dist/client/asset-review.js"
+    },
+    "./client/callback": {
+      "types": "./dist/client/callback.d.ts",
+      "import": "./dist/client/callback.js"
+    },
+    "./client/sdn": {
+      "types": "./dist/client/sdn.d.ts",
+      "import": "./dist/client/sdn.js"
+    },
+    "./styles": "./dist/client/style.css",
+    "./wallet-origin": {
+      "types": "./dist/wallet-origin/index.d.ts",
+      "import": "./dist/wallet-origin/index.js"
+    }
   },
   "files": [
-    "src/",
-    "styles/"
+    "dist/",
+    "README.md",
+    "LICENSE",
+    "data/common-passwords-sdn-v1.txt",
+    "data/common-passwords-sdn-v1.source.json"
   ],
   "sideEffects": [
-    "**/*.css"
+    "./dist/client/style.css"
   ],
   "scripts": {
     "build:wasm": "emcmake cmake -B ../build-wasm -S .. -DCMAKE_BUILD_TYPE=Release -DHD_WALLET_BUILD_WASM=ON && cmake --build ../build-wasm --target hd_wallet_wasm_npm -j8",
@@ -26,26 +51,28 @@
     "build": "npm run build:wasm && vite build",
     "build:docs": "npm run build:wasm && vite build --outDir ../docs --emptyOutDir",
     "preview": "vite preview",
-    "prepack": "npm run build:widget-css",
+    "build:release": "node scripts/build-release.mjs",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:browser": "playwright test --config test/browser/playwright.config.mjs"
   },
   "dependencies": {
+    "hd-wallet-wasm": "2.0.22"
+  },
+  "devDependencies": {
     "@noble/curves": "^1.9.7",
     "@noble/hashes": "^1.7.2",
     "@peculiar/x509": "^1.14.3",
+    "@playwright/test": "1.61.1",
     "@scure/base": "^1.2.4",
     "@scure/bip32": "^2.0.1",
     "bip39": "^3.1.0",
     "buffer": "^6.0.3",
     "flatbuffers": "^25.9.23",
     "flatc-wasm": "^26.1.32",
-    "hd-wallet-wasm": "2.0.22",
     "qrcode": "^1.5.3",
     "spacedatastandards.org": "^1.93.3",
-    "vcard-cryptoperson": "^1.1.11"
-  },
-  "devDependencies": {
+    "vcard-cryptoperson": "^1.1.11",
     "vite": "^5.0.0",
     "vitest": "^4.0.18"
   },

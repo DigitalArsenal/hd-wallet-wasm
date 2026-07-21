@@ -279,6 +279,50 @@ function rawSignature() {
   };
 }
 
+function canonicalJson(value) {
+  if (value === null || typeof value === 'boolean' || typeof value === 'number'
+      || typeof value === 'string') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  return `{${Object.keys(value).sort().map(
+    (key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`,
+  ).join(',')}}`;
+}
+
+function canonicalSignature(kind, request) {
+  const envelope = kind === 'sdn-login' ? {
+    audience: request.audience,
+    challengeSha256: HEX_32,
+    clientId: 'sdn-node-console-v1',
+    expiresAt: request.expiresAt,
+    identityScheme: 'sdn-bip32-slip10-purpose-v1',
+    issuedAt: request.issuedAt,
+    keyId: `sha256:${HEX_32}`,
+    kind,
+    nonce: request.nonce,
+    protocolVersion: 2,
+    requestOrigin: 'https://sdn.spaceaware.io',
+    signatureProfile: 'ed25519-over-sha256-jcs-v1',
+  } : kind === 'asset-review-authority-activation' ? { ...request, kind } : {
+        ...request,
+        identityScheme: 'sdn-bip32-slip10-purpose-v1',
+        keyId: `sha256:${HEX_32}`,
+        kind: 'asset-review-attestation',
+        purpose: 'asset-review-approval',
+        signatureProfile: 'ed25519-over-sha256-jcs-v1',
+      };
+  return {
+    algorithm: 'ed25519',
+    canonicalEnvelope: canonicalJson(envelope),
+    encoding: 'raw',
+    identityScheme: 'sdn-bip32-slip10-purpose-v1',
+    keyId: `sha256:${HEX_32}`,
+    schemaVersion: 1,
+    signatureHex: SIGNATURE_HEX,
+    signatureProfile: 'ed25519-over-sha256-jcs-v1',
+    signedDigestSha256: HEX_32,
+  };
+}
+
 function base32(bytes) {
   const alphabet = 'abcdefghijklmnopqrstuvwxyz234567';
   let accumulator = 0;
@@ -455,6 +499,7 @@ function createHarness({
     clearTimeout: globalThis.clearTimeout.bind(globalThis),
     crypto: cryptoValue,
     fetch: fetchValue,
+    getStorage: vi.fn(() => storage),
     now: () => Date.now(),
     setInterval: globalThis.setInterval.bind(globalThis),
     setTimeout: globalThis.setTimeout.bind(globalThis),
@@ -1013,7 +1058,7 @@ describe('state, callback, and revocation lifecycle', () => {
     await client.destroy();
   });
 
-  test('startup removes only structurally valid expired callback records with the exact prefix', async () => {
+  test('construction is storage-inert and first valid execution removes only proven-expired callback records', async () => {
     const expiredState = '1'.repeat(64);
     const futureState = '2'.repeat(64);
     const expired = JSON.stringify({
@@ -1034,15 +1079,354 @@ describe('state, callback, and revocation lifecycle', () => {
       [`${CALLBACK_PREFIX}malformed`, '{not-json'],
       ['other.application:key', expired],
     ]);
-    createHarness({ storage });
+    const harness = createHarness({ storage });
 
     const client = createWalletClient({ clientId: 'sdn-landing-web-v1' });
 
+    expect(storage.getItem).not.toHaveBeenCalled();
+    expect(storage.removeItem).not.toHaveBeenCalled();
+    expect(harness.listenerCount('storage')).toBe(0);
+
+    const invalid = createSdnWalletClient();
+    await expect(invalid.requestSdnLoginV1({
+      challenge: new Uint8Array(31),
+      protocolVersion: 1,
+    })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+    expect(storage.getItem).not.toHaveBeenCalled();
+    expect(storage.removeItem).not.toHaveBeenCalled();
+    expect(harness.listenerCount('storage')).toBe(0);
+
+    const operation = client.connect();
+    operation.catch(() => {});
     expect(storage.getItem(`${CALLBACK_PREFIX}${expiredState}`)).toBeNull();
     expect(storage.getItem(`${CALLBACK_PREFIX}${futureState}`)).toBe(future);
     expect(storage.getItem(`${CALLBACK_PREFIX}malformed`)).toBe('{not-json');
     expect(storage.getItem('other.application:key')).toBe(expired);
+    expect(harness.listenerCount('storage')).toBe(1);
+    await waitForLength(harness.registrations, 1);
     await client.destroy();
+    await invalid.destroy();
+    await expect(operation).rejects.toMatchObject({ code: 'DESTROYED' });
+    expect(harness.listenerCount('storage')).toBe(0);
+  });
+
+  test('first activation bounds callback cleanup and never installs a second listener', async () => {
+    const storage = new MemoryStorage(Array.from({ length: 80 }, (_, index) => {
+      const state = index.toString(16).padStart(64, '0');
+      return [`${CALLBACK_PREFIX}${state}`, JSON.stringify({
+        code: '3'.repeat(64),
+        expiresAt: new Date(Date.now() - 1).toISOString(),
+        schemaVersion: 1,
+        state,
+      })];
+    }));
+    storage.key = vi.fn(storage.key.bind(storage));
+    const harness = createHarness({ storage });
+    const client = createWalletClient({ clientId: 'sdn-landing-web-v1' });
+
+    expect(storage.key).not.toHaveBeenCalled();
+    const first = client.connect();
+    first.catch(() => {});
+    expect(storage.key.mock.calls.length).toBeLessThanOrEqual(64);
+    for (let index = 0; index < 64; index += 1) {
+      const state = index.toString(16).padStart(64, '0');
+      expect(storage.getItem(`${CALLBACK_PREFIX}${state}`)).toBeNull();
+    }
+    for (let index = 64; index < 80; index += 1) {
+      const state = index.toString(16).padStart(64, '0');
+      expect(storage.getItem(`${CALLBACK_PREFIX}${state}`)).not.toBeNull();
+    }
+    expect(harness.dependencies.getStorage).toHaveBeenCalledOnce();
+    expect(harness.window.addEventListener).toHaveBeenCalledOnce();
+    expect(harness.listenerCount('storage')).toBe(1);
+    const calls = storage.key.mock.calls.length;
+
+    const second = client.openAccount();
+    second.catch(() => {});
+    expect(storage.key).toHaveBeenCalledTimes(calls);
+    expect(harness.listenerCount('storage')).toBe(1);
+    await client.destroy();
+    await expect(first).rejects.toMatchObject({ code: 'REPLACED' });
+    await expect(second).rejects.toMatchObject({ code: 'DESTROYED' });
+    expect(harness.window.removeEventListener).toHaveBeenCalledOnce();
+  });
+
+  test('storage activation that destroys reentrantly cannot open or install a listener', async () => {
+    const harness = createHarness();
+    let client;
+    let destroyPromise;
+    const core = createInternalWalletClient({
+      adapters: TEST_BASE_ADAPTERS,
+      clientId: 'sdn-landing-web-v1',
+      dependencies: Object.freeze({
+        ...harness.dependencies,
+        getStorage() {
+          destroyPromise = client.destroy();
+          return harness.storage;
+        },
+        storage: undefined,
+      }),
+    });
+    client = createPublicApi(core);
+
+    const operation = client.connect();
+    await destroyPromise;
+    await expect(operation).rejects.toMatchObject({ code: 'DESTROYED' });
+    expect(harness.window.open).not.toHaveBeenCalled();
+    expect(harness.fetch).not.toHaveBeenCalled();
+    expect(harness.listenerCount('storage')).toBe(0);
+  });
+
+  test.each(['getStorage', 'key', 'removeItem'])('%s valid-call reentrancy fails the activation closed', async (mode) => {
+    const state = '1'.repeat(64);
+    const storage = new MemoryStorage([[
+      `${CALLBACK_PREFIX}${state}`,
+      JSON.stringify({
+        code: '2'.repeat(64),
+        expiresAt: new Date(Date.now() - 1).toISOString(),
+        schemaVersion: 1,
+        state,
+      }),
+    ]]);
+    const harness = createHarness({ storage });
+    let client;
+    let nested;
+    let triggered = false;
+    const reenter = () => {
+      if (triggered) return;
+      triggered = true;
+      nested = client.openAccount();
+    };
+    if (mode === 'key') {
+      const key = storage.key.bind(storage);
+      storage.key = (index) => {
+        reenter();
+        return key(index);
+      };
+    } else if (mode === 'removeItem') {
+      const remove = storage.removeItem;
+      storage.removeItem = vi.fn((key) => {
+        reenter();
+        return remove(key);
+      });
+    }
+    const core = createInternalWalletClient({
+      adapters: TEST_BASE_ADAPTERS,
+      clientId: 'sdn-landing-web-v1',
+      dependencies: Object.freeze({
+        ...harness.dependencies,
+        getStorage() {
+          if (mode === 'getStorage') reenter();
+          return storage;
+        },
+      }),
+    });
+    client = createPublicApi(core);
+
+    const outer = client.connect();
+    await expect(nested).rejects.toMatchObject({ code: 'REPLACED' });
+    await expect(outer).rejects.toMatchObject({ code: 'CALLBACK_ERROR' });
+    expect(harness.window.open).not.toHaveBeenCalled();
+    expect(harness.fetch).not.toHaveBeenCalled();
+    await client.destroy();
+  });
+
+  test.each(['null', 'throw'])('a $mode storage acquisition fails before popup or relay work', async (mode) => {
+    const harness = createHarness();
+    const core = createInternalWalletClient({
+      adapters: TEST_BASE_ADAPTERS,
+      clientId: 'sdn-landing-web-v1',
+      dependencies: Object.freeze({
+        ...harness.dependencies,
+        getStorage() {
+          if (mode === 'throw') throw new Error('hostile storage getter');
+          return null;
+        },
+        storage: undefined,
+      }),
+    });
+    const client = createPublicApi(core);
+
+    await expect(client.connect()).rejects.toMatchObject({ code: 'CALLBACK_ERROR' });
+    expect(harness.window.open).not.toHaveBeenCalled();
+    expect(harness.fetch).not.toHaveBeenCalled();
+    expect(harness.listenerCount('storage')).toBe(0);
+    await client.destroy();
+  });
+
+  test('listener registration failure removes any effect and fails before popup or relay work', async () => {
+    const harness = createHarness();
+    const listeners = new Set();
+    const window = {
+      ...harness.window,
+      addEventListener(_type, listener) {
+        listeners.add(listener);
+        throw new Error('hostile listener registration');
+      },
+      removeEventListener(_type, listener) {
+        listeners.delete(listener);
+      },
+    };
+    const core = createInternalWalletClient({
+      adapters: TEST_BASE_ADAPTERS,
+      clientId: 'sdn-landing-web-v1',
+      dependencies: Object.freeze({ ...harness.dependencies, window }),
+    });
+    const client = createPublicApi(core);
+
+    await expect(client.connect()).rejects.toMatchObject({ code: 'CALLBACK_ERROR' });
+    expect(listeners.size).toBe(0);
+    expect(harness.window.open).not.toHaveBeenCalled();
+    expect(harness.fetch).not.toHaveBeenCalled();
+    await client.destroy();
+  });
+
+  test('an add-only storage-event host fails before binding, popup, or relay work', async () => {
+    const harness = createHarness();
+    const addEventListener = vi.fn();
+    const core = createInternalWalletClient({
+      adapters: TEST_BASE_ADAPTERS,
+      clientId: 'sdn-landing-web-v1',
+      dependencies: Object.freeze({
+        ...harness.dependencies,
+        window: { ...harness.window, addEventListener, removeEventListener: undefined },
+      }),
+    });
+    const client = createPublicApi(core);
+
+    await expect(client.connect()).rejects.toMatchObject({ code: 'CALLBACK_ERROR' });
+    expect(addEventListener).not.toHaveBeenCalled();
+    expect(harness.window.open).not.toHaveBeenCalled();
+    expect(harness.fetch).not.toHaveBeenCalled();
+    await client.destroy();
+  });
+
+  test('snapshot, subscription, and destroy before activation never obtain storage or bind events', async () => {
+    const harness = createHarness();
+    const client = createWalletClient({ clientId: 'sdn-landing-web-v1' });
+    const listener = vi.fn();
+    const unsubscribe = client.subscribe(listener);
+
+    expect(client.getSnapshot()).toEqual({ identity: null, status: 'dormant' });
+    expect(listener).toHaveBeenCalledOnce();
+    expect(harness.dependencies.getStorage).not.toHaveBeenCalled();
+    expect(harness.window.addEventListener).not.toHaveBeenCalled();
+    unsubscribe();
+    await client.destroy();
+    expect(harness.dependencies.getStorage).not.toHaveBeenCalled();
+    expect(harness.window.removeEventListener).not.toHaveBeenCalled();
+  });
+
+  test('listener registration that destroys and throws after effect is removed before settlement', async () => {
+    const harness = createHarness();
+    const listeners = new Set();
+    let client;
+    let destroyPromise;
+    const window = {
+      ...harness.window,
+      addEventListener(_type, listener) {
+        listeners.add(listener);
+        destroyPromise = client.destroy();
+        throw new Error('hostile addEventListener after effect');
+      },
+      removeEventListener(_type, listener) {
+        listeners.delete(listener);
+      },
+    };
+    const core = createInternalWalletClient({
+      adapters: TEST_BASE_ADAPTERS,
+      clientId: 'sdn-landing-web-v1',
+      dependencies: Object.freeze({ ...harness.dependencies, window }),
+    });
+    client = createPublicApi(core);
+
+    const operation = client.connect();
+    await destroyPromise;
+    await expect(operation).rejects.toMatchObject({ code: 'DESTROYED' });
+    expect(listeners.size).toBe(0);
+    expect(harness.window.open).not.toHaveBeenCalled();
+  });
+
+  test('listener removal exceptions cannot reject or interrupt local destruction', async () => {
+    const harness = createHarness();
+    const window = {
+      ...harness.window,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(() => { throw new Error('hostile removal'); }),
+    };
+    const core = createInternalWalletClient({
+      adapters: TEST_BASE_ADAPTERS,
+      clientId: 'sdn-landing-web-v1',
+      dependencies: Object.freeze({ ...harness.dependencies, window }),
+    });
+    const client = createPublicApi(core);
+    const operation = client.connect();
+    operation.catch(() => {});
+
+    await expect(client.destroy()).resolves.toBeUndefined();
+    await expect(operation).rejects.toMatchObject({ code: 'DESTROYED' });
+    expect(window.removeEventListener).toHaveBeenCalledOnce();
+  });
+
+  test.each([
+    {
+      create: createSdnWalletClient,
+      input: () => ({
+        challenge: Uint8Array.from({ length: 32 }, (_, index) => index),
+        protocolVersion: 1,
+      }),
+      invoke: (client, input) => client.requestSdnLoginV1(input),
+      name: 'SDN login',
+      result: () => rawSignature(),
+    },
+    {
+      create: createSdnWalletClient,
+      input: () => ({
+        audience: 'sdn-login:sdn.spaceaware.io',
+        challenge: Uint8Array.from({ length: 32 }, (_, index) => 31 - index),
+        expiresAt: '2026-07-21T12:05:00.000Z',
+        issuedAt: '2026-07-21T12:00:00.000Z',
+        nonce: '1'.repeat(64),
+        protocolVersion: 2,
+      }),
+      invoke: (client, input) => client.requestSdnLoginV2(input),
+      name: 'SDN v2 login',
+      result: (input) => canonicalSignature('sdn-login', input),
+    },
+    {
+      create: createAssetReviewWalletClient,
+      input: activationRequest,
+      invoke: (client, input) => client.requestAuthorityActivation(input),
+      name: 'authority activation',
+      result: (input) => canonicalSignature('asset-review-authority-activation', input),
+    },
+    {
+      create: createAssetReviewWalletClient,
+      input: approvalRequest,
+      invoke: (client, input) => client.requestAssetReviewApproval(input),
+      name: 'review decision',
+      result: (input) => canonicalSignature('asset-review-attestation', input),
+    },
+  ])('activates one callback channel for typed-first $name', async ({ create, input, invoke, result }) => {
+    const harness = createHarness();
+    const client = create();
+    const firstInput = input();
+    const firstResult = result(firstInput);
+
+    expect(harness.listenerCount('storage')).toBe(0);
+    harness.useRedeemResult(firstResult);
+    const operation = invoke(client, firstInput);
+    expect(harness.listenerCount('storage')).toBe(1);
+    await waitForLength(harness.registrations, 1);
+    harness.emitCallback();
+    await expect(operation).resolves.toEqual(firstResult);
+
+    const replacement = invoke(client, input());
+    replacement.catch(() => {});
+    expect(harness.listenerCount('storage')).toBe(1);
+    await client.destroy();
+    await expect(replacement).rejects.toMatchObject({ code: 'DESTROYED' });
+    expect(harness.listenerCount('storage')).toBe(0);
   });
 
   test('restores a still-valid public connection around typed success and typed failure', async () => {
@@ -1547,7 +1931,7 @@ describe('state, callback, and revocation lifecycle', () => {
     },
   );
 
-  test('destroy is terminal, cancels once, aborts requests, and removes every resource without a popup handle', async () => {
+  test('destroy is terminal, sends one keepalive cancellation, and removes every local resource', async () => {
     const harness = createHarness();
     const client = createWalletClient({ clientId: 'sdn-landing-web-v1' });
     const operation = client.connect();
@@ -1566,8 +1950,36 @@ describe('state, callback, and revocation lifecycle', () => {
     expect(vi.getTimerCount()).toBe(0);
     const destroyCancellation = harness.requests.filter(({ url }) => /\/cancel$/u.test(new URL(url).pathname));
     expect(destroyCancellation).toHaveLength(1);
-    expect(destroyCancellation[0].init.signal.aborted).toBe(true);
+    expect(destroyCancellation[0].init.keepalive).toBe(true);
+    expect(destroyCancellation[0].init.signal).toBeUndefined();
     await expect(client.connect()).rejects.toMatchObject({ code: 'DESTROYED' });
+  });
+
+  test('destroy lets its keepalive cancellation pass CORS preflight before releasing local state', async () => {
+    const harness = createHarness();
+    harness.setCustomFetch(async (url, init, fallback) => {
+      if (!/\/cancel$/u.test(new URL(String(url)).pathname)) return fallback(url, init);
+      await Promise.resolve();
+      if (init.signal?.aborted === true) throw new Error('cancellation aborted before dispatch');
+      return fallback(url, init);
+    });
+    const client = createWalletClient({ clientId: 'sdn-landing-web-v1' });
+    const operation = client.connect();
+    operation.catch(() => {});
+    await waitForLength(harness.registrations, 1);
+
+    await client.destroy();
+
+    await expect(operation).rejects.toMatchObject({ code: 'DESTROYED' });
+    await waitForLength(harness.cancellations, 1);
+    const cancellation = harness.requests.find(({ url }) => /\/cancel$/u.test(new URL(url).pathname));
+    expect(cancellation.init).toMatchObject({
+      credentials: 'omit',
+      keepalive: true,
+      method: 'POST',
+    });
+    expect(cancellation.init.signal).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

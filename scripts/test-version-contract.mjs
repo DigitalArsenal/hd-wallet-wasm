@@ -41,8 +41,10 @@ const expectedWorkspaceLockMetadata = {
     license: 'Apache-2.0',
     workspaces: expectedWorkspaces,
     devDependencies: {
+      esbuild: '0.21.5',
       flatbuffers: '^25.9.23',
       husky: '^9.1.7',
+      typescript: '5.9.2',
     },
     engines: {
       node: '>=24.0.0 <25',
@@ -68,21 +70,22 @@ const expectedWorkspaceLockMetadata = {
     version: expectedVersion,
     license: 'Apache-2.0',
     dependencies: {
+      'hd-wallet-wasm': expectedVersion,
+    },
+    devDependencies: {
       '@noble/curves': '^1.9.7',
       '@noble/hashes': '^1.7.2',
       '@peculiar/x509': '^1.14.3',
+      '@playwright/test': '1.61.1',
       '@scure/base': '^1.2.4',
       '@scure/bip32': '^2.0.1',
       bip39: '^3.1.0',
       buffer: '^6.0.3',
       flatbuffers: '^25.9.23',
       'flatc-wasm': '^26.1.32',
-      'hd-wallet-wasm': expectedVersion,
       qrcode: '^1.5.3',
       'spacedatastandards.org': '^1.93.3',
       'vcard-cryptoperson': '^1.1.11',
-    },
-    devDependencies: {
       vite: '^5.0.0',
       vitest: '^4.0.18',
     },
@@ -126,6 +129,10 @@ assert.equal(
   expectedVersion,
   'UI must depend on the exact workspace version of hd-wallet-wasm',
 );
+assert.deepEqual(uiPackage.dependencies, { 'hd-wallet-wasm': expectedVersion });
+assert.equal(uiPackage.devDependencies?.['@playwright/test'], '1.61.1');
+assert.equal(rootPackage.devDependencies?.esbuild, '0.21.5');
+assert.equal(rootPackage.devDependencies?.typescript, '5.9.2');
 assert.deepEqual(rootPackage.workspaces, expectedWorkspaces);
 assert.equal(rootPackage.packageManager, 'npm@11.16.0');
 assert.deepEqual(rootPackage.engines, { node: '>=24.0.0 <25', npm: '11.16.0' });

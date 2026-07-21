@@ -1,4 +1,4 @@
-import assetReviewProtocol from '../../release/protocol/asset-review-v1.json' with { type: 'json' };
+import assetReviewProtocol from './asset-review-policy.mjs';
 
 const textEncoder = new TextEncoder();
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
@@ -327,7 +327,7 @@ function validatePlainDenseArray(value, length, label) {
 function loadTransformPolicy(source) {
   const protocol = exactRecord(
     source,
-    ['boundaryVectors', 'reviewedTransform', 'schemaVersion'],
+    ['reviewedTransform', 'schemaVersion'],
     'asset review protocol policy',
   );
   exactLiteral(protocol.schemaVersion, 1, 'asset review protocol schemaVersion');

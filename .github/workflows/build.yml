@@ -66,6 +66,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
       - name: Setup Emscripten
         uses: mymindstorm/setup-emsdk@v14
         with:
@@ -99,7 +104,11 @@ jobs:
           test -f wasm/dist/hd-wallet.js
           test -f wasm/dist/hd-wallet.wasm
           test -f wasm/dist/hd-wallet-wasi.wasm
-          test -f wasm/dist/index.d.ts
+          test -f wasm/dist/wasm-loader.d.ts
+          test -f wasm/dist/runtime/index.mjs
+          test -f wasm/dist/runtime/index.d.ts
+          test -f wasm/dist/runtime/aligned.mjs
+          test -f wasm/dist/runtime/epm-attestation.mjs
 
       - name: Upload WASM artifacts
         uses: actions/upload-artifact@v4
@@ -131,9 +140,6 @@ jobs:
         with:
           name: wasm-build
           path: wasm/dist/
-
-      - name: Copy TypeScript definitions
-        run: cp wasm/src/index.d.ts wasm/dist/
 
       - name: Verify packaged WASM entrypoint
         run: node test/test_bundle_browser_artifact.mjs

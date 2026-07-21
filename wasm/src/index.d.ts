@@ -1127,15 +1127,13 @@ export enum WellKnownCoinType {
 
 /**
  * Initialize the HD Wallet WASM module
- * @param wasmPath - Optional path to WASM file
  */
-export default function init(wasmPath?: string): Promise<HDWalletModule>;
+export default function init(): Promise<HDWalletModule>;
 
 /**
  * Create HD Wallet instance (alternative syntax)
- * @param wasmPath - Optional path to WASM file
  */
-export function createHDWallet(wasmPath?: string): Promise<HDWalletModule>;
+export function createHDWallet(): Promise<HDWalletModule>;
 
 /** Resolve the immutable wallet-origin binding for its exact initialized owner. */
 export function getWalletOriginCapabilities(
@@ -1148,76 +1146,6 @@ export const SDN_PLUGIN_MANIFEST_EXPORTS: {
   sizeSymbol: string;
 };
 
-// =============================================================================
-// EPM Attestation
-// =============================================================================
-
-export interface ChainProofData {
-  CHAIN: string;
-  ADDRESS: string;
-  PUBLIC_KEY: string;
-  KEY_PATH: string;
-  SIGNATURE: string;
-  SIGNED_PAYLOAD: string;
-  ALGORITHM: string;
-  ENCODING: string;
-}
-
-export interface CanonicalPayloadParams {
-  xpub: string;
-  signingPubKeyHex: string;
-  encryptionPubKeyHex: string;
-  issuedAt: number;
-  identityPubKeyHex?: string;
-  version?: string;
-}
-
-export interface ChainKeyParams {
-  address: string;
-  publicKeyHex: string;
-  privateKey: Uint8Array;
-  keyPath: string;
-  canonicalPayload: string;
-}
-
-export interface AllChainProofsParams {
-  canonicalPayload: string;
-  bitcoin?: Omit<ChainKeyParams, 'canonicalPayload'>;
-  ethereum?: Omit<ChainKeyParams, 'canonicalPayload'>;
-  solana?: Omit<ChainKeyParams, 'canonicalPayload'>;
-}
-
-export interface ChainProofVerifyResult {
-  valid: boolean;
-  results: Array<{ chain: string; valid: boolean }>;
-}
-
-/** Build a canonical attestation payload for chain proof signing */
-export function buildCanonicalPayload(params: CanonicalPayloadParams): string;
-
-/** Build canonical EPM content bytes for signing (excludes SIGNATURE and SIGNATURE_TIMESTAMP) */
-export function buildEPMSigningContent(epm: Record<string, unknown>): Uint8Array;
-
-/** Sign EPM content with an Ed25519 private key */
-export function signEPMContent(wallet: HDWalletModule, epm: Record<string, unknown>, ed25519PrivateKey: Uint8Array): { signature: string; timestamp: number };
-
-/** Verify an EPM content signature */
-export function verifyEPMSignature(wallet: HDWalletModule, epm: Record<string, unknown>, ed25519PublicKey: Uint8Array): boolean;
-
-/** Build a Bitcoin chain proof */
-export function buildBitcoinChainProof(wallet: HDWalletModule, params: ChainKeyParams): ChainProofData;
-
-/** Build an Ethereum chain proof */
-export function buildEthereumChainProof(wallet: HDWalletModule, params: ChainKeyParams): ChainProofData;
-
-/** Build a Solana chain proof */
-export function buildSolanaChainProof(wallet: HDWalletModule, params: ChainKeyParams): ChainProofData;
-
-/** Build all chain proofs for a full identity attestation */
-export function buildAllChainProofs(wallet: HDWalletModule, params: AllChainProofsParams): ChainProofData[];
-
-/** Verify a single chain proof */
-export function verifyChainProof(wallet: HDWalletModule, proof: ChainProofData): boolean;
-
-/** Verify all chain proofs in an EPM */
-export function verifyAllChainProofs(wallet: HDWalletModule, chainProofs: ChainProofData[]): ChainProofVerifyResult;
+// Keep the root declaration surface identical to the dedicated attestation
+// subpath instead of maintaining a second, diverging copy of these types.
+export * from './epm-attestation.js';

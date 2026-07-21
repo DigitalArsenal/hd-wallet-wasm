@@ -26,6 +26,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
       - name: Setup Emscripten
         uses: mymindstorm/setup-emsdk@v14
         with:
@@ -58,14 +63,14 @@ jobs:
       - name: Cache CMake build
         uses: actions/cache@v4
         with:
-          path: build/_deps/cryptopp*
+          path: build-wasm/_deps/cryptopp*
           key: cryptopp-wasm-${{ runner.os }}-8.9.0-emsdk-3.1.51
 
       - name: Configure CMake with Emscripten
-        run: emcmake cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DHD_WALLET_BUILD_WASM=ON -DHD_WALLET_USE_OPENSSL=ON
+        run: emcmake cmake -B build-wasm -S . -DCMAKE_BUILD_TYPE=Release -DHD_WALLET_BUILD_WASM=ON -DHD_WALLET_USE_OPENSSL=ON
 
       - name: Build WASM targets
-        run: cmake --build build --parallel $(nproc) --target hd_wallet_wasm_npm
+        run: cmake --build build-wasm --parallel $(nproc) --target hd_wallet_wasm_npm
 
       - name: Verify build output
         run: |
@@ -74,6 +79,22 @@ jobs:
           test -f wasm/dist/hd-wallet.js
           test -f wasm/dist/hd-wallet.wasm
           test -f wasm/dist/hd-wallet-wasi.wasm
+          test -f wasm/dist/wasm-loader.d.ts
+          test -f wasm/dist/runtime/index.mjs
+          test -f wasm/dist/runtime/index.d.ts
+
+      - name: Install release dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build UI release package
+        run: npm --workspace hd-wallet-ui run build:release
+
+      - name: Upload UI package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-package
+          path: wallet-ui/dist/
+          retention-days: 1
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -202,6 +223,12 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org/"
 
+      - name: Download UI package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ui-package
+          path: wallet-ui/dist/
+
       - name: Extract version from tag
         if: startsWith(github.ref, 'refs/tags/v')
         id: version
@@ -219,19 +246,20 @@ jobs:
           else
             WASM_VERSION="$(node -p "require('../wasm/package.json').version")"
           fi
-          # Replace file: dependency with published version
+          # Preserve the exact reviewed core/UI release pair.
           node -e "
             const pkg = require('./package.json');
-            pkg.dependencies['hd-wallet-wasm'] = '^${WASM_VERSION}';
+            pkg.dependencies['hd-wallet-wasm'] = '${WASM_VERSION}';
             require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
-          echo "Updated hd-wallet-wasm dependency to ^${WASM_VERSION}"
+          echo "Updated hd-wallet-wasm dependency to ${WASM_VERSION}"
           cat package.json | head -40
 
       - name: Wait for hd-wallet-wasm to propagate on npm
+        if: github.event.inputs.dry_run != 'true'
         run: |
           cd wallet-ui
-          WASM_VERSION=$(node -p "require('./package.json').dependencies['hd-wallet-wasm'].replace('^','')")
+          WASM_VERSION=$(node -p "require('./package.json').dependencies['hd-wallet-wasm']")
           echo "Waiting for hd-wallet-wasm@${WASM_VERSION} on npm registry..."
           for i in $(seq 1 30); do
             if npm view "hd-wallet-wasm@${WASM_VERSION}" version 2>/dev/null; then
@@ -243,10 +271,6 @@ jobs:
           done
           echo "Timed out waiting for hd-wallet-wasm@${WASM_VERSION}"
           exit 1
-
-      - name: Install dependencies
-        run: npm install --ignore-scripts
-        working-directory: wallet-ui
 
       - name: Verify package
         run: npm pack --dry-run

@@ -11,6 +11,7 @@ const MAX_CALLBACK_MS = 120_000;
 const MAX_RETIRED_CLEANUPS = 8;
 const MAX_REGISTRATION_RESPONSE_BYTES = 4_096;
 const MAX_REDEEM_RESPONSE_BYTES = 70 * 1_024;
+const MAX_CALLBACK_RECORD_SCAN = 64;
 
 export const WALLET_CLIENT_ERRORS = Object.freeze({
   CALLBACK_ERROR: 'The wallet return could not be verified. Try again.',
@@ -53,7 +54,8 @@ function isObjectRecord(value) {
 }
 
 function parseJsonWithoutDuplicates(text, maximumBytes) {
-  if (typeof text !== 'string' || textEncoder.encode(text).byteLength > maximumBytes
+  if (typeof text !== 'string' || text.length > maximumBytes
+      || textEncoder.encode(text).byteLength > maximumBytes
       || text.charCodeAt(0) === 0xfeff) {
     throw walletClientError('RELAY_ERROR');
   }
@@ -405,7 +407,7 @@ async function readResponseText(response, maximumBytes, controller) {
 }
 
 function requestOptions(body, signal) {
-  return {
+  const options = {
     body: JSON.stringify(body),
     cache: 'no-store',
     credentials: 'omit',
@@ -414,8 +416,9 @@ function requestOptions(body, signal) {
     mode: 'cors',
     redirect: 'error',
     referrerPolicy: 'no-referrer',
-    signal,
   };
+  if (signal !== undefined) options.signal = signal;
+  return options;
 }
 
 function callbackRecord(text, expectedState, now) {
@@ -457,24 +460,22 @@ function makeOperation() {
 
 function browserDependencies() {
   const windowObject = globalThis.window;
-  let storage = null;
-  if (windowObject) {
-    try {
-      storage = windowObject.localStorage ?? null;
-    } catch {
-      storage = null;
-    }
-  }
   return Object.freeze({
     AbortController: globalThis.AbortController,
     clearInterval: globalThis.clearInterval.bind(globalThis),
     clearTimeout: globalThis.clearTimeout.bind(globalThis),
     crypto: globalThis.crypto,
     fetch: typeof globalThis.fetch === 'function' ? globalThis.fetch.bind(globalThis) : undefined,
+    getStorage: () => {
+      try {
+        return windowObject?.localStorage ?? null;
+      } catch {
+        return null;
+      }
+    },
     now: () => Date.now(),
     setInterval: globalThis.setInterval.bind(globalThis),
     setTimeout: globalThis.setTimeout.bind(globalThis),
-    storage,
     window: windowObject,
   });
 }
@@ -482,6 +483,9 @@ function browserDependencies() {
 class InternalWalletClient {
   #adapters;
   #clientId;
+  #callbackActivationInProgress = false;
+  #callbackActivationCompromised = false;
+  #callbackChannelActivated = false;
   #connection = null;
   #connectionTimer = null;
   #controllers = new Set();
@@ -496,8 +500,9 @@ class InternalWalletClient {
   #publishing = false;
   #retired = new Set();
   #state = Object.freeze({ identity: null, status: 'dormant' });
-  #storage;
-  #storageListener;
+  #storage = null;
+  #storageListener = null;
+  #storageListenerRemoval = null;
   #timers = new Set();
   #window;
 
@@ -506,15 +511,6 @@ class InternalWalletClient {
     this.#clientId = clientId;
     this.#dependencies = dependencies ?? browserDependencies();
     this.#window = this.#dependencies.window;
-    this.#storage = this.#dependencies.storage;
-    this.#removeExpiredCallbackRecords();
-    this.#storageListener = (event) => {
-      const pending = this.#pending;
-      if (!pending || !this.#isActive(pending)) return;
-      const key = `${CALLBACK_PREFIX}${pending.state}`;
-      if (event?.key === key) void this.#consumeCallback(pending, true);
-    };
-    this.#window?.addEventListener?.('storage', this.#storageListener);
   }
 
   getSnapshot() {
@@ -554,7 +550,18 @@ class InternalWalletClient {
     }
     let entryFailure = this.#entryFailure(observedEntryEpoch);
     if (entryFailure) return Promise.reject(entryFailure);
+    if (this.#callbackActivationInProgress) {
+      this.#callbackActivationCompromised = true;
+      return Promise.reject(walletClientError('REPLACED'));
+    }
     const entryEpoch = ++this.#entryEpoch;
+
+    this.#activateCallbackChannel();
+    entryFailure = this.#entryFailure(entryEpoch);
+    if (entryFailure) return Promise.reject(entryFailure);
+    if (this.#callbackActivationCompromised) {
+      return Promise.reject(walletClientError('CALLBACK_ERROR'));
+    }
 
     this.#expireConnectionIfNeeded();
     entryFailure = this.#entryFailure(entryEpoch);
@@ -707,16 +714,17 @@ class InternalWalletClient {
     this.#destroyed = true;
     this.#generation += 1;
     this.#clearConnection();
+    const cancellations = [];
     const current = this.#pending;
     if (current) {
       current.active = false;
       this.#pending = null;
       this.#clearOperationTimers(current);
       current.reject(walletClientError('DESTROYED'));
-      if (current.challenge && current.verifier) void this.#cancelOnce(current);
+      if (current.challenge && current.verifier) cancellations.push(current);
     }
     for (const retired of this.#retired) {
-      if (retired.challenge && retired.verifier) void this.#cancelOnce(retired);
+      if (retired.challenge && retired.verifier) cancellations.push(retired);
     }
     for (const controller of this.#controllers) controller.abort();
     this.#controllers.clear();
@@ -725,8 +733,18 @@ class InternalWalletClient {
       this.#dependencies.clearInterval(timer);
     }
     this.#timers.clear();
-    this.#window?.removeEventListener?.('storage', this.#storageListener);
+    if (this.#storageListenerRemoval) {
+      try {
+        this.#storageListenerRemoval();
+      } catch {
+        // Host cleanup is best effort; all local references are still cleared.
+      }
+    }
+    this.#storageListener = null;
+    this.#storageListenerRemoval = null;
+    this.#storage = null;
     this.#listeners.clear();
+    for (const pending of cancellations) this.#cancelOnDestroy(pending);
     if (current) this.#finishCleanup(current);
     for (const retired of [...this.#retired]) this.#finishCleanup(retired);
     this.#publish({
@@ -1286,6 +1304,28 @@ class InternalWalletClient {
     }
   }
 
+  #cancelOnDestroy(pending) {
+    let transport;
+    try {
+      transport = this.#dependencies.fetch(
+        `${WALLET_ORIGIN}/relay/v1/transactions/${pending.transactionId}/cancel`,
+        {
+          ...requestOptions({
+            codeVerifier: pending.verifier,
+            schemaVersion: 1,
+            state: pending.state,
+            transactionId: pending.transactionId,
+          }),
+          // Let the browser finish the tiny revocation after local teardown or unload.
+          keepalive: true,
+        },
+      );
+    } catch {
+      return;
+    }
+    suppressSettlement(Promise.resolve(transport).then(bestEffortBodyCancel));
+  }
+
   #finishCleanup(pending) {
     if (pending.cleanupFinished) return;
     pending.cleanupFinished = true;
@@ -1313,16 +1353,105 @@ class InternalWalletClient {
     pending.cleanup.resolve();
   }
 
+  #activateCallbackChannel() {
+    if (this.#callbackChannelActivated || this.#destroyed) return;
+    this.#callbackChannelActivated = true;
+    this.#callbackActivationInProgress = true;
+    try {
+      let storage = null;
+      try {
+        const getStorage = this.#dependencies.getStorage;
+        storage = typeof getStorage === 'function'
+          ? Reflect.apply(getStorage, undefined, [])
+          : this.#dependencies.storage ?? null;
+      } catch {
+        storage = null;
+        this.#callbackActivationCompromised = true;
+      }
+      try {
+        if (!storage || typeof storage.getItem !== 'function'
+            || typeof storage.removeItem !== 'function') {
+          this.#callbackActivationCompromised = true;
+        }
+      } catch {
+        this.#callbackActivationCompromised = true;
+      }
+      if (this.#destroyed || this.#callbackActivationCompromised) {
+        this.#storage = null;
+        return;
+      }
+      this.#storage = storage;
+      this.#removeExpiredCallbackRecords();
+      if (this.#destroyed || this.#callbackActivationCompromised) {
+        this.#storage = null;
+        return;
+      }
+      const listener = (event) => {
+        const pending = this.#pending;
+        if (!pending || !this.#isActive(pending)) return;
+        const key = `${CALLBACK_PREFIX}${pending.state}`;
+        if (event?.key === key) void this.#consumeCallback(pending, true);
+      };
+      this.#storageListener = listener;
+      let added = false;
+      let removeListener = null;
+      try {
+        const addEventListener = this.#window?.addEventListener;
+        const removeEventListener = this.#window?.removeEventListener;
+        if (typeof addEventListener !== 'function' || typeof removeEventListener !== 'function') {
+          throw new TypeError('storage events unavailable');
+        }
+        removeListener = () => Reflect.apply(
+          removeEventListener,
+          this.#window,
+          ['storage', listener],
+        );
+        this.#storageListenerRemoval = removeListener;
+        Reflect.apply(addEventListener, this.#window, ['storage', this.#storageListener]);
+        added = true;
+      } catch {
+        // addEventListener may throw after registering, so removal is required.
+        this.#callbackActivationCompromised = true;
+      }
+      if (!added || this.#destroyed || this.#callbackActivationCompromised) {
+        try {
+          removeListener?.();
+        } catch {
+          // A hostile host cannot retain any local reference after activation fails.
+        }
+        this.#storageListener = null;
+        this.#storageListenerRemoval = null;
+        this.#storage = null;
+      }
+    } finally {
+      this.#callbackActivationInProgress = false;
+    }
+  }
+
   #removeExpiredCallbackRecords() {
     const storage = this.#storage;
     if (!storage) return;
-    let keys;
+    let length;
     try {
-      keys = Array.from({ length: storage.length }, (_, index) => storage.key(index));
+      length = storage.length;
     } catch {
       return;
     }
+    if (!Number.isSafeInteger(length) || length < 0) return;
+    const maximum = Math.min(length, MAX_CALLBACK_RECORD_SCAN);
+    const keys = [];
+    for (let index = 0; index < maximum && !this.#destroyed
+        && !this.#callbackActivationCompromised; index += 1) {
+      let key;
+      try {
+        key = storage.key(index);
+      } catch {
+        continue;
+      }
+      keys.push(key);
+    }
     for (const key of keys) {
+      if (this.#destroyed || this.#callbackActivationCompromised) return;
       if (typeof key !== 'string' || !key.startsWith(CALLBACK_PREFIX)) continue;
       const state = key.slice(CALLBACK_PREFIX.length);
       if (!LOWER_HEX_32.test(state)) continue;

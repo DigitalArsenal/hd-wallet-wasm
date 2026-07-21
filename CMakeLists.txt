@@ -1188,6 +1188,19 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       )
     endif()
 
+    # Stage the typed high-level runtime only after the canonical raw/WASI
+    # artifacts and all post-processing are complete. Every local and hosted
+    # caller of hd_wallet_wasm_npm therefore receives the same package graph.
+    find_program(NODE_PROGRAM NAMES node)
+    if(NOT NODE_PROGRAM)
+      message(FATAL_ERROR "Node.js is required to stage the core NPM package")
+    endif()
+    add_custom_command(TARGET hd_wallet_wasm_npm POST_BUILD
+      COMMAND "${NODE_PROGRAM}" "${CMAKE_SOURCE_DIR}/scripts/stage-core-package.mjs"
+      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      COMMENT "Staging deterministic typed core package runtime"
+    )
+
     message(STATUS "WASM targets configured:")
     message(STATUS "  hd_wallet_wasm        - WASI standalone module (.wasm)")
     message(STATUS "  hd_wallet_wasm_js     - JavaScript ES6 module (.js + .wasm)")
