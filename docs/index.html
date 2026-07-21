@@ -9,8 +9,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=SF+Pro+Display:wght@400;500;600;700&family=SF+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <script type="module" crossorigin src="./assets/main-bXNpiBVZ.js"></script>
-  <link rel="stylesheet" crossorigin href="./assets/main-CovaVBIw.css">
+  <script type="module" crossorigin src="./assets/main-BZijXIsi.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/main-C42vJCbh.css">
 </head>
 <body>
   <!-- Blurred Background -->
@@ -29,22 +29,23 @@
         <span>HD Wallet</span>
       </a>
       <div class="nav-links" id="demo-nav-links">
-        <a href="#packages" class="nav-link">Packages</a>
-        <a href="#features" class="nav-link">Features</a>
-        <a href="#quickstart" class="nav-link">Quick Start</a>
-        <a href="#x509-pki" class="nav-link">X.509 PKI</a>
-        <a href="#blockchains" class="nav-link">Blockchains</a>
-        <a href="#adversarial" class="nav-link">Security</a>
+        <a href="#packages" class="nav-link" data-i18n="nav.packages">Packages</a>
+        <a href="#features" class="nav-link" data-i18n="nav.features">Features</a>
+        <a href="#quickstart" class="nav-link" data-i18n="nav.quickstart">Quick Start</a>
+        <a href="#x509-pki" class="nav-link" data-i18n="nav.pki">X.509 PKI</a>
+        <a href="#blockchains" class="nav-link" data-i18n="nav.blockchains">Blockchains</a>
+        <a href="#adversarial" class="nav-link" data-i18n="nav.security">Security</a>
       </div>
       <div class="nav-actions">
-        <button id="nav-login" class="nav-btn glass-btn primary">Login</button>
+        <select id="lang-switcher" class="lang-switcher" aria-label="Language" data-i18n-attr="aria-label:lang.label"></select>
+        <button id="nav-login" class="nav-btn glass-btn primary" data-i18n="nav.login">Login</button>
         <button id="nav-keys" class="nav-icon-btn" style="display: none;" title="Account">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
             <circle cx="12" cy="7" r="4"/>
           </svg>
         </button>
-        <button id="nav-logout" class="nav-btn glass-btn" style="display: none;">Logout</button>
+        <button id="nav-logout" class="nav-btn glass-btn" style="display: none;" data-i18n="nav.logout">Logout</button>
         <button id="nav-menu-btn" class="nav-menu-btn" aria-label="Toggle menu">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="3" y1="6" x2="21" y2="6"/>
@@ -58,28 +59,28 @@
 
   <!-- Mobile Menu -->
   <div id="nav-mobile-menu" class="nav-mobile-menu">
-    <a href="#packages" class="nav-link">Packages</a>
-    <a href="#features" class="nav-link">Features</a>
-    <a href="#quickstart" class="nav-link">Quick Start</a>
-    <a href="#x509-pki" class="nav-link">X.509 PKI</a>
-    <a href="#blockchains" class="nav-link">Blockchains</a>
-    <a href="#adversarial" class="nav-link">Security</a>
+    <a href="#packages" class="nav-link" data-i18n="nav.packages">Packages</a>
+    <a href="#features" class="nav-link" data-i18n="nav.features">Features</a>
+    <a href="#quickstart" class="nav-link" data-i18n="nav.quickstart">Quick Start</a>
+    <a href="#x509-pki" class="nav-link" data-i18n="nav.pki">X.509 PKI</a>
+    <a href="#blockchains" class="nav-link" data-i18n="nav.blockchains">Blockchains</a>
+    <a href="#adversarial" class="nav-link" data-i18n="nav.security">Security</a>
     <div class="nav-divider"></div>
-    <button id="mobile-login" class="glass-btn primary mobile-auth-btn">Login</button>
-    <button id="mobile-logout" class="glass-btn mobile-auth-btn" style="display: none;">Logout</button>
+    <button id="mobile-login" class="glass-btn primary mobile-auth-btn" data-i18n="nav.login">Login</button>
+    <button id="mobile-logout" class="glass-btn mobile-auth-btn" style="display: none;" data-i18n="nav.logout">Logout</button>
   </div>
 
   <!-- Hero Section -->
   <section class="hero-section page-section" id="hero">
     <div class="hero-content">
       <h1 class="hero-title">HD Wallet <span class="text-gradient">WASM</span></h1>
-      <p class="hero-subtitle">
+      <p class="hero-subtitle" data-i18n="hero.subtitle">
         A comprehensive hierarchical deterministic wallet implementation in pure C++,
         compiled to WebAssembly for cross-platform compatibility. BIP-32/39/44 compliant
         with multi-curve cryptography and multi-chain support.
       </p>
       <div class="hero-actions">
-        <button id="hero-login" class="glass-btn primary hero-btn">Try Interactive Demo</button>
+        <button id="hero-login" class="glass-btn primary hero-btn" data-i18n="hero.demo">Try Interactive Demo</button>
         <a href="https://github.com/DigitalArsenal/hd-wallet-wasm" class="glass-btn hero-btn" target="_blank" rel="noopener">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
           GitHub
@@ -91,7 +92,7 @@
   <!-- Packages -->
   <section class="homepage-section page-section" id="packages">
     <div class="section-container">
-      <h2 class="section-heading">Packages</h2>
+      <h2 class="section-heading" data-i18n="packages.heading">Packages</h2>
       <div class="features-grid" style="grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));align-items:stretch;">
 
         <!-- hd-wallet-wasm -->
@@ -100,7 +101,7 @@
             <div class="feature-icon" style="margin:0;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></div>
             <h3 style="margin:0;">hd-wallet-wasm</h3>
           </div>
-          <p>Core WebAssembly library. BIP-32/39/44 HD key derivation, multi-curve cryptography, X.509 certificate issuance, wallet attestations, address generation, signing, and encryption for 50+ blockchains.</p>
+          <p data-i18n="packages.wasm.desc">Core WebAssembly library. BIP-32/39/44 HD key derivation, multi-curve cryptography, X.509 certificate issuance, wallet attestations, address generation, signing, and encryption for 50+ blockchains.</p>
           <div class="code-block" style="margin:1rem 0;">
             <div class="code-block-header">
               <span class="code-lang">bash</span>
@@ -135,7 +136,7 @@ const address = wallet.bitcoin.getAddress(btcKey.publicKey(), 2);</code></pre>
             <div class="feature-icon" style="margin:0;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg></div>
             <h3 style="margin:0;">hd-wallet-ui</h3>
           </div>
-          <p>Drop-in modal UI for any web app. Provides login, key management, identity (vCard), trust map, and adversarial security bond modals. Attach to any button &mdash; fully styleable via CSS custom properties.</p>
+          <p data-i18n="packages.ui.desc">Drop-in modal UI for any web app. Provides login, key management, identity (vCard), trust map, and adversarial security bond modals. Attach to any button &mdash; fully styleable via CSS custom properties.</p>
           <div class="code-block" style="margin:1rem 0;">
             <div class="code-block-header">
               <span class="code-lang">bash</span>
@@ -161,7 +162,7 @@ wallet.openAccount();
 // Remove all injected UI
 wallet.destroy();</code></pre>
           </div>
-          <p style="font-size:0.85rem;opacity:0.7;margin:0.5rem 0;">Headless utilities (address derivation, wallet storage) are also available via <code>hd-wallet-ui/lib</code>.</p>
+          <p style="font-size:0.85rem;opacity:0.7;margin:0.5rem 0;" data-i18n-html="packages.ui.note">Headless utilities (address derivation, wallet storage) are also available via <code>hd-wallet-ui/lib</code>.</p>
           <div style="flex:1;"></div>
           <div style="display:flex;gap:0.75rem;margin-top:1rem;">
             <a href="https://www.npmjs.com/package/hd-wallet-ui" class="glass-btn small" target="_blank" rel="noopener" style="font-size:0.85rem;padding:0.45rem 0.9rem;">npm</a>
@@ -176,42 +177,42 @@ wallet.destroy();</code></pre>
   <!-- Features Grid -->
   <section class="homepage-section page-section" id="features">
     <div class="section-container">
-      <h2 class="section-heading">Features</h2>
+      <h2 class="section-heading" data-i18n="features.heading">Features</h2>
       <div class="features-grid">
         <div class="feature-card glass-card">
           <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg></div>
-          <h3>BIP Standards Compliant</h3>
-          <p>Full implementation of BIP-32 (HD keys), BIP-39 (mnemonic phrases), BIP-44/49/84 (account hierarchy), and SLIP-44 (coin types).</p>
+          <h3 data-i18n="features.bip.title">BIP Standards Compliant</h3>
+          <p data-i18n="features.bip.desc">Full implementation of BIP-32 (HD keys), BIP-39 (mnemonic phrases), BIP-44/49/84 (account hierarchy), and SLIP-44 (coin types).</p>
         </div>
         <div class="feature-card glass-card">
           <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg></div>
-          <h3>Multi-Curve Cryptography</h3>
-          <p>Support for secp256k1 (Bitcoin, Ethereum), Ed25519 (Solana, Polkadot), NIST P-256, P-384, and X25519 key exchange.</p>
+          <h3 data-i18n="features.curve.title">Multi-Curve Cryptography</h3>
+          <p data-i18n="features.curve.desc">Support for secp256k1 (Bitcoin, Ethereum), Ed25519 (Solana, Polkadot), NIST P-256, P-384, and X25519 key exchange.</p>
         </div>
         <div class="feature-card glass-card">
           <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101"/><path d="M10.172 13.828a4 4 0 005.656 0l4-4a4 4 0 10-5.656-5.656l-1.102 1.101"/></svg></div>
-          <h3>Multi-Chain Support</h3>
-          <p>Bitcoin (all address types), Ethereum/EVM, Solana, Cosmos/Tendermint, Polkadot/Substrate, and 50+ coins via SLIP-44.</p>
+          <h3 data-i18n="features.chain.title">Multi-Chain Support</h3>
+          <p data-i18n="features.chain.desc">Bitcoin (all address types), Ethereum/EVM, Solana, Cosmos/Tendermint, Polkadot/Substrate, and 50+ coins via SLIP-44.</p>
         </div>
         <div class="feature-card glass-card">
           <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></div>
-          <h3>WebAssembly Native</h3>
-          <p>Compiled to WASM for browser, Node.js, and WASI runtimes. Works with Go, Rust, Python, and any WASI-compatible host.</p>
+          <h3 data-i18n="features.wasm.title">WebAssembly Native</h3>
+          <p data-i18n="features.wasm.desc">Compiled to WASM for browser, Node.js, and WASI runtimes. Works with Go, Rust, Python, and any WASI-compatible host.</p>
         </div>
         <div class="feature-card glass-card">
           <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 11V7a5 5 0 0 1 10 0v4"/><path d="M5 11h14v9H5z"/><path d="M12 15v2"/><path d="M9 20h6"/></svg></div>
-          <h3>X.509 and Wallet Proofs</h3>
-          <p>Issue standard P-256/P-384 certificates, exchange PEM/DER/PKCS#12, and embed wallet attestations that bind a certificate to a selected crypto key.</p>
+          <h3 data-i18n="features.x509.title">X.509 and Wallet Proofs</h3>
+          <p data-i18n="features.x509.desc">Issue standard P-256/P-384 certificates, exchange PEM/DER/PKCS#12, and embed wallet attestations that bind a certificate to a selected crypto key.</p>
         </div>
         <div class="feature-card glass-card">
           <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M12 12h.01M17 12h.01M7 12h.01"/></svg></div>
-          <h3>Hardware Wallet Support</h3>
-          <p>Abstraction layer for Trezor, Ledger, and KeepKey devices with WASI bridge integration for USB/HID communication.</p>
+          <h3 data-i18n="features.hw.title">Hardware Wallet Support</h3>
+          <p data-i18n="features.hw.desc">Abstraction layer for Trezor, Ledger, and KeepKey devices with WASI bridge integration for USB/HID communication.</p>
         </div>
         <div class="feature-card glass-card">
           <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
-          <h3>Security First</h3>
-          <p>Secure memory wiping, optional FIPS-compliant mode, and comprehensive input validation for production use.</p>
+          <h3 data-i18n="features.sec.title">Security First</h3>
+          <p data-i18n="features.sec.desc">Secure memory wiping, optional FIPS-compliant mode, and comprehensive input validation for production use.</p>
         </div>
       </div>
     </div>
@@ -220,11 +221,11 @@ wallet.destroy();</code></pre>
   <!-- Quick Start Code -->
   <section class="homepage-section page-section" id="quickstart">
     <div class="section-container section-sm">
-      <h2 class="section-heading">Quick Start</h2>
+      <h2 class="section-heading" data-i18n="quickstart.heading">Quick Start</h2>
       <div class="example-tabs">
-        <button class="example-tab active" data-example="addresses">Addresses</button>
-        <button class="example-tab" data-example="signing">Signing</button>
-        <button class="example-tab" data-example="encryption">Encryption</button>
+        <button class="example-tab active" data-example="addresses" data-i18n="quickstart.addresses">Addresses</button>
+        <button class="example-tab" data-example="signing" data-i18n="quickstart.signing">Signing</button>
+        <button class="example-tab" data-example="encryption" data-i18n="quickstart.encryption">Encryption</button>
       </div>
       <div class="code-block">
         <div class="code-block-header">
@@ -299,20 +300,20 @@ const result = wallet.utils.aesGcm.decrypt(
   <!-- X.509 PKI -->
   <section class="homepage-section page-section" id="x509-pki">
     <div class="section-container">
-      <h2 class="section-heading">X.509 PKI</h2>
-      <p class="section-subheading">Standard Web PKI for TLS and device identity, with a wallet-backed attestation layer that binds certificates to HD-wallet keys.</p>
+      <h2 class="section-heading" data-i18n="pki.heading">X.509 PKI</h2>
+      <p class="section-subheading" data-i18n="pki.subheading">Standard Web PKI for TLS and device identity, with a wallet-backed attestation layer that binds certificates to HD-wallet keys.</p>
 
       <div class="x509-overview glass-card">
         <div class="x509-copy">
-          <span class="x509-eyebrow">Why we use it</span>
-          <h3>X.509 is what the rest of the internet already understands</h3>
-          <p>Browsers, load balancers, reverse proxies, mTLS deployments, device identity systems, and keystore tooling all already speak X.509. That means if we want a certificate that real infrastructure can consume, we use normal Web PKI instead of inventing a repo-local identity format.</p>
-          <p>What `hd-wallet-wasm` adds is a second proof path: the certificate can carry a wallet attestation signed by a selected wallet key. The certificate remains interoperable for TLS, and applications that care about wallet identity can verify the extra proof.</p>
+          <span class="x509-eyebrow" data-i18n="pki.eyebrow">Why we use it</span>
+          <h3 data-i18n="pki.title">X.509 is what the rest of the internet already understands</h3>
+          <p data-i18n="pki.p1">Browsers, load balancers, reverse proxies, mTLS deployments, device identity systems, and keystore tooling all already speak X.509. That means if we want a certificate that real infrastructure can consume, we use normal Web PKI instead of inventing a repo-local identity format.</p>
+          <p data-i18n="pki.p2">What `hd-wallet-wasm` adds is a second proof path: the certificate can carry a wallet attestation signed by a selected wallet key. The certificate remains interoperable for TLS, and applications that care about wallet identity can verify the extra proof.</p>
           <div class="x509-tag-row">
             <span class="x509-tag">P-256 / P-384</span>
             <span class="x509-tag">PEM / DER / PKCS#12</span>
             <span class="x509-tag">TLS + mTLS</span>
-            <span class="x509-tag">Wallet Attestations</span>
+            <span class="x509-tag" data-i18n="pki.tag.attest">Wallet Attestations</span>
           </div>
         </div>
         <div class="code-block">
@@ -356,35 +357,35 @@ const walletProofValid = wallet.x509.verifyWalletAttestation(certPem);</code></p
       </div>
 
       <div class="adversarial-flow x509-flow glass-card">
-        <div class="flow-step"><div class="flow-step-icon" style="background:rgba(96,165,250,0.15);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="1.5" stroke-linecap="round"><path d="M12 2l7 4v5c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6l7-4z"/><path d="M9 12l2 2 4-4"/></svg></div><div class="flow-step-label">Generate Cert Key</div></div>
+        <div class="flow-step"><div class="flow-step-icon" style="background:rgba(96,165,250,0.15);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="1.5" stroke-linecap="round"><path d="M12 2l7 4v5c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6l7-4z"/><path d="M9 12l2 2 4-4"/></svg></div><div class="flow-step-label" data-i18n="pki.flow.gen">Generate Cert Key</div></div>
         <div class="flow-arrow"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14m-4-4l4 4-4 4"/></svg></div>
-        <div class="flow-step"><div class="flow-step-icon" style="background:rgba(52,211,153,0.15);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="1.5" stroke-linecap="round"><path d="M7 11V7a5 5 0 0 1 10 0v4"/><path d="M5 11h14v9H5z"/><path d="M12 15v2"/></svg></div><div class="flow-step-label">Issue X.509 Cert</div></div>
+        <div class="flow-step"><div class="flow-step-icon" style="background:rgba(52,211,153,0.15);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="1.5" stroke-linecap="round"><path d="M7 11V7a5 5 0 0 1 10 0v4"/><path d="M5 11h14v9H5z"/><path d="M12 15v2"/></svg></div><div class="flow-step-label" data-i18n="pki.flow.issue">Issue X.509 Cert</div></div>
         <div class="flow-arrow"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14m-4-4l4 4-4 4"/></svg></div>
-        <div class="flow-step"><div class="flow-step-icon" style="background:rgba(251,191,36,0.15);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-linecap="round"><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></div><div class="flow-step-label">Embed Wallet Proof</div></div>
+        <div class="flow-step"><div class="flow-step-icon" style="background:rgba(251,191,36,0.15);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-linecap="round"><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></div><div class="flow-step-label" data-i18n="pki.flow.embed">Embed Wallet Proof</div></div>
         <div class="flow-arrow"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14m-4-4l4 4-4 4"/></svg></div>
-        <div class="flow-step"><div class="flow-step-icon" style="background:rgba(248,113,113,0.15);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f87171" stroke-width="1.5" stroke-linecap="round"><path d="M3 12h6l3 8 4-16 3 8h2"/></svg></div><div class="flow-step-label">Verify Chain + Wallet</div></div>
+        <div class="flow-step"><div class="flow-step-icon" style="background:rgba(248,113,113,0.15);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f87171" stroke-width="1.5" stroke-linecap="round"><path d="M3 12h6l3 8 4-16 3 8h2"/></svg></div><div class="flow-step-label" data-i18n="pki.flow.verify">Verify Chain + Wallet</div></div>
       </div>
 
       <div class="features-grid x509-grid">
         <div class="feature-card glass-card">
           <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l7 4v5c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6l7-4z"/></svg></div>
-          <h3>How It Works</h3>
-          <p>Certificate issuance stays on regular P-256 or P-384 keys. The repo can create self-signed certs, issue subordinates, convert PEM and DER, and package material as PKCS#12 for normal keystores.</p>
+          <h3 data-i18n="pki.card1.title">How It Works</h3>
+          <p data-i18n="pki.card1.desc">Certificate issuance stays on regular P-256 or P-384 keys. The repo can create self-signed certs, issue subordinates, convert PEM and DER, and package material as PKCS#12 for normal keystores.</p>
         </div>
         <div class="feature-card glass-card">
           <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 11V7a5 5 0 0 1 10 0v4"/><path d="M5 11h14v9H5z"/><path d="M12 15v2"/></svg></div>
-          <h3>Why It Matters</h3>
-          <p>Standard TLS tooling gets a normal certificate. Wallet-aware verifiers get an additional proof that the certificate was attested by a selected wallet key without replacing the existing PKI chain.</p>
+          <h3 data-i18n="pki.card2.title">Why It Matters</h3>
+          <p data-i18n="pki.card2.desc">Standard TLS tooling gets a normal certificate. Wallet-aware verifiers get an additional proof that the certificate was attested by a selected wallet key without replacing the existing PKI chain.</p>
         </div>
         <div class="feature-card glass-card">
           <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 8v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8"/><path d="M3 8l9-5 9 5"/><path d="M12 13v5"/></svg></div>
-          <h3>How We Use It</h3>
-          <p>The wallet attestation signs canonical certificate fields including the SPKI digest. That creates a durable binding between the certificate and the chosen wallet identity, such as a Bitcoin-root secp256k1 key.</p>
+          <h3 data-i18n="pki.card3.title">How We Use It</h3>
+          <p data-i18n="pki.card3.desc">The wallet attestation signs canonical certificate fields including the SPKI digest. That creates a durable binding between the certificate and the chosen wallet identity, such as a Bitcoin-root secp256k1 key.</p>
         </div>
         <div class="feature-card glass-card">
           <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4"/><path d="M21 12c0 4.97-4.03 9-9 9a9 9 0 1 1 0-18c2.38 0 4.54.92 6.15 2.43"/></svg></div>
-          <h3>What Verifiers Check</h3>
-          <p>First validate the normal X.509 chain. Then parse the certificate and verify the embedded wallet proof. Both need to pass if you want to prove a server certificate was bound by a wallet key.</p>
+          <h3 data-i18n="pki.card4.title">What Verifiers Check</h3>
+          <p data-i18n="pki.card4.desc">First validate the normal X.509 chain. Then parse the certificate and verify the embedded wallet proof. Both need to pass if you want to prove a server certificate was bound by a wallet key.</p>
         </div>
       </div>
     </div>
@@ -393,7 +394,7 @@ const walletProofValid = wallet.x509.verifyWalletAttestation(certPem);</code></p
   <!-- Supported Blockchains -->
   <section class="homepage-section page-section" id="blockchains">
     <div class="section-container">
-      <h2 class="section-heading">Supported Blockchains</h2>
+      <h2 class="section-heading" data-i18n="chains.heading">Supported Blockchains</h2>
       <div class="chains-grid">
         <a href="https://bitcoin.org" target="_blank" rel="noopener" class="chain-card glass-card">
           <img src="https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/svg/color/btc.svg" alt="Bitcoin" width="32" height="32" style="margin-bottom:8px;">
@@ -405,27 +406,27 @@ const walletProofValid = wallet.x509.verifyWalletAttestation(certPem);</code></p
         </a>
         <a href="https://solana.com" target="_blank" rel="noopener" class="chain-card glass-card">
           <img src="https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/svg/color/sol.svg" alt="Solana" width="32" height="32" style="margin-bottom:8px;">
-          <strong>Solana</strong><span>Ed25519 signatures</span>
+          <strong>Solana</strong><span data-i18n="chains.sol.sub">Ed25519 signatures</span>
         </a>
         <a href="https://cosmos.network" target="_blank" rel="noopener" class="chain-card glass-card">
           <img src="https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/svg/color/atom.svg" alt="Cosmos" width="32" height="32" style="margin-bottom:8px;">
-          <strong>Cosmos</strong><span>Amino &amp; Direct signing</span>
+          <strong>Cosmos</strong><span data-i18n="chains.atom.sub">Amino &amp; Direct signing</span>
         </a>
         <a href="https://polkadot.com" target="_blank" rel="noopener" class="chain-card glass-card">
           <img src="https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/svg/color/dot.svg" alt="Polkadot" width="32" height="32" style="margin-bottom:8px;">
-          <strong>Polkadot</strong><span>SS58 addresses</span>
+          <strong>Polkadot</strong><span data-i18n="chains.dot.sub">SS58 addresses</span>
         </a>
         <a href="https://litecoin.org" target="_blank" rel="noopener" class="chain-card glass-card">
           <img src="https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/svg/color/ltc.svg" alt="Litecoin" width="32" height="32" style="margin-bottom:8px;">
-          <strong>Litecoin</strong><span>All address types</span>
+          <strong>Litecoin</strong><span data-i18n="chains.ltc.sub">All address types</span>
         </a>
         <a href="https://dogecoin.com" target="_blank" rel="noopener" class="chain-card glass-card">
           <img src="https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/svg/color/doge.svg" alt="Dogecoin" width="32" height="32" style="margin-bottom:8px;">
-          <strong>Dogecoin</strong><span>P2PKH addresses</span>
+          <strong>Dogecoin</strong><span data-i18n="chains.doge.sub">P2PKH addresses</span>
         </a>
         <a href="https://github.com/satoshilabs/slips/blob/master/slip-0044.md" target="_blank" rel="noopener" class="chain-card glass-card">
           <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--white-40)" stroke-width="1.5" style="margin-bottom:8px;"><circle cx="12" cy="12" r="10"/><path d="M8 12h8M12 8v8"/></svg>
-          <strong>+ 50 more</strong><span>via SLIP-44</span>
+          <strong data-i18n="chains.more">+ 50 more</strong><span data-i18n="chains.more.sub">via SLIP-44</span>
         </a>
       </div>
     </div>
@@ -434,8 +435,8 @@ const walletProofValid = wallet.x509.verifyWalletAttestation(certPem);</code></p
   <!-- Adversarial Security Section -->
   <section class="homepage-section page-section" id="adversarial">
     <div class="section-container">
-      <h2 class="section-heading">Adversarial Security</h2>
-      <p class="section-subheading">Rational actors drain compromised keys. Undrained value proves key integrity.</p>
+      <h2 class="section-heading" data-i18n="adv.heading">Adversarial Security</h2>
+      <p class="section-subheading" data-i18n="adv.subheading">Rational actors drain compromised keys. Undrained value proves key integrity.</p>
       <div class="adversarial-card glass-card">
         <div class="adversarial-intro">
           <div class="adversarial-intro-icon">
@@ -445,36 +446,36 @@ const walletProofValid = wallet.x509.verifyWalletAttestation(certPem);</code></p
             </svg>
           </div>
           <div>
-            <h3>What is Adversarial Security?</h3>
-            <p>Cryptographic public keys can derive addresses on cryptocurrency networks. By depositing value at those derived addresses, you create a <strong>game-theoretic security bond</strong>. A rational actor who compromises the private key will drain the funds — the payout is immediate, anonymous, and risk-free. This makes the balance a <strong>real-time indicator of key integrity</strong>: undrained value implies an uncompromised key.</p>
+            <h3 data-i18n="adv.intro.title">What is Adversarial Security?</h3>
+            <p data-i18n-html="adv.intro.desc">Cryptographic public keys can derive addresses on cryptocurrency networks. By depositing value at those derived addresses, you create a <strong>game-theoretic security bond</strong>. A rational actor who compromises the private key will drain the funds — the payout is immediate, anonymous, and risk-free. This makes the balance a <strong>real-time indicator of key integrity</strong>: undrained value implies an uncompromised key.</p>
           </div>
         </div>
 
         <!-- Flow Diagram -->
         <div class="adversarial-flow">
-          <div class="flow-step"><div class="flow-step-icon" style="background:rgba(96,165,250,0.15);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="1.5" stroke-linecap="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg></div><div class="flow-step-label">Public Key</div></div>
+          <div class="flow-step"><div class="flow-step-icon" style="background:rgba(96,165,250,0.15);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="1.5" stroke-linecap="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg></div><div class="flow-step-label" data-i18n="adv.flow.pubkey">Public Key</div></div>
           <div class="flow-arrow"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14m-4-4l4 4-4 4"/></svg></div>
-          <div class="flow-step"><div class="flow-step-icon" style="background:rgba(96,165,250,0.15);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="1.5" stroke-linecap="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg></div><div class="flow-step-label">Derive Address</div></div>
+          <div class="flow-step"><div class="flow-step-icon" style="background:rgba(96,165,250,0.15);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="1.5" stroke-linecap="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg></div><div class="flow-step-label" data-i18n="adv.flow.derive">Derive Address</div></div>
           <div class="flow-arrow"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14m-4-4l4 4-4 4"/></svg></div>
-          <div class="flow-step"><div class="flow-step-icon" style="background:rgba(52,211,153,0.15);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l2 2"/></svg></div><div class="flow-step-label">Deposit Value</div></div>
+          <div class="flow-step"><div class="flow-step-icon" style="background:rgba(52,211,153,0.15);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l2 2"/></svg></div><div class="flow-step-label" data-i18n="adv.flow.deposit">Deposit Value</div></div>
           <div class="flow-arrow"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14m-4-4l4 4-4 4"/></svg></div>
-          <div class="flow-step"><div class="flow-step-icon" style="background:rgba(251,191,36,0.15);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-linecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div><div class="flow-step-label">Monitor</div></div>
+          <div class="flow-step"><div class="flow-step-icon" style="background:rgba(251,191,36,0.15);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-linecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div><div class="flow-step-label" data-i18n="adv.flow.monitor">Monitor</div></div>
           <div class="flow-arrow"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14m-4-4l4 4-4 4"/></svg></div>
-          <div class="flow-step"><div class="flow-step-icon" style="background:rgba(23,234,217,0.15);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#17ead9" stroke-width="1.5" stroke-linecap="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></div><div class="flow-step-label">Trusted</div></div>
+          <div class="flow-step"><div class="flow-step-icon" style="background:rgba(23,234,217,0.15);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#17ead9" stroke-width="1.5" stroke-linecap="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></div><div class="flow-step-label" data-i18n="adv.flow.trusted">Trusted</div></div>
         </div>
 
         <!-- Principles -->
         <div class="adversarial-principles">
-          <div class="principle"><div class="principle-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg></div><div><h4>Key Derivation</h4><p>A public key used for signing data can mathematically derive addresses on multiple blockchain networks (BIP-32/44). One key pair serves both authentication and value custody.</p></div></div>
-          <div class="principle"><div class="principle-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/><path d="M7 6h1v4"/><circle cx="16" cy="16" r="6"/><path d="M15 14h1v4"/></svg></div><div><h4>Value as Trust Signal</h4><p>Derived addresses are permissionless — anyone can deposit funds to signal trust in a key. The aggregate balance quantifies the economic cost of compromise.</p></div></div>
-          <div class="principle"><div class="principle-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M12 8v4"/><circle cx="12" cy="16" r="0.5" fill="currentColor"/></svg></div><div><h4>Rational Actor Assumption</h4><p>Draining funds is the dominant strategy: it's <strong>immediate, irreversible, and carries zero marginal risk</strong>. Undrained value therefore implies no compromise.</p></div></div>
-          <div class="principle"><div class="principle-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div><div><h4>Real-Time Verification</h4><p>Blockchain state is publicly auditable and updates every block. This provides <strong>continuous, permissionless proof of key integrity</strong> — not a certificate, but a live signal.</p></div></div>
+          <div class="principle"><div class="principle-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg></div><div><h4 data-i18n="adv.prin1.title">Key Derivation</h4><p data-i18n="adv.prin1.desc">A public key used for signing data can mathematically derive addresses on multiple blockchain networks (BIP-32/44). One key pair serves both authentication and value custody.</p></div></div>
+          <div class="principle"><div class="principle-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/><path d="M7 6h1v4"/><circle cx="16" cy="16" r="6"/><path d="M15 14h1v4"/></svg></div><div><h4 data-i18n="adv.prin2.title">Value as Trust Signal</h4><p data-i18n="adv.prin2.desc">Derived addresses are permissionless — anyone can deposit funds to signal trust in a key. The aggregate balance quantifies the economic cost of compromise.</p></div></div>
+          <div class="principle"><div class="principle-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M12 8v4"/><circle cx="12" cy="16" r="0.5" fill="currentColor"/></svg></div><div><h4 data-i18n="adv.prin3.title">Rational Actor Assumption</h4><p data-i18n-html="adv.prin3.desc">Draining funds is the dominant strategy: it's <strong>immediate, irreversible, and carries zero marginal risk</strong>. Undrained value therefore implies no compromise.</p></div></div>
+          <div class="principle"><div class="principle-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div><div><h4 data-i18n="adv.prin4.title">Real-Time Verification</h4><p data-i18n-html="adv.prin4.desc">Blockchain state is publicly auditable and updates every block. This provides <strong>continuous, permissionless proof of key integrity</strong> — not a certificate, but a live signal.</p></div></div>
         </div>
 
         <div style="text-align:center;margin:1.5rem 0 0.5rem;">
           <a href="https://github.com/DigitalArsenal/Adversarial-Security" class="glass-btn small" target="_blank" rel="noopener" style="font-size:0.85rem;padding:0.5rem 1.1rem;opacity:0.85;">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
-            Read the Whitepaper
+            <span data-i18n="adv.whitepaper">Read the Whitepaper</span>
           </a>
         </div>
 
@@ -485,23 +486,23 @@ const walletProofValid = wallet.x509.verifyWalletAttestation(certPem);</code></p
               <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
               <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
             </svg>
-            <p>Login to derive addresses from your keys and check live balances across multiple blockchain networks.</p>
+            <p data-i18n="adv.login.prompt">Login to derive addresses from your keys and check live balances across multiple blockchain networks.</p>
           </div>
         </div>
 
         <div class="adversarial-balances" id="adversarial-balances" style="display: none;">
           <div class="balances-header">
-            <h3 class="card-subtitle">Your Derived Addresses</h3>
-            <button id="refresh-balances" class="glass-btn small">
+            <h3 class="card-subtitle" data-i18n="adv.balances.title">Your Derived Addresses</h3>
+            <button id="refresh-balances" class="glass-btn small" data-i18n-attr="title:adv.refresh">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="23 4 23 10 17 10"/>
                 <polyline points="1 20 1 14 7 14"/>
                 <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
               </svg>
-              Refresh
+              <span data-i18n="adv.refresh">Refresh</span>
             </button>
           </div>
-          <p class="balances-intro">These addresses are mathematically derived from your HD wallet keys. Anyone can verify the derivation and send funds to increase trust in your keys.</p>
+          <p class="balances-intro" data-i18n="adv.balances.intro">These addresses are mathematically derived from your HD wallet keys. Anyone can verify the derivation and send funds to increase trust in your keys.</p>
 
           <div class="wallet-networks-grid" id="wallet-networks-grid">
             <div class="wallet-network-card" id="wallet-btc-card">
@@ -538,7 +539,7 @@ const walletProofValid = wallet.x509.verifyWalletAttestation(certPem);</code></p
   <footer class="site-footer">
     <div class="section-container">
       <div class="footer-content">
-        <p>HD Wallet WASM - Apache-2.0 License <span id="version-tag"></span></p>
+        <p><span data-i18n="footer.license">HD Wallet WASM — Apache-2.0 License</span> <span id="version-tag"></span></p>
         <div class="footer-links">
           <a href="https://github.com/DigitalArsenal/hd-wallet-wasm" target="_blank" rel="noopener">GitHub</a>
           <a href="https://www.npmjs.com/package/hd-wallet-wasm" target="_blank" rel="noopener">hd-wallet-wasm</a>

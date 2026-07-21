@@ -30,6 +30,7 @@ function isInsideKeyframes(node) {
  * Prefix a selector list with the namespace, while handling a few special cases:
  * - `:root` -> namespace element (to scope CSS variables)
  * - `html` / `body` -> namespace element (avoid touching host page)
+ * - `html[dir="rtl"] ...` -> keep the host direction selector above the namespace
  * - `body:has(...)` -> keep `body` but scope the `:has()` and descendants to our container
  */
 function prefixSelector(selector) {
@@ -40,6 +41,14 @@ function prefixSelector(selector) {
 
     if (s === ':root') return NAMESPACE;
     if (s === 'html' || s === 'body') return NAMESPACE;
+
+    const rtlHost = 'html[dir="rtl"]';
+    if (s === rtlHost) return `${rtlHost} ${NAMESPACE}`;
+    if (s.startsWith(`${rtlHost} `)) {
+      const tail = s.slice(rtlHost.length).trim();
+      if (tail.startsWith(NAMESPACE)) return s;
+      return `${rtlHost} ${NAMESPACE} ${tail}`;
+    }
 
     if (s.startsWith('body:has(')) {
       // Make sure :has() only triggers based on our UI subtree.

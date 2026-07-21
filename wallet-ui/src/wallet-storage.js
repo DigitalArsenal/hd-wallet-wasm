@@ -695,6 +695,9 @@ export function clearStorage() {
   localStorage.removeItem(METADATA_KEY);
   localStorage.removeItem(ENCRYPTED_DATA_KEY);
   localStorage.removeItem(PASSKEY_CREDENTIAL_KEY);
+  localStorage.removeItem('encrypted_wallet');
+  localStorage.removeItem('passkey_credential');
+  localStorage.removeItem('passkey_wallet');
 }
 
 /**

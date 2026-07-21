@@ -19,6 +19,8 @@ import {
 // Helpers
 // =============================================================================
 
+const CLOSE_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+
 export function truncatePubkey(pubkey, prefixLen = 12, suffixLen = 8) {
   if (!pubkey) return '';
   if (pubkey.length <= prefixLen + suffixLen + 3) return pubkey;
@@ -257,7 +259,7 @@ export function showEstablishTrustModal(onConfirm) {
     <div class="modal-glass">
       <div class="modal-header">
         <h3>Establish Trust</h3>
-        <button class="modal-close">&times;</button>
+        <button class="modal-close" type="button" aria-label="Close">${CLOSE_ICON}</button>
       </div>
       <div class="modal-body">
 
@@ -474,7 +476,7 @@ export function showRevokeTrustModal(originalTxHash, onConfirm) {
     <div class="modal-glass">
       <div class="modal-header">
         <h3>Revoke Trust</h3>
-        <button class="modal-close">&times;</button>
+        <button class="modal-close" type="button" aria-label="Close">${CLOSE_ICON}</button>
       </div>
       <div class="modal-body">
         <div class="trust-warning">
@@ -564,7 +566,7 @@ function buildRuleRow(rule, index) {
           <select class="glass-select rule-severity">${severityOptions}</select>
         </div>
         <div class="rule-field rule-field-actions">
-          <button class="glass-btn glass-btn-sm rule-delete-btn" data-index="${index}" title="Delete rule">&times;</button>
+          <button class="glass-btn glass-btn-sm rule-delete-btn" data-index="${index}" title="Delete rule" aria-label="Delete rule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
       </div>
     </div>
@@ -590,7 +592,7 @@ export function showRulesModal(rules, onSave) {
       <div class="modal-glass">
         <div class="modal-header">
           <h3>Trust Rules</h3>
-          <button class="modal-close">&times;</button>
+          <button class="modal-close" type="button" aria-label="Close">${CLOSE_ICON}</button>
         </div>
         <div class="modal-body">
           <div class="rules-list">
