@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cfenv>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
@@ -23,6 +24,22 @@
 namespace {
 
 using namespace hd_wallet::sdn;
+
+class FloatingEnvironmentRestore {
+public:
+    FloatingEnvironmentRestore()
+        : saved_(std::fegetenv(&environment_) == 0) {}
+
+    ~FloatingEnvironmentRestore() {
+        if (saved_) (void)std::fesetenv(&environment_);
+    }
+
+    bool saved() const { return saved_; }
+
+private:
+    std::fenv_t environment_{};
+    bool saved_ = false;
+};
 
 std::span<const uint8_t> bytes(const std::string& value) {
     return {reinterpret_cast<const uint8_t*>(value.data()), value.size()};
@@ -854,7 +871,47 @@ TEST_CASE(SdnSigning, CanonicalJsonImplementsRfc8785AndRejectsAmbiguity) {
     for (const auto& row : appendixB) {
         ASSERT_STR_EQ(row.json,
                       serialize(Value(std::bit_cast<double>(row.ieee754))));
+        auto parsedNumber = parse_json(bytes(std::string(row.json)), limits);
+        ASSERT_TRUE(std::holds_alternative<Value>(parsedNumber));
+        const uint64_t expectedBits = row.ieee754 == 0x8000000000000000ULL
+                                          ? 0x0000000000000000ULL
+                                          : row.ieee754;
+        ASSERT_EQ(expectedBits,
+                  std::bit_cast<uint64_t>(std::get<Value>(parsedNumber).number()));
     }
+
+#if !defined(__EMSCRIPTEN__)
+    {
+        FloatingEnvironmentRestore restore;
+        ASSERT_TRUE(restore.saved());
+        ASSERT_EQ(0, std::feclearexcept(FE_ALL_EXCEPT));
+        ASSERT_EQ(0, std::feraiseexcept(FE_INVALID));
+        const int callerExceptions = std::fetestexcept(FE_ALL_EXCEPT);
+        ASSERT_TRUE((callerExceptions & FE_INVALID) != 0);
+        const auto assertParsedBits = [&](const std::string& json,
+                                          uint64_t expectedBits) {
+            auto outcome = parse_json(bytes(json), limits);
+            ASSERT_TRUE(std::holds_alternative<Value>(outcome));
+            ASSERT_EQ(expectedBits,
+                      std::bit_cast<uint64_t>(std::get<Value>(outcome).number()));
+        };
+        for (const int roundingMode :
+             {FE_UPWARD, FE_DOWNWARD, FE_TOWARDZERO}) {
+            ASSERT_EQ(0, std::fesetround(roundingMode));
+            assertParsedBits(
+                "1.00000000000000011102230246251565404236316680908203125",
+                0x3ff0000000000000ULL);
+            assertJcsError(JcsError::InvalidNumber,
+                           parse_json(bytes(std::string("1e9999")), limits));
+            assertJcsError(JcsError::InvalidNumber,
+                           parse_json(bytes(std::string("-1e9999")), limits));
+            assertParsedBits("1e-9999", 0x0000000000000000ULL);
+            assertParsedBits("-1e-9999", 0x8000000000000000ULL);
+            ASSERT_EQ(roundingMode, std::fegetround());
+            ASSERT_EQ(callerExceptions, std::fetestexcept(FE_ALL_EXCEPT));
+        }
+    }
+#endif
 
     Value::Members numbers;
     numbers.emplace_back("negativeZero", Value(-0.0));

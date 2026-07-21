@@ -1,13 +1,20 @@
 #include "canonical_json.h"
 
 #include <algorithm>
+#include <cfenv>
 #include <charconv>
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <limits>
+#include <locale.h>
 #include <new>
 #include <stdexcept>
 #include <string_view>
+
+#if defined(_MSC_VER)
+#pragma fenv_access(on)
+#endif
 
 namespace hd_wallet::sdn::jcs {
 namespace {
@@ -83,6 +90,57 @@ int hexNibble(uint8_t value) {
     if (value >= 'a' && value <= 'f') return value - 'a' + 10;
     if (value >= 'A' && value <= 'F') return value - 'A' + 10;
     return -1;
+}
+
+std::optional<double> parseFiniteDouble(std::string_view text) {
+    const std::string terminated(text);
+    char* end = nullptr;
+#if defined(_WIN32)
+    _locale_t c_locale = _create_locale(LC_NUMERIC, "C");
+    if (c_locale == nullptr) return std::nullopt;
+#else
+    locale_t c_locale = newlocale(LC_NUMERIC_MASK, "C", nullptr);
+    if (c_locale == nullptr) return std::nullopt;
+#endif
+
+    std::fenv_t caller_environment{};
+    if (std::feholdexcept(&caller_environment) != 0) {
+        (void)std::fesetenv(&caller_environment);
+#if defined(_WIN32)
+        _free_locale(c_locale);
+#else
+        freelocale(c_locale);
+#endif
+        return std::nullopt;
+    }
+    if (std::fesetround(FE_TONEAREST) != 0) {
+        (void)std::fesetenv(&caller_environment);
+#if defined(_WIN32)
+        _free_locale(c_locale);
+#else
+        freelocale(c_locale);
+#endif
+        return std::nullopt;
+    }
+
+#if defined(_WIN32)
+    const double value = _strtod_l(terminated.c_str(), &end, c_locale);
+#else
+    const double value = strtod_l(terminated.c_str(), &end, c_locale);
+#endif
+    const bool environment_restored =
+        std::fesetenv(&caller_environment) == 0;
+#if defined(_WIN32)
+    _free_locale(c_locale);
+#else
+    freelocale(c_locale);
+#endif
+    if (!environment_restored ||
+        end != terminated.c_str() + terminated.size() ||
+        !std::isfinite(value)) {
+        return std::nullopt;
+    }
+    return value;
 }
 
 class Parser {
@@ -310,16 +368,11 @@ private:
                 ++position_;
             }
         }
-        const char* first = reinterpret_cast<const char*>(input_.data() + begin);
-        const char* last = reinterpret_cast<const char*>(input_.data() + position_);
-        double value = 0;
-        const auto converted = std::from_chars(first, last, value,
-                                               std::chars_format::general);
-        if (converted.ec != std::errc{} || converted.ptr != last) {
-            return JcsError::InvalidNumber;
-        }
-        if (!std::isfinite(value)) return JcsError::InvalidNumber;
-        return Value(value);
+        const std::string_view encoded(
+            reinterpret_cast<const char*>(input_.data() + begin), position_ - begin);
+        const auto value = parseFiniteDouble(encoded);
+        if (!value.has_value()) return JcsError::InvalidNumber;
+        return Value(*value);
     }
 
     void skipWhitespace() {

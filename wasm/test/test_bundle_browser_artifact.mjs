@@ -22,7 +22,7 @@ for (const { name, pattern } of forbiddenPatterns) {
   }
 }
 
-if (!source.includes('function binaryDecode(bin)')) {
+if (!source.includes('data:application/octet-stream;base64,AGFzbQE')) {
   throw new Error(`Package entrypoint is not self-contained: ${artifactPath}`);
 }
 if (/new URL\(["']hd-wallet\.wasm["']/.test(source)) {

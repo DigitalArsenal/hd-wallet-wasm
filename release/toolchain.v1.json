@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "platform": {
+    "architecture": "x64",
+    "glibc": "2.39",
+    "os": "linux"
+  },
+  "betterSqlite3": {
+    "prebuilds": [
+      {
+        "architecture": "arm64",
+        "archive": "better-sqlite3-v12.2.0-node-v137-darwin-arm64.tar.gz",
+        "archiveBytes": 944001,
+        "archiveSha256": "50ec0aa2c44c9e4b2d93308b5e43f7dd5b11409dd72464f1b44acf5e692bccab",
+        "modulesAbi": "137",
+        "platform": "darwin",
+        "url": "https://github.com/WiseLibs/better-sqlite3/releases/download/v12.2.0/better-sqlite3-v12.2.0-node-v137-darwin-arm64.tar.gz",
+        "version": "12.2.0"
+      },
+      {
+        "architecture": "x64",
+        "archive": "better-sqlite3-v12.2.0-node-v137-linux-x64.tar.gz",
+        "archiveBytes": 1067842,
+        "archiveSha256": "69f8bdfb23f3381df6c0867eddf5980773d04fb8619ffd9090ac724c1e95457b",
+        "modulesAbi": "137",
+        "platform": "linux",
+        "url": "https://github.com/WiseLibs/better-sqlite3/releases/download/v12.2.0/better-sqlite3-v12.2.0-node-v137-linux-x64.tar.gz",
+        "version": "12.2.0"
+      }
+    ],
+    "version": "12.2.0"
+  },
+  "node": {
+    "archive": "node-v24.18.0-linux-x64.tar.xz",
+    "archiveSha256": "55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742",
+    "version": "24.18.0"
+  },
+  "npm": {
+    "version": "11.16.0"
+  },
+  "emscripten": {
+    "version": "3.1.51"
+  },
+  "githubCli": {
+    "archive": "gh_2.96.0_linux_amd64.tar.gz",
+    "archiveBytes": 14652560,
+    "archiveSha256": "83d5c2ccad5498f58bf6368acb1ab32588cf43ab3a4b1c301bf36328b1c8bd60",
+    "executableBytes": 40722594,
+    "executableSha256": "56b8bbbb27b066ecb33dbef9a256dc9d1314adaeff0908a752feba6c34053b40",
+    "url": "https://github.com/cli/cli/releases/download/v2.96.0/gh_2.96.0_linux_amd64.tar.gz",
+    "version": "2.96.0"
+  },
+  "cmake": {
+    "archive": "cmake-4.0.0-linux-x86_64.tar.gz",
+    "archiveSha256": "a06e6e32da747e569162bc0442a3fd400fadd9db7d4f185c9e4464ab299a294b",
+    "version": "4.0.0"
+  },
+  "openssl": {
+    "sourceArchive": "openssl-3.0.9.tar.gz",
+    "sourceSha256": "eb1ab04781474360f77c318ab89d8c5a03abc38e63d65a603cabbf1b00a1dc90",
+    "version": "3.0.9"
+  },
+  "cryptopp": {
+    "commit": "843d74c7c97f9e19a615b8ff3c0ca06599ca501b",
+    "repository": "https://github.com/weidai11/cryptopp.git"
+  },
+  "cryptoppCmake": {
+    "sourceArchive": "cryptopp-cmake-f815f6284684be6ab03af4b6c273359331c61241.tar.gz",
+    "sourceCommit": "f815f6284684be6ab03af4b6c273359331c61241",
+    "sourceSha256": "6ac4e8002b1167bb5393744e1f97a1207c39c9073fcff0efc1a43c0f0255edbe"
+  },
+  "secp256k1": {
+    "commit": "1a53f4961f337b4d166c25fce72ef0dc88806618"
+  }
+}

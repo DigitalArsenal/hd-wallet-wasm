@@ -1,206 +1,113 @@
-name: Build and Test
+name: Build and verify wallet release
 
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  contracts:
-    name: Offline Contract Gates
-    runs-on: ubuntu-latest
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Checkout complete history
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          node-version: "24"
+          fetch-depth: 0
 
-      - name: Run offline contract gates
-        run: npm run test:offline-contracts
-
-  # Native build and tests
-  native:
-    name: Native Build & Test
-    needs: contracts
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake build-essential
-
-      - name: Cache Crypto++
-        id: cache-cryptopp
-        uses: actions/cache@v4
+      - name: Setup exact Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
-          path: build/_deps/cryptopp*
-          key: cryptopp-native-${{ runner.os }}-8.9.0
+          node-version: "24.18.0"
 
-      - name: Configure CMake
-        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+      - name: Install exact npm
+        run: npm install --global npm@11.16.0
 
-      - name: Build native library
-        run: cmake --build build --parallel $(nproc)
-
-      - name: Run tests
-        run: |
-          cd build
-          ctest --output-on-failure
-
-  # WASM build with Emscripten
-  wasm:
-    name: WASM Build
-    needs: contracts
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-
-      - name: Setup Emscripten
-        uses: mymindstorm/setup-emsdk@v14
+      - name: Setup exact Emscripten
+        uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021
         with:
           version: "3.1.51"
-          actions-cache-folder: "emsdk-cache"
 
-      - name: Verify Emscripten
-        run: emcc --version
-
-      - name: Cache Crypto++ (WASM)
-        id: cache-cryptopp-wasm
-        uses: actions/cache@v4
-        with:
-          path: build/_deps/cryptopp*
-          key: cryptopp-wasm-${{ runner.os }}-8.9.0-emsdk-3.1.51
-
-      - name: Configure CMake with Emscripten
-        run: emcmake cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DHD_WALLET_BUILD_WASM=ON
-
-      - name: Build WASM targets
-        run: cmake --build build --parallel $(nproc) --target hd_wallet_wasm_npm
-
-      - name: Verify WASM output
+      - name: Install verified CMake 4.0.0
+        shell: bash
         run: |
-          echo "Checking WASM output files..."
-          ls -la build/wasm/
-          test -f build/wasm/hd-wallet.wasm
-          test -f build/wasm/hd-wallet-wasi.wasm
-          test -f build/wasm/hd-wallet.js
-          test -f build/wasm/hd-wallet-inline.js
-          test -f wasm/dist/hd-wallet.js
-          test -f wasm/dist/hd-wallet.wasm
-          test -f wasm/dist/hd-wallet-wasi.wasm
-          test -f wasm/dist/wasm-loader.d.ts
-          test -f wasm/dist/runtime/index.mjs
-          test -f wasm/dist/runtime/index.d.ts
-          test -f wasm/dist/runtime/aligned.mjs
-          test -f wasm/dist/runtime/epm-attestation.mjs
+          set -euo pipefail
+          cmake_tmp="$(mktemp -d)"
+          trap 'rm -rf -- "$cmake_tmp"' EXIT
+          archive="$cmake_tmp/cmake-4.0.0-linux-x86_64.tar.gz"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$archive" \
+            https://github.com/Kitware/CMake/releases/download/v4.0.0/cmake-4.0.0-linux-x86_64.tar.gz
+          printf '%s  %s\n' \
+            'a06e6e32da747e569162bc0442a3fd400fadd9db7d4f185c9e4464ab299a294b' \
+            "$archive" | sha256sum --check --strict
+          mkdir "$RUNNER_TEMP/cmake-4.0.0"
+          tar --extract --gzip --file "$archive" \
+            --directory "$RUNNER_TEMP/cmake-4.0.0" --strip-components=1 \
+            --no-same-owner --no-same-permissions
+          echo "$RUNNER_TEMP/cmake-4.0.0/bin" >> "$GITHUB_PATH"
 
-      - name: Upload WASM artifacts
-        uses: actions/upload-artifact@v4
+      - name: Verify frozen platform and tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          . /etc/os-release
+          test "$ID" = ubuntu
+          test "$VERSION_ID" = 24.04
+          test "$(getconf GNU_LIBC_VERSION)" = 'glibc 2.39'
+          test "$(node --version)" = v24.18.0
+          test "$(npm --version)" = 11.16.0
+          emcc --version | head -n 1 | grep -F '3.1.51'
+          test "$(cmake --version | head -n 1)" = 'cmake version 4.0.0'
+          node -e "const t=require('./release/toolchain.v1.json'); if(t.node.version!=='24.18.0'||t.npm.version!=='11.16.0')process.exit(1)"
+
+      - name: Run complete local gate
+        run: ./scripts/ci-local.sh
+
+      - name: Emit canonical release artifacts
+        shell: bash
+        env:
+          SDN_RELEASE_EVENT_NAME: ${{ github.event_name }}
+          SDN_RELEASE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          SDN_RELEASE_RUN_ID: ${{ github.run_id }}
+          SDN_RELEASE_WORKFLOW: .github/workflows/build.yml
+        run: |
+          set -euo pipefail
+          artifact_root="$RUNNER_TEMP/sdn-wallet-artifacts"
+          mkdir "$artifact_root"
+          npm run verify:release -- \
+            --version 2.0.22 \
+            --source-ref HEAD \
+            --skip-tag \
+            --emit-artifacts "$artifact_root"
+
+      - name: Upload npm tarballs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: wasm-build
-          path: |
-            wasm/dist/
+          name: npm-tarballs
+          path: ${{ runner.temp }}/sdn-wallet-artifacts/npm-tarballs
+          if-no-files-found: error
           retention-days: 7
 
-  # NPM package build and test
-  npm:
-    name: NPM Package Test
-    runs-on: ubuntu-latest
-    needs: wasm
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Upload origin service
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: wasm/package.json
+          name: origin-service
+          path: ${{ runner.temp }}/sdn-wallet-artifacts/origin-service
+          if-no-files-found: error
+          retention-days: 7
 
-      - name: Download WASM artifacts
-        uses: actions/download-artifact@v4
+      - name: Upload wallet release report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: wasm-build
-          path: wasm/dist/
-
-      - name: Verify packaged WASM entrypoint
-        run: node test/test_bundle_browser_artifact.mjs
-        working-directory: wasm
-
-      - name: Install npm dependencies
-        run: npm install --ignore-scripts
-        working-directory: wasm
-
-      - name: Run npm tests
-        run: npm test
-        working-directory: wasm
-
-      - name: Verify package contents
-        run: npm pack --dry-run
-        working-directory: wasm
-
-  # Build matrix for multiple configurations
-  matrix:
-    name: Build Matrix
-    needs: contracts
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        build_type: [Debug, Release]
-        compiler: [gcc, clang]
-        include:
-          - compiler: gcc
-            cc: gcc
-            cxx: g++
-          - compiler: clang
-            cc: clang
-            cxx: clang++
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Clang
-        if: matrix.compiler == 'clang'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang
-
-      - name: Cache Crypto++
-        uses: actions/cache@v4
-        with:
-          path: build/_deps/cryptopp*
-          key: cryptopp-${{ matrix.compiler }}-${{ matrix.build_type }}-8.9.0
-
-      - name: Configure CMake
-        env:
-          CC: ${{ matrix.cc }}
-          CXX: ${{ matrix.cxx }}
-        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
-
-      - name: Build
-        run: cmake --build build --parallel $(nproc)
-
-      - name: Test
-        run: |
-          cd build
-          ctest --output-on-failure
+          name: wallet-release-report
+          path: ${{ runner.temp }}/sdn-wallet-artifacts/wallet-release-report
+          if-no-files-found: error
+          retention-days: 7

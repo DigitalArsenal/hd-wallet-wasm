@@ -22,37 +22,25 @@ for (const command of [
   assert(offlineScript.includes(command), `offline contract script is missing: ${command}`);
 }
 
-const rootTest = packageJson.scripts?.test ?? '';
 assert(
-  rootTest.startsWith('npm run test:offline-contracts'),
+  (packageJson.scripts?.test ?? '').startsWith('npm run test:offline-contracts'),
   'root npm test must start with offline contracts',
 );
 
-const preflightCall = localCi.indexOf('if ! run_offline_contracts; then');
-const dispatch = localCi.indexOf('case "$MODE" in');
-assert(preflightCall !== -1 && preflightCall < dispatch, 'local CI must run offline contracts before dispatch');
-assert.doesNotMatch(
-  localCi,
-  /npm install --ignore-scripts[^\n]*\|\|\s*true/,
-  'local CI must not ignore dependency installation failures',
-);
-assert.match(
-  localCi,
-  /if \(cd "\$ROOT\/wasm" && npm install --ignore-scripts 2>&1\); then[\s\S]{0,160}?pass "npm dependencies"[\s\S]{0,160}?fail "npm dependencies"/,
-  'local CI must explicitly pass or fail dependency installation',
-);
+const install = localCi.indexOf('npm ci');
+const contracts = localCi.indexOf('npm run test:offline-contracts');
+const build = localCi.indexOf('npm run build:release');
+assert(install !== -1 && install < contracts && contracts < build);
+assert.match(localCi, /set -euo pipefail/u);
+assert.doesNotMatch(localCi.replaceAll('--skip-tag', ''), /\bskip(?:ped)?\b|\bquick\b|\bMODE\b/iu);
+assert.doesNotMatch(localCi, /npm install[^\n]*\|\|\s*true/u);
 
+assert.match(hostedCi, /^  verify:\s*$/mu, 'hosted CI must have one full verification job');
 assert.match(
   hostedCi,
-  /contracts:\s*\n\s+name: Offline Contract Gates[\s\S]{0,500}?run: npm run test:offline-contracts/,
-  'hosted CI must define the offline contract gate job',
+  /name: Run complete local gate[\s\S]{0,120}?run: \.\/scripts\/ci-local\.sh/u,
+  'hosted CI must invoke the same fail-closed local gate',
 );
-for (const job of ['native', 'wasm', 'matrix']) {
-  assert.match(
-    hostedCi,
-    new RegExp(`\\n  ${job}:[\\s\\S]{0,180}?\\n    needs: contracts`),
-    `${job} job must depend on offline contracts`,
-  );
-}
+assert.doesNotMatch(hostedCi, /^  (?:native|wasm|matrix|npm|contracts):\s*$/mu);
 
 console.log('PASS: root, local CI, and hosted CI always run offline contracts first');

@@ -54,6 +54,28 @@ const acquisitionPatterns = [
   ['HTML network resource', /\b(?:src|href)\s*=\s*['"]https?:\/\//i],
   ['CMake file download', /\bfile\s*\(\s*DOWNLOAD\b/i],
 ];
+const approvedReleaseAcquisitions = Object.freeze([
+  Object.freeze({
+    required: Object.freeze([
+      'a06e6e32da747e569162bc0442a3fd400fadd9db7d4f185c9e4464ab299a294b',
+      'sha256sum --check --strict',
+    ]),
+    url: 'https://github.com/Kitware/CMake/releases/download/v4.0.0/cmake-4.0.0-linux-x86_64.tar.gz',
+    workflows: Object.freeze([
+      '.github/workflows/build.yml',
+      '.github/workflows/npm-publish.yml',
+    ]),
+  }),
+  Object.freeze({
+    required: Object.freeze([
+      '14652560',
+      '83d5c2ccad5498f58bf6368acb1ab32588cf43ab3a4b1c301bf36328b1c8bd60',
+      'sha256sum --check --strict',
+    ]),
+    url: 'https://github.com/cli/cli/releases/download/v2.96.0/gh_2.96.0_linux_amd64.tar.gz',
+    workflows: Object.freeze(['.github/workflows/npm-publish.yml']),
+  }),
+]);
 
 function relative(repositoryRoot, filePath) {
   return path.relative(repositoryRoot, filePath).split(path.sep).join('/');
@@ -70,10 +92,33 @@ function listFiles(rootPath) {
   });
 }
 
+function stripApprovedReleaseAcquisition(file, body) {
+  const approved = approvedReleaseAcquisitions.filter(
+    ({ required, workflows }) => workflows.includes(file)
+      && required.every((value) => body.includes(value)),
+  );
+  if (approved.length === 0) return body;
+  const lines = body.split('\n');
+  const seen = new Set();
+  for (let index = 0; index + 2 < lines.length; index += 1) {
+    if (lines[index].trim() !== "curl --fail --location --proto '=https' --tlsv1.2 \\") {
+      continue;
+    }
+    if (lines[index + 1].trim() !== '--output "$archive" \\') continue;
+    const acquisition = approved.find(({ url }) => lines[index + 2].trim() === url);
+    if (!acquisition || seen.has(acquisition.url)) continue;
+    lines[index] = lines[index].replace('curl', 'approved-digest-bound-download');
+    seen.add(acquisition.url);
+    index += 2;
+  }
+  return lines.join('\n');
+}
+
 function inspectBody(file, body) {
   const failures = [];
+  const inspectedBody = stripApprovedReleaseAcquisition(file, body);
   for (const [description, pattern] of acquisitionPatterns) {
-    if (pattern.test(body)) failures.push(`${file}: contains ${description}`);
+    if (pattern.test(inspectedBody)) failures.push(`${file}: contains ${description}`);
   }
   return failures;
 }

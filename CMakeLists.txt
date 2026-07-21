@@ -66,14 +66,24 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(HD_WALLET_USE_CRYPTOPP)
   include(FetchContent)
-  # SECURITY FIX [CRIT-04]: Pin to specific commit SHA instead of tag
-  # Tags can be force-pushed with malicious code; commit SHAs are immutable.
-  # This is the commit for CRYPTOPP_8_9_0 tag, verified 2026-02-03
+
+  # The wrapper's default source resolver uses a mutable upstream tag. Declare
+  # the direct Crypto++ source first so FetchContent's first-declaration-wins
+  # rule binds the wrapper to the reviewed full commit instead. The wrapper is
+  # itself fetched from a commit-addressed archive with a frozen SHA-256.
+  FetchContent_Declare(
+    cryptopp
+    GIT_REPOSITORY https://github.com/weidai11/cryptopp.git
+    GIT_TAG        843d74c7c97f9e19a615b8ff3c0ca06599ca501b
+    GIT_SHALLOW    FALSE
+    GIT_SUBMODULES ""
+    SOURCE_DIR "${FETCHCONTENT_BASE_DIR}/cryptopp-cmake-build/cryptopp"
+  )
   FetchContent_Declare(
     cryptopp-cmake
-    GIT_REPOSITORY https://github.com/abdes/cryptopp-cmake.git
-    GIT_TAG        604d3df147e7b16fb7caa70e22c54c9a40ac1bd5  # CRYPTOPP_8_9_0
-    GIT_SHALLOW    TRUE
+    URL https://github.com/abdes/cryptopp-cmake/archive/f815f6284684be6ab03af4b6c273359331c61241.tar.gz
+    URL_HASH SHA256=6ac4e8002b1167bb5393744e1f97a1207c39c9073fcff0efc1a43c0f0255edbe
+    DOWNLOAD_EXTRACT_TIMESTAMP FALSE
   )
   set(CRYPTOPP_BUILD_TESTING OFF CACHE BOOL "" FORCE)
   set(CRYPTOPP_INSTALL OFF CACHE BOOL "" FORCE)
@@ -84,9 +94,23 @@ if(HD_WALLET_USE_CRYPTOPP)
     set(CRYPTOPP_DISABLE_SSSE3 ON CACHE BOOL "" FORCE)
     set(CRYPTOPP_DISABLE_AESNI ON CACHE BOOL "" FORCE)
     set(CRYPTOPP_USE_INTERMEDIATE_OBJECTS_TARGET OFF CACHE BOOL "" FORCE)
+
+    # The pinned wrapper probes for SunCC by invoking the C++ compiler with -V.
+    # Emscripten treats that unsupported probe as a link and writes a.out.js in
+    # the caller's source directory. This sentinel skips the two Solaris probes;
+    # the wrapper's only later Solaris branches are additionally restricted to
+    # SunPro or GNU, while the frozen Emscripten compiler is Clang.
+    set(CRYPTOPP_SOLARIS TRUE)
   endif()
 
   FetchContent_MakeAvailable(cryptopp-cmake)
+  if(EMSCRIPTEN)
+    unset(CRYPTOPP_SOLARIS)
+    target_compile_options(cryptopp PRIVATE
+      $<$<CONFIG:Release>:-Oz>
+      $<$<CONFIG:Release>:-flto>
+    )
+  endif()
   add_definitions(-DHD_WALLET_USE_CRYPTOPP=1)
   message(STATUS "Using Crypto++ for cryptographic operations")
 endif()
@@ -656,6 +680,14 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
     set(SECP256K1_INSTALL OFF CACHE BOOL "" FORCE)
     set(SECP256K1_ASM "OFF" CACHE STRING "" FORCE)
     FetchContent_MakeAvailable(secp256k1)
+    target_compile_options(secp256k1_precomputed PRIVATE
+      $<$<CONFIG:Release>:-Oz>
+      $<$<CONFIG:Release>:-flto>
+    )
+    target_compile_options(secp256k1 PRIVATE
+      $<$<CONFIG:Release>:-Oz>
+      $<$<CONFIG:Release>:-flto>
+    )
     message(STATUS "Using libsecp256k1 for WASM EC operations")
 
     # WASM compile options
@@ -714,7 +746,7 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       -sDISABLE_EXCEPTION_CATCHING=1
       -fignore-exceptions
       --no-entry
-      $<$<CONFIG:Release>:-O3>
+      $<$<CONFIG:Release>:-Oz>
       $<$<CONFIG:Release>:-flto>
       $<$<CONFIG:Debug>:-g>
     )
@@ -1009,7 +1041,7 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       -fignore-exceptions
       -sDISABLE_EXCEPTION_CATCHING=1
       --no-entry
-      $<$<CONFIG:Release>:-O3>
+      $<$<CONFIG:Release>:-Oz>
       $<$<CONFIG:Release>:-flto>
       $<$<CONFIG:Debug>:-g>
     )
@@ -1063,7 +1095,7 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       -fexceptions
       -sDISABLE_EXCEPTION_THROWING=0
       --no-entry
-      $<$<CONFIG:Release>:-O3>
+      $<$<CONFIG:Release>:-Oz>
       $<$<CONFIG:Release>:-flto>
       $<$<CONFIG:Debug>:-g>
     )
@@ -1118,7 +1150,7 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       -fexceptions
       -sDISABLE_EXCEPTION_THROWING=0
       --no-entry
-      $<$<CONFIG:Release>:-O3>
+      $<$<CONFIG:Release>:-Oz>
       $<$<CONFIG:Release>:-flto>
       $<$<CONFIG:Debug>:-g>
     )
@@ -1177,14 +1209,14 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
     if(WASM_OPT)
       add_custom_command(TARGET hd_wallet_wasm_npm POST_BUILD
         COMMAND "$<$<CONFIG:Release>:${WASM_OPT}>"
-                $<$<CONFIG:Release>:-O3>
+                $<$<CONFIG:Release>:-Oz>
                 $<$<CONFIG:Release>:--strip-debug>
                 $<$<CONFIG:Release>:--strip-producers>
                 $<$<CONFIG:Release>:--all-features>
                 $<$<CONFIG:Release>:-o>
                 $<$<CONFIG:Release>:${WASM_NPM_DIR}/hd-wallet.wasm>
                 $<$<CONFIG:Release>:${WASM_NPM_DIR}/hd-wallet.wasm>
-        COMMENT "Optimizing standalone WASM binary with wasm-opt -O3"
+        COMMENT "Optimizing standalone WASM binary with wasm-opt -Oz"
       )
     endif()
 

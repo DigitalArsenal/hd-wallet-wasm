@@ -19,6 +19,41 @@ const originEntry = normalizePath(resolve(configDirectory, 'origin-app/host-entr
 const WASM_ASSET_ID = '\0sdn-wallet-origin-wasm-asset';
 export const WASM_INTEGRITY_PLACEHOLDER = 'sha384-SDN_WALLET_ORIGIN_WASM_INTEGRITY_PLACEHOLDER';
 
+export function transformSplitWasmLoader(code) {
+  const replacements = [
+    [
+      'function(moduleArg = {}) {\n\nvar Module=moduleArg;',
+      'function(moduleArg = {}) {if(!(moduleArg.wasmBinary instanceof Uint8Array))'
+      + 'throw new Error("Verified WASM bytes are required");\n\nvar Module=moduleArg;',
+    ],
+    [
+      'function locateFile(path){if(Module["locateFile"]){return Module["locateFile"](path,scriptDirectory)}return scriptDirectory+path}',
+      'function locateFile(path){return scriptDirectory+path}',
+    ],
+    [
+      'var dataURIPrefix="data:application/octet-stream;base64,";var isDataURI=filename=>filename.startsWith(dataURIPrefix);',
+      'var isDataURI=()=>false;',
+    ],
+    [
+      'var wasmBinaryFile;if(Module["locateFile"]){wasmBinaryFile="hd-wallet.wasm";if(!isDataURI(wasmBinaryFile)){wasmBinaryFile=locateFile(wasmBinaryFile)}}else{wasmBinaryFile=new URL("hd-wallet.wasm",import.meta.url).href}',
+      'var wasmBinaryFile="verified-binary";',
+    ],
+  ];
+  let transformed = code;
+  for (const [before, after] of replacements) {
+    if (transformed.split(before).length !== 2) {
+      throw new Error('wallet-origin split loader seam no longer matches exactly once');
+    }
+    transformed = transformed.replace(before, after);
+  }
+  if (transformed.includes('Module["locateFile"]')
+      || transformed.includes('new URL("hd-wallet.wasm",import.meta.url).href')
+      || transformed.includes('data:application/octet-stream;base64,')) {
+    throw new Error('wallet-origin split loader retains an unsafe WASM resolution path');
+  }
+  return transformed;
+}
+
 function walletOriginPlugin() {
   return {
     enforce: 'pre',
@@ -42,28 +77,7 @@ function walletOriginPlugin() {
     },
     transform(code, id) {
       if (normalizePath(id) === splitWasmLoader) {
-        const replacements = [
-          [
-            'async function HDWalletWasm(moduleArg={}){',
-            'async function HDWalletWasm(moduleArg={}){if(!(moduleArg.wasmBinary instanceof Uint8Array))throw new Error("Verified WASM bytes are required");',
-          ],
-          [
-            'function locateFile(path){if(Module["locateFile"]){return Module["locateFile"](path,scriptDirectory)}return scriptDirectory+path}',
-            'function locateFile(path){return scriptDirectory+path}',
-          ],
-          [
-            'function findWasmBinary(){if(Module["locateFile"]){return locateFile("hd-wallet.wasm")}return new URL("hd-wallet.wasm",import.meta.url).href}',
-            'function findWasmBinary(){return"verified-binary"}',
-          ],
-        ];
-        let transformed = code;
-        for (const [before, after] of replacements) {
-          if (transformed.split(before).length !== 2) {
-            throw new Error('wallet-origin split loader seam no longer matches exactly once');
-          }
-          transformed = transformed.replace(before, after);
-        }
-        return { code: transformed, map: null };
+        return { code: transformSplitWasmLoader(code), map: null };
       }
       if (normalizePath(id) !== wasmIndex) return null;
       const start = code.indexOf('async function loadWasmModule() {');
