@@ -279,7 +279,12 @@ function makeFake(options = {}) {
     },
     _hd_sdn_destroy_identity(handle) {
       state.destroyed.push(handle);
-      if (options.throwOnDestroy) throw new Error('fixture destroy failure');
+      if (options.throwOnDestroy || options.destroyThrowsRemaining > 0) {
+        if (options.destroyThrowsRemaining > 0) {
+          options.destroyThrowsRemaining -= 1;
+        }
+        throw new Error('fixture destroy failure');
+      }
     },
   };
   return { wasm, state };
@@ -957,17 +962,104 @@ test('wipe or free cleanup failure cannot publish a successful handle', async ()
   }
 });
 
-test('destroy revokes JS authority even when the raw destroy boundary throws', async () => {
-  const { wasm, state } = makeFake({ throwOnDestroy: true });
+test('destroy-pending authority rejects all consumers before input and retries the native value', async () => {
+  const options = { destroyThrowsRemaining: 2 };
+  const { wasm, state } = makeFake(options);
   const sdn = createSdnTypedCapabilities(wasm);
   const { handle } = await sdn.derivePasswordIdentity(passwordInput());
   assert.throws(() => sdn.destroySdnIdentity(handle), (error) =>
     error.code === 'CRYPTO_FAILURE');
+
   const rawCallsAfterDestroy = state.rawCalls;
-  assert.throws(() => sdn.signSdnLoginV1(handle, new Uint8Array(32)), (error) =>
-    error.code === 'STALE_HANDLE');
+  let inputReads = 0;
+  const hostileInput = new Proxy({}, {
+    get() {
+      inputReads += 1;
+      throw new Error('destroy-pending input must not be read');
+    },
+    ownKeys() {
+      inputReads += 1;
+      throw new Error('destroy-pending input must not be enumerated');
+    },
+  });
+  const consumers = [
+    () => sdn.signSdnLoginV1(handle, hostileInput),
+    () => sdn.signSdnLoginV2(handle, hostileInput, 'wrong-row'),
+    () => sdn.signAssetReviewAuthorityActivation(handle, hostileInput, 'wrong-row'),
+    () => sdn.signAssetReviewDecision(handle, hostileInput, 'wrong-row'),
+    () => sdn.sealRememberedIdentity(handle, hostileInput),
+  ];
+  for (const consume of consumers) {
+    assert.throws(consume, (error) => error.code === 'STALE_HANDLE');
+  }
+  assert.equal(inputReads, 0);
   assert.equal(state.rawCalls, rawCallsAfterDestroy);
+
+  assert.throws(() => sdn.destroySdnIdentity(handle), (error) =>
+    error.code === 'CRYPTO_FAILURE');
   sdn.destroySdnIdentity(handle);
+  sdn.destroySdnIdentity(handle);
+  assert.deepEqual(state.destroyed, [VALID_HANDLE, VALID_HANDLE, VALID_HANDLE]);
+});
+
+test('failed unpublished rollback blocks all four factories beyond native capacity until drained', async () => {
+  const rememberedInput = () => ({
+    ciphertextAndTag: new Uint8Array(32),
+    prfOutput: new Uint8Array(32).fill(1),
+    hkdfSalt: new Uint8Array(32),
+    nonce: new Uint8Array(12),
+    canonicalUsernameUtf8: encoder.encode('fixture-user'),
+    canonicalAad: '{}',
+  });
+  const factories = [
+    {
+      name: 'derivePasswordIdentity',
+      invoke: (sdn) => sdn.derivePasswordIdentity(passwordInput()),
+    },
+    {
+      name: 'deriveLegacyPasswordIdentity',
+      invoke: (sdn) => sdn.deriveLegacyPasswordIdentity(passwordInput()),
+    },
+    {
+      name: 'importLegacyMnemonicIdentity',
+      invoke: (sdn) => sdn.importLegacyMnemonicIdentity({
+        mnemonicUtf8: encoder.encode('abandon '.repeat(11) + 'about'),
+        accountIndex: 0,
+      }),
+    },
+    {
+      name: 'importRememberedIdentity',
+      invoke: (sdn) => sdn.importRememberedIdentity(rememberedInput()),
+    },
+  ];
+
+  for (const factory of factories) {
+    const options = { failFree: true, destroyThrowsRemaining: 18 };
+    const { wasm, state } = makeFake(options);
+    const sdn = createSdnTypedCapabilities(wasm);
+
+    await expectCode(Promise.resolve().then(() => factory.invoke(sdn)), 'CRYPTO_FAILURE');
+    assert.equal(state.rawCalls, 1, factory.name);
+    assert.deepEqual(state.destroyed, [VALID_HANDLE], factory.name);
+
+    for (let attempt = 0; attempt < 17; attempt += 1) {
+      await expectCode(
+        Promise.resolve().then(() => factory.invoke(sdn)),
+        'CRYPTO_FAILURE',
+      );
+      assert.equal(state.rawCalls, 1, `${factory.name} retry ${attempt + 1}`);
+      assert.equal(state.destroyed.at(-1), VALID_HANDLE, factory.name);
+    }
+    assert.equal(state.destroyed.length, 18, factory.name);
+
+    options.failFree = false;
+    options.destroyThrowsRemaining = 0;
+    const result = await factory.invoke(sdn);
+    assert.equal(state.rawCalls, 2, factory.name);
+    assert.deepEqual(state.destroyed.slice(0, 19), new Array(19).fill(VALID_HANDLE));
+    sdn.destroySdnIdentity(result.handle);
+    assert.equal(state.destroyed.length, 20, factory.name);
+  }
 });
 
 test('remembered open/seal wipe caller-owned PRF and password buffers on every exit', async () => {

@@ -141,8 +141,8 @@ describe('account modal wallet layout', () => {
     expect(app).not.toContain("$('account-logout')?.addEventListener('click', logout)");
     expect(app).toContain('logout() {');
     expect(app).toContain('logout();');
-    expect(app).toContain('WalletStorage.clearStorage();');
-    expect(app).toContain('hideStoredWalletLoginUI();');
+    expect(app).not.toContain('WalletStorage.clearStorage();');
+    expect(app).not.toContain('hideStoredWalletLoginUI();');
     expect(app).toContain('if (state.loggedIn) {');
     expect(app).toContain("document.getElementById('keys-modal')");
   });
@@ -160,18 +160,33 @@ describe('account modal wallet layout', () => {
     expect(closeRule).toContain('justify-content: center');
   });
 
-  it('defaults password and seed login to encrypted PIN storage for refresh unlock', () => {
+  it('removes the legacy PIN/passkey remember runtime and exposes quarantine actions only', () => {
     const template = read('src/template.js');
     const app = read('src/app.js');
+    const lib = read('src/lib.js');
 
-    expect(app).toContain("password: 'pin'");
-    expect(app).toContain("seed: 'pin'");
-    expect(template).toContain('id="remember-wallet-password" checked');
-    expect(template).toContain('id="remember-wallet-seed" checked');
-    expect(template).toContain('id="remember-options-password"');
-    expect(template).toContain('id="pin-group-password"');
-    expect(template).toContain('id="pin-group-seed"');
-    expect(template).toContain('class="remember-method-btn active" data-method="pin" data-target="password"');
-    expect(template).toContain('class="remember-method-btn active" data-method="pin" data-target="seed"');
+    expect(template).not.toMatch(/remember-wallet|remember-method|pin-input|passkey/iu);
+    expect(template).not.toContain('id="stored-tab"');
+    expect(template).toContain('id="legacy-wallet-quarantine"');
+    expect(template).toContain('id="legacy-wallet-quarantine-list"');
+    expect(app).not.toMatch(/storeWithPIN|retrieveWithPIN|storeWithPasskey|retrieveWithPasskey|migrateStorage/u);
+    expect(app).toContain('inspectLegacyWalletQuarantine');
+    expect(app).toContain('exportQuarantinedWalletRecord');
+    expect(app).toContain('deleteQuarantinedWalletRecord');
+    expect(lib).not.toMatch(/StorageMethod|storeWithPIN|retrieveWithPIN|registerPasskey|authenticatePasskey/u);
+  });
+
+  it('keeps origin Account quarantine management separate from valid remembered-wallet Forget', () => {
+    const account = read('origin-app/account.mjs');
+    const originApp = read('origin-app/app.mjs');
+
+    expect(account).toContain('export function renderQuarantinedWalletManager');
+    expect(account).toContain("walletAction = 'export-quarantined-wallet'");
+    expect(account).toContain("walletAction = 'delete-quarantined-wallet'");
+    expect(account).toContain("walletAction = 'confirm-delete-quarantined-wallet'");
+    expect(account).toContain('export function renderRememberedWalletForget');
+    expect(originApp).toContain('installQuarantineManager');
+    expect(originApp).toContain('controller.canForgetRememberedWallet');
+    expect(originApp).toContain('controller.forgetRememberedWallet');
   });
 });

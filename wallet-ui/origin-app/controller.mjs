@@ -1,3 +1,5 @@
+import { getWalletOriginCapabilities } from 'hd-wallet-wasm';
+
 import {
   WalletOperationError,
   assertWalletContext,
@@ -7,6 +9,10 @@ import {
   validateWalletTransaction,
 } from './operations.mjs';
 import { copyLegacyPublicIdentity, copyModernPublicIdentity } from './account.mjs';
+import {
+  canonicalizeWalletUsername,
+  createRememberedWalletCoordinator,
+} from './remember-wallet.mjs';
 import { validateWalletRelayCompletion } from './relay.mjs';
 
 const SafeUint8Array = Uint8Array;
@@ -53,6 +59,8 @@ function isWellFormed(value) {
 
 function clearControl(control) {
   if (!control || typeof control !== 'object') return;
+  try { if (control.type === 'checkbox') control.checked = false; } catch { /* continue clearing */ }
+  try { if (control.type === 'checkbox') control.defaultChecked = false; } catch { /* continue clearing */ }
   for (const property of ['value', 'defaultValue']) {
     try { control[property] = ''; } catch { /* continue clearing */ }
   }
@@ -94,15 +102,16 @@ function retireCredentialSubtree(document, controls) {
 }
 
 function normalizeWasm(wasm) {
-  const capabilities = wasm?.sdn ?? wasm;
-  const hashOwner = wasm?.utils && typeof wasm.utils === 'object' ? wasm.utils : wasm;
-  const sha256 = hashOwner?.sha256;
+  let binding;
+  try { binding = getWalletOriginCapabilities(wasm); } catch { fail('WASM_UNAVAILABLE'); }
+  const capabilities = binding?.sdn;
+  const sha256 = binding?.sha256;
   if (!capabilities || typeof capabilities.derivePasswordIdentity !== 'function'
       || typeof capabilities.destroySdnIdentity !== 'function'
       || typeof sha256 !== 'function') {
     fail('WASM_UNAVAILABLE');
   }
-  return Object.freeze({ capabilities, sha256: sha256.bind(hashOwner) });
+  return Object.freeze({ capabilities, sha256 });
 }
 
 function abortController(windowObject) {
@@ -131,25 +140,61 @@ export class WalletOriginController {
   #preparedControllers = new WeakMap();
   #publicationPermit = null;
   #registry;
+  #rememberedWallet;
   #relay;
   #relayRevoked = false;
   #retainedIdentity = null;
   #revoked = false;
   #revocationEpoch = 0;
-  #rng;
   #secretBuffers = new Set();
   #sha256;
+  #unlockControllers = new Set();
   #window;
 
-  constructor({ wasm, registry, relay, rng, document, window }) {
+  constructor({
+    credentials,
+    document,
+    now,
+    registry,
+    relay,
+    rng,
+    storage,
+    wasm,
+    window,
+  }) {
     const normalizedWasm = normalizeWasm(wasm);
     this.#capabilities = normalizedWasm.capabilities;
     this.#sha256 = normalizedWasm.sha256;
     this.#registry = registry;
     this.#relay = relay;
-    this.#rng = rng;
     this.#document = document;
     this.#window = window;
+    this.#rememberedWallet = createRememberedWalletCoordinator({
+      createRequestController: () => {
+        const controller = abortController(this.#window);
+        if (controller) {
+          this.#controllers.add(controller);
+          this.#unlockControllers.add(controller);
+        }
+        return controller;
+      },
+      credentials: credentials ?? window?.navigator?.credentials ?? globalThis.navigator?.credentials,
+      destroyHandle: (handle) => this.#destroyHandle(handle),
+      module: wasm,
+      now,
+      ownHandle: (handle) => this.#ownedHandles.add(handle),
+      ownedHandlesClean: (sourceHandle) => this.#ownedHandles.size === 1
+        && this.#ownedHandles.has(sourceHandle) && this.#handle === sourceHandle,
+      releaseRequestController: (controller) => {
+        this.#unlockControllers.delete(controller);
+        this.#controllers.delete(controller);
+      },
+      rng: rng ?? {
+        getRandomValues: window?.crypto?.getRandomValues?.bind(window.crypto)
+          ?? globalThis.crypto?.getRandomValues?.bind(globalThis.crypto),
+      },
+      storage: storage ?? window?.localStorage ?? globalThis.localStorage,
+    });
     this.#installLifecycle();
   }
 
@@ -218,7 +263,17 @@ export class WalletOriginController {
   #abortRequests() {
     const controllers = [...this.#controllers];
     this.#controllers.clear();
+    this.#unlockControllers.clear();
     for (const controller of controllers) {
+      try { controller.abort(); } catch { /* best effort */ }
+    }
+  }
+
+  #abortUnlockRequests() {
+    const controllers = [...this.#unlockControllers];
+    this.#unlockControllers.clear();
+    for (const controller of controllers) {
+      this.#controllers.delete(controller);
       try { controller.abort(); } catch { /* best effort */ }
     }
   }
@@ -229,11 +284,36 @@ export class WalletOriginController {
     for (const bytes of buffers) wipe(bytes);
   }
 
-  #clearCredentialControls() {
+  #clearCredentialControls(preserveControls = []) {
     if (this.#credentialControls.size === 0) return;
-    const controls = [...this.#credentialControls];
-    this.#credentialControls.clear();
+    const preserved = new Set(preserveControls);
+    const controls = [];
+    for (const control of this.#credentialControls) {
+      if (!preserved.has(control)) controls.push(control);
+    }
+    this.#credentialControls = new Set(
+      [...this.#credentialControls].filter((control) => preserved.has(control)),
+    );
     retireCredentialSubtree(this.#document, controls);
+  }
+
+  #beginUnlockReplacement(incomingControls = []) {
+    if (this.#destroyed || this.#revoked) fail('STALE_CONTROLLER');
+    const generation = this.#advanceGeneration();
+    this.#clearCredentialControls(incomingControls);
+    this.#abortUnlockRequests();
+    this.#clearSecrets();
+    let destroyed = this.#destroyHandle();
+    if (destroyed) {
+      destroyed = this.#retryOwnedHandles() && this.#ownedHandles.size === 0;
+    }
+    if (!destroyed) {
+      this.revokeNow('native-destruction-failed');
+      this.#retryOwnedHandles();
+      fail('DESTRUCTION_FAILED');
+    }
+    this.#retainedIdentity = null;
+    return generation;
   }
 
   #finishOneShot(handle, generation, {
@@ -265,7 +345,8 @@ export class WalletOriginController {
     const confirmation = this.#confirmation;
     this.#confirmation = null;
 
-    const destroyed = this.#destroyHandle(handle);
+    let destroyed = this.#destroyHandle(handle);
+    if (destroyed) destroyed = this.#retryOwnedHandles() && this.#ownedHandles.size === 0;
     if (!destroyed) {
       this.#publicationPermit = null;
       this.#retainedIdentity = null;
@@ -299,6 +380,7 @@ export class WalletOriginController {
 
   #assertPublicationCurrent(epoch, permit) {
     if (this.#destroyed || this.#revocationEpoch !== epoch
+        || this.#ownedHandles.size !== 0
         || permit === null || this.#publicationPermit !== permit) fail('STALE_CONTROLLER');
   }
 
@@ -370,26 +452,103 @@ export class WalletOriginController {
     try { return copyModernPublicIdentity(identity); } catch { fail('WASM_FAILURE'); }
   }
 
-  async unlockPassword({ usernameControl, passwordControl, accountIndex = 0 }) {
+  supportsRememberedWallet() {
+    return !this.#destroyed && !this.#revoked && this.#rememberedWallet.supported();
+  }
+
+  canRestoreRememberedWallet() {
+    if (!this.supportsRememberedWallet()) return false;
+    try { return this.#rememberedWallet.inspect().canRestore === true; } catch { return false; }
+  }
+
+  isUiGenerationCurrent(generation) {
+    return Number.isSafeInteger(generation) && generation === this.#generation
+      && !this.#destroyed && (!this.#revoked || this.#pendingAccountPublication !== null);
+  }
+
+  listQuarantinedWalletRecords() {
+    if (this.#destroyed || (this.#revoked && !this.#pendingAccountPublication)) {
+      fail('STALE_CONTROLLER');
+    }
+    try { return this.#rememberedWallet.listQuarantine(); } catch (error) {
+      if (typeof error?.code === 'string') throw new WalletOriginError(error.code);
+      throw error;
+    }
+  }
+
+  exportQuarantinedWalletRecord(key) {
+    if (this.#destroyed || (this.#revoked && !this.#pendingAccountPublication)) {
+      fail('STALE_CONTROLLER');
+    }
+    try { return this.#rememberedWallet.exportQuarantine(key); } catch (error) {
+      if (typeof error?.code === 'string') throw new WalletOriginError(error.code);
+      throw error;
+    }
+  }
+
+  deleteQuarantinedWalletRecord(key, confirmation) {
+    if (this.#destroyed || (this.#revoked && !this.#pendingAccountPublication)) {
+      fail('STALE_CONTROLLER');
+    }
+    try { return this.#rememberedWallet.deleteQuarantine(key, confirmation); } catch (error) {
+      if (typeof error?.code === 'string') throw new WalletOriginError(error.code);
+      throw error;
+    }
+  }
+
+  canForgetRememberedWallet() {
+    if (this.#destroyed || !this.#retainedIdentity || !this.#pendingAccountPublication) return false;
+    try { return this.#rememberedWallet.canForget() === true; } catch { return false; }
+  }
+
+  forgetRememberedWallet(confirmation) {
+    if (!this.canForgetRememberedWallet()) fail('REMEMBER_UNAVAILABLE');
+    try {
+      return this.#rememberedWallet.forget({ confirmation });
+    } catch (error) {
+      if (typeof error?.code === 'string') throw new WalletOriginError(error.code);
+      throw error;
+    }
+  }
+
+  async unlockPassword({
+    accountIndex = 0,
+    passwordControl,
+    rememberControl = null,
+    rememberStatus = null,
+    usernameControl,
+  }) {
     if (this.#destroyed || this.#revoked) fail('STALE_CONTROLLER');
     if (accountIndex !== 0) fail('INVALID_ACCOUNT');
-    this.registerCredentialControls({ passwordControl, usernameControl });
+    if (!usernameControl || !passwordControl) fail('INVALID_CREDENTIAL_FORM');
     try {
       assertWalletContext({ document: this.#document, window: this.#window });
     } catch (error) {
-      this.#clearCredentialControls();
+      retireCredentialSubtree(
+        this.#document,
+        [usernameControl, passwordControl, rememberControl].filter(Boolean),
+      );
       rethrowContextError(error);
     }
-    this.#advanceGeneration();
-    const generation = this.#generation;
-    if (!this.#destroyHandle()) {
-      this.#clearCredentialControls();
-      this.revokeNow('native-destruction-failed');
-      fail('DESTRUCTION_FAILED');
+    let generation;
+    try {
+      generation = this.#beginUnlockReplacement([usernameControl, passwordControl]);
+    } catch (error) {
+      retireCredentialSubtree(
+        this.#document,
+        [usernameControl, passwordControl, rememberControl].filter(Boolean),
+      );
+      throw error;
     }
-    this.#retainedIdentity = null;
+    this.registerCredentialControls({ passwordControl, usernameControl });
+    let canonicalUsername;
     let usernameUtf8;
     let passwordUtf8;
+    let rememberPasswordUtf8;
+    let trackedRememberPasswordUtf8;
+    let originalPasswordUtf8;
+    let password = null;
+    let rememberSelected = false;
     try {
       try {
         assertWalletContext({ document: this.#document, window: this.#window });
@@ -398,14 +557,39 @@ export class WalletOriginController {
       }
       this.#assertGeneration(generation);
       const username = usernameControl?.value;
-      const password = passwordControl?.value;
+      password = passwordControl?.value;
       if (!isWellFormed(username)) fail('INVALID_USERNAME');
       if (!isWellFormed(password)) fail('INVALID_PASSWORD');
+      try { canonicalUsername = canonicalizeWalletUsername(username); } catch { fail('INVALID_USERNAME'); }
       usernameUtf8 = encoder.encode(username);
-      passwordUtf8 = encoder.encode(password);
+      originalPasswordUtf8 = encoder.encode(password);
+      rememberSelected = rememberControl?.checked === true
+        && rememberControl?.disabled !== true
+        && this.#rememberedWallet.supported();
+      if (rememberSelected) {
+        if (originalPasswordUtf8.length === 0 || originalPasswordUtf8.length > 256) {
+          fail('INVALID_PASSWORD');
+        }
+        passwordUtf8 = originalPasswordUtf8.slice();
+        rememberPasswordUtf8 = originalPasswordUtf8.slice();
+        trackedRememberPasswordUtf8 = rememberPasswordUtf8;
+        wipe(originalPasswordUtf8);
+        originalPasswordUtf8 = null;
+      } else {
+        passwordUtf8 = originalPasswordUtf8;
+        originalPasswordUtf8 = null;
+      }
       this.#secretBuffers.add(usernameUtf8);
       this.#secretBuffers.add(passwordUtf8);
+      if (rememberPasswordUtf8) this.#secretBuffers.add(rememberPasswordUtf8);
     } finally {
+      password = null;
+      if (rememberControl && typeof rememberControl === 'object') {
+        try { rememberControl.checked = false; } catch { /* continue */ }
+        try { rememberControl.defaultChecked = false; } catch { /* continue */ }
+        try { rememberControl.disabled = true; } catch { /* continue */ }
+      }
+      wipe(originalPasswordUtf8);
       this.#clearCredentialControls();
     }
 
@@ -444,12 +628,103 @@ export class WalletOriginController {
       }
       this.#handle = handle;
       this.#identity = identity;
+      if (rememberSelected) {
+        try {
+          await this.#rememberedWallet.setup({
+            assertCurrent: () => this.#assertCurrent(handle, generation),
+            canonicalUsername,
+            handle,
+            identity,
+            passwordUtf8: rememberPasswordUtf8,
+          });
+          this.#assertCurrent(handle, generation);
+          this.#secretBuffers.delete(trackedRememberPasswordUtf8);
+          rememberPasswordUtf8 = null;
+          try { if (rememberStatus) rememberStatus.textContent = 'Wallet remembered on this device.'; } catch {
+            // Status rendering cannot affect the authenticated controller state.
+          }
+        } catch (error) {
+          wipe(rememberPasswordUtf8);
+          this.#secretBuffers.delete(trackedRememberPasswordUtf8);
+          rememberPasswordUtf8 = null;
+          const stale = this.#destroyed || this.#revoked
+            || this.#generation !== generation || this.#handle !== handle;
+          if (stale) fail('STALE_CONTROLLER');
+          const sourceOnly = this.#ownedHandles.size === 1
+            && this.#ownedHandles.has(handle) && this.#handle === handle;
+          if (!sourceOnly) {
+            this.revokeNow('remembered-wallet-cleanup-failed');
+            fail('DESTRUCTION_FAILED');
+          }
+          try { if (rememberStatus) rememberStatus.textContent = 'Wallet was not remembered.'; } catch {
+            // The fresh identity remains valid after complete temporary cleanup.
+          }
+        }
+      }
+      this.#assertCurrent(handle, generation);
       return identity;
+    } catch (error) {
+      if (error instanceof WalletOriginError && error.code === 'DESTRUCTION_FAILED') throw error;
+      if (this.#destroyed || this.#revoked || this.#generation !== generation) {
+        fail('STALE_CONTROLLER');
+      }
+      throw error;
     } finally {
       wipe(usernameUtf8);
       wipe(passwordUtf8);
+      wipe(rememberPasswordUtf8);
+      wipe(trackedRememberPasswordUtf8);
       this.#secretBuffers.delete(usernameUtf8);
       this.#secretBuffers.delete(passwordUtf8);
+      this.#secretBuffers.delete(trackedRememberPasswordUtf8);
+    }
+  }
+
+  async unlockRemembered({ accountIndex = 0 } = {}) {
+    if (this.#destroyed || this.#revoked) fail('STALE_CONTROLLER');
+    if (accountIndex !== 0) fail('INVALID_ACCOUNT');
+    if (!this.canRestoreRememberedWallet()) fail('REMEMBER_UNAVAILABLE');
+    try {
+      assertWalletContext({ document: this.#document, window: this.#window });
+    } catch (error) {
+      rethrowContextError(error);
+    }
+    const generation = this.#beginUnlockReplacement();
+    try {
+      const restored = await this.#rememberedWallet.restore({
+        assertCurrent: () => this.#assertGeneration(generation),
+      });
+      const handle = restored?.handle;
+      if (handle === null || handle === undefined || !this.#ownedHandles.has(handle)) {
+        fail('WASM_FAILURE');
+      }
+      let identity;
+      try { identity = copyModernPublicIdentity(restored.identity); } catch { fail('WASM_FAILURE'); }
+      if (this.#destroyed || this.#revoked || this.#generation !== generation) {
+        if (!this.#destroyHandle(handle)) {
+          this.revokeNow('native-destruction-failed');
+          fail('DESTRUCTION_FAILED');
+        }
+        fail('STALE_CONTROLLER');
+      }
+      this.#handle = handle;
+      this.#identity = identity;
+      return identity;
+    } catch (error) {
+      if (error instanceof WalletOriginError && error.code === 'DESTRUCTION_FAILED') throw error;
+      if (this.#destroyed || this.#revoked || this.#generation !== generation) {
+        fail('STALE_CONTROLLER');
+      }
+      if (this.#ownedHandles.size > 0) {
+        this.#retryOwnedHandles();
+        if (this.#ownedHandles.size > 0) {
+          this.revokeNow('remembered-wallet-cleanup-failed');
+          fail('DESTRUCTION_FAILED');
+        }
+      }
+      if (error instanceof WalletOriginError) throw error;
+      if (typeof error?.code === 'string') throw new WalletOriginError(error.code);
+      throw error;
     }
   }
 
@@ -468,25 +743,31 @@ export class WalletOriginController {
     const mnemonic = profile === 'bip39-mnemonic-v1-legacy';
     if (!fastPassword && !mnemonic) fail('INVALID_LEGACY_PROFILE');
     if (fastPassword) {
-      this.registerCredentialControls({ passwordControl, usernameControl });
+      if (!usernameControl || !passwordControl) fail('INVALID_CREDENTIAL_FORM');
     } else {
       if (!mnemonicControl || typeof mnemonicControl !== 'object') fail('INVALID_CREDENTIAL_FORM');
-      this.#credentialControls.add(mnemonicControl);
     }
+    const incomingControls = fastPassword
+      ? [usernameControl, passwordControl]
+      : [mnemonicControl];
     try {
       assertWalletContext({ document: this.#document, window: this.#window });
     } catch (error) {
-      this.#clearCredentialControls();
+      retireCredentialSubtree(this.#document, incomingControls);
       rethrowContextError(error);
     }
-    this.#advanceGeneration();
-    const generation = this.#generation;
-    if (!this.#destroyHandle()) {
-      this.#clearCredentialControls();
-      this.revokeNow('native-destruction-failed');
-      fail('DESTRUCTION_FAILED');
+    let generation;
+    try {
+      generation = this.#beginUnlockReplacement(incomingControls);
+    } catch (error) {
+      retireCredentialSubtree(this.#document, incomingControls);
+      throw error;
     }
-    this.#retainedIdentity = null;
+    if (fastPassword) {
+      this.registerCredentialControls({ passwordControl, usernameControl });
+    } else {
+      this.#credentialControls.add(mnemonicControl);
+    }
     let usernameUtf8;
     let passwordUtf8;
     let mnemonicUtf8;
@@ -552,6 +833,12 @@ export class WalletOriginController {
       this.#handle = handle;
       this.#identity = identity;
       return identity;
+    } catch (error) {
+      if (error instanceof WalletOriginError && error.code === 'DESTRUCTION_FAILED') throw error;
+      if (this.#destroyed || this.#revoked || this.#generation !== generation) {
+        fail('STALE_CONTROLLER');
+      }
+      throw error;
     } finally {
       wipe(usernameUtf8);
       wipe(passwordUtf8);

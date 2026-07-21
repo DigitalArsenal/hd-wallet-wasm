@@ -1,3 +1,5 @@
+import { ACTIVE_REMEMBERED_WALLET_KEY } from '../src/wallet-storage.js';
+
 const MODERN_IDENTITY_SCHEME = 'sdn-bip32-slip10-purpose-v1';
 const MODERN_SEED_PROFILE = 'password-scrypt-v2';
 const APPROVAL_PATH = "m/44'/0'/0'/2'/0'";
@@ -314,6 +316,123 @@ export function renderAccount(container, identity, { document = container.ownerD
   appendValue(document, container, 'Asset approval public key', configuration.publicKeyHex);
   appendValue(document, container, 'Asset approval key ID', configuration.keyId);
   return Object.freeze({ approvalAvailable: true, configuration });
+}
+
+export function renderRememberedWalletForget(
+  container,
+  { document = container.ownerDocument } = {},
+) {
+  container.replaceChildren();
+  const heading = document.createElement('h2');
+  heading.textContent = 'Stored wallet';
+  const explanation = document.createElement('p');
+  explanation.textContent = 'Forgetting removes the saved unlock record but keeps this account signed in.';
+  const launch = document.createElement('button');
+  launch.type = 'button';
+  launch.dataset.walletAction = 'forget-stored-wallet';
+  launch.textContent = 'Forget stored wallet';
+  const confirmationGroup = document.createElement('div');
+  confirmationGroup.hidden = true;
+  const instruction = document.createElement('p');
+  instruction.textContent = `Type ${ACTIVE_REMEMBERED_WALLET_KEY} to confirm.`;
+  const confirmation = document.createElement('input');
+  confirmation.type = 'text';
+  confirmation.autocomplete = 'off';
+  confirmation.spellcheck = false;
+  confirmation.dataset.walletForgetConfirmation = 'exact-storage-key';
+  const confirm = document.createElement('button');
+  confirm.type = 'button';
+  confirm.dataset.walletAction = 'confirm-forget-stored-wallet';
+  confirm.textContent = 'Confirm forget';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.dataset.walletAction = 'cancel-forget-stored-wallet';
+  cancel.textContent = 'Cancel';
+  const status = document.createElement('p');
+  status.dataset.walletForgetStatus = 'true';
+  status.setAttribute?.('aria-live', 'polite');
+  confirmationGroup.append(instruction, confirmation, confirm, cancel);
+  container.append(heading, explanation, launch, confirmationGroup, status);
+  return Object.freeze({
+    cancel,
+    confirm,
+    confirmation,
+    confirmationGroup,
+    confirmationKey: ACTIVE_REMEMBERED_WALLET_KEY,
+    launch,
+    status,
+  });
+}
+
+export function renderQuarantinedWalletManager(
+  container,
+  entries,
+  { document = container.ownerDocument } = {},
+) {
+  container.replaceChildren();
+  const heading = document.createElement('h2');
+  heading.textContent = 'Quarantined wallet storage';
+  const explanation = document.createElement('p');
+  explanation.textContent = 'These records are never unlocked automatically. Export or delete each exact storage key.';
+  const list = document.createElement('div');
+  const status = document.createElement('p');
+  status.dataset.walletQuarantineStatus = 'true';
+  status.setAttribute?.('aria-live', 'polite');
+  const rows = [];
+  for (const entry of entries) {
+    const row = document.createElement('div');
+    row.className = 'wallet-quarantine-row';
+    const label = document.createElement('code');
+    label.dataset.walletQuarantineLabel = 'true';
+    label.textContent = entry.key;
+    const detail = document.createElement('span');
+    detail.textContent = entry.oversized
+      ? `Export unavailable (${entry.rawLength} characters)`
+      : `${entry.rawLength} characters`;
+    const exportButton = document.createElement('button');
+    exportButton.type = 'button';
+    exportButton.dataset.walletAction = 'export-quarantined-wallet';
+    exportButton.dataset.walletQuarantineKey = entry.key;
+    exportButton.textContent = entry.exportable ? 'Export' : 'Export unavailable';
+    const deleteButton = document.createElement('button');
+    deleteButton.type = 'button';
+    deleteButton.dataset.walletAction = 'delete-quarantined-wallet';
+    deleteButton.dataset.walletQuarantineKey = entry.key;
+    deleteButton.textContent = 'Delete';
+    const confirmationGroup = document.createElement('div');
+    confirmationGroup.hidden = true;
+    const instruction = document.createElement('p');
+    instruction.textContent = `Type ${entry.key} to confirm deletion.`;
+    const confirmation = document.createElement('input');
+    confirmation.type = 'text';
+    confirmation.autocomplete = 'off';
+    confirmation.spellcheck = false;
+    confirmation.dataset.walletQuarantineConfirmation = entry.key;
+    const confirm = document.createElement('button');
+    confirm.type = 'button';
+    confirm.dataset.walletAction = 'confirm-delete-quarantined-wallet';
+    confirm.dataset.walletQuarantineKey = entry.key;
+    confirm.textContent = 'Confirm delete';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.dataset.walletAction = 'cancel-delete-quarantined-wallet';
+    cancel.dataset.walletQuarantineKey = entry.key;
+    cancel.textContent = 'Cancel';
+    confirmationGroup.append(instruction, confirmation, confirm, cancel);
+    row.append(label, detail, exportButton, deleteButton, confirmationGroup);
+    list.append(row);
+    rows.push(Object.freeze({
+      cancel,
+      confirm,
+      confirmation,
+      confirmationGroup,
+      deleteButton,
+      entry,
+      exportButton,
+    }));
+  }
+  container.append(heading, explanation, list, status);
+  return Object.freeze({ rows: Object.freeze(rows), status });
 }
 
 export async function copyApprovalConfiguration(

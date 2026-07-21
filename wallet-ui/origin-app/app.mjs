@@ -6,6 +6,8 @@ import {
   deriveExplicitLegacyIdentity,
   renderAccount,
   renderLegacyMigrationLauncher,
+  renderQuarantinedWalletManager,
+  renderRememberedWalletForget,
 } from './account.mjs';
 import { createSameOriginWalletRelay } from './relay.mjs';
 import { resolveRegistryBinding } from './registry.mjs';
@@ -58,10 +60,148 @@ function clearCredentialForm(form, controls) {
   try { form.remove?.(); } catch { /* fields were already cleared */ }
 }
 
+function installQuarantineManager({
+  clipboard,
+  controller,
+  document,
+  onChanged = () => {},
+}) {
+  if (!controller || typeof controller.listQuarantinedWalletRecords !== 'function') return null;
+  const container = document.createElement('section');
+  container.className = 'wallet-quarantine-manager';
+  const controllerGeneration = controller.generation;
+  let destroyed = false;
+  let localGeneration = 0;
+  let listeners = [];
+  let rendered = null;
+
+  const isCurrent = (expectedLocalGeneration = localGeneration) => !destroyed
+    && expectedLocalGeneration === localGeneration
+    && controller.isUiGenerationCurrent?.(controllerGeneration) === true;
+  const setStatus = (message, expectedLocalGeneration = localGeneration) => {
+    if (isCurrent(expectedLocalGeneration) && rendered?.status) {
+      rendered.status.textContent = message;
+    }
+  };
+  const clearRendered = () => {
+    localGeneration += 1;
+    for (const [node, type, listener] of listeners) {
+      try { node.removeEventListener?.(type, listener); } catch { /* detached controls are inert */ }
+    }
+    listeners = [];
+    for (const row of rendered?.rows ?? []) {
+      try { row.confirmation.value = ''; } catch { /* continue */ }
+      try { row.confirmation.defaultValue = ''; } catch { /* continue */ }
+      try { row.confirmation.disabled = true; } catch { /* continue */ }
+    }
+    if (rendered?.status) rendered.status.textContent = '';
+    rendered = null;
+  };
+  const bind = (node, type, listener) => {
+    node.addEventListener?.(type, listener);
+    listeners.push([node, type, listener]);
+  };
+  const refresh = () => {
+    clearRendered();
+    if (destroyed || controller.isUiGenerationCurrent?.(controllerGeneration) !== true) {
+      container.replaceChildren();
+      container.hidden = true;
+      return false;
+    }
+    let entries;
+    try { entries = controller.listQuarantinedWalletRecords(); } catch {
+      entries = [];
+    }
+    if (!Array.isArray(entries) || entries.length === 0) {
+      container.replaceChildren();
+      container.hidden = true;
+      return false;
+    }
+    container.hidden = false;
+    rendered = renderQuarantinedWalletManager(container, entries, { document });
+    const renderedGeneration = localGeneration;
+    for (const row of rendered.rows) {
+      const { entry } = row;
+      const onExport = async (event) => {
+        if (event?.isTrusted !== true || !isCurrent(renderedGeneration)) return;
+        if (entry.exportable !== true) {
+          setStatus('Quarantined record is too large to export.', renderedGeneration);
+          return;
+        }
+        let raw;
+        try {
+          raw = controller.exportQuarantinedWalletRecord(entry.key);
+          if (typeof clipboard?.writeText !== 'function') throw new Error('clipboard unavailable');
+          await clipboard.writeText(raw);
+          setStatus('Quarantined record exported to the clipboard.', renderedGeneration);
+        } catch {
+          setStatus('Quarantined record export failed.', renderedGeneration);
+        } finally {
+          raw = null;
+        }
+      };
+      const onDelete = (event) => {
+        if (event?.isTrusted !== true || !isCurrent(renderedGeneration)) return;
+        try { row.confirmation.value = ''; } catch { /* continue */ }
+        try { row.confirmation.defaultValue = ''; } catch { /* continue */ }
+        row.confirmationGroup.hidden = false;
+        setStatus(`Type ${entry.key} to confirm deletion.`, renderedGeneration);
+        try { row.confirmation.focus?.(); } catch { /* focus is best effort */ }
+      };
+      const onCancel = (event) => {
+        if (event?.isTrusted !== true || !isCurrent(renderedGeneration)) return;
+        try { row.confirmation.value = ''; } catch { /* continue */ }
+        try { row.confirmation.defaultValue = ''; } catch { /* continue */ }
+        row.confirmationGroup.hidden = true;
+        setStatus('', renderedGeneration);
+      };
+      const onConfirm = (event) => {
+        if (event?.isTrusted !== true || !isCurrent(renderedGeneration)) return;
+        const confirmation = row.confirmation.value;
+        if (confirmation !== entry.key) {
+          setStatus('Type the exact storage key to confirm deletion.', renderedGeneration);
+          return;
+        }
+        try {
+          controller.deleteQuarantinedWalletRecord(entry.key, confirmation);
+        } catch {
+          setStatus('Quarantined record deletion failed.', renderedGeneration);
+          return;
+        }
+        try { row.confirmation.value = ''; } catch { /* continue */ }
+        try { row.confirmation.defaultValue = ''; } catch { /* continue */ }
+        refresh();
+        if (!destroyed) onChanged();
+      };
+      bind(row.exportButton, 'click', onExport);
+      bind(row.deleteButton, 'click', onDelete);
+      bind(row.cancel, 'click', onCancel);
+      bind(row.confirm, 'click', onConfirm);
+    }
+    return true;
+  };
+
+  const hasEntries = refresh();
+  return Object.freeze({
+    container,
+    destroy() {
+      if (destroyed) return;
+      destroyed = true;
+      clearRendered();
+      container.replaceChildren();
+      container.remove?.();
+    },
+    hasEntries,
+    refresh,
+  });
+}
+
 export function createPasswordCredentialPrompt({
+  clipboard = globalThis.navigator?.clipboard,
   controller = null,
   document,
   mount = null,
+  offerRememberedUnlock = true,
   title = 'Sign in',
 }) {
   const mountNode = mount ?? document?.body;
@@ -86,8 +226,42 @@ export function createPasswordCredentialPrompt({
   passwordControl.required = true;
   appendLabelledControl(document, form, 'Username', usernameControl);
   appendLabelledControl(document, form, 'Password', passwordControl);
+  let rememberControl = null;
+  if (controller && typeof controller === 'object') {
+    rememberControl = document.createElement('input');
+    rememberControl.type = 'checkbox';
+    rememberControl.dataset.walletRemember = 'prf-only';
+    rememberControl.checked = false;
+    rememberControl.defaultChecked = false;
+    let rememberSupported = false;
+    try { rememberSupported = controller.supportsRememberedWallet?.() === true; } catch {
+      rememberSupported = false;
+    }
+    rememberControl.disabled = !rememberSupported;
+    appendLabelledControl(document, form, 'Remember on this device', rememberControl);
+  }
+  const rememberStatus = document.createElement('p');
+  rememberStatus.dataset.walletRememberStatus = 'true';
+  let refreshRememberedUnlock = () => {};
+  const quarantineManager = installQuarantineManager({
+    clipboard,
+    controller,
+    document,
+    onChanged: () => refreshRememberedUnlock(),
+  });
   const actions = document.createElement('div');
   actions.className = 'wallet-login-actions';
+  let unlockRemembered = null;
+  let restoreAvailable = false;
+  try { restoreAvailable = controller?.canRestoreRememberedWallet?.() === true; } catch {
+    restoreAvailable = false;
+  }
+  if (restoreAvailable && offerRememberedUnlock) {
+    unlockRemembered = document.createElement('button');
+    unlockRemembered.type = 'button';
+    unlockRemembered.dataset.walletAction = 'unlock-remembered';
+    unlockRemembered.textContent = 'Unlock remembered wallet';
+  }
   const submit = document.createElement('button');
   submit.type = 'submit';
   submit.dataset.walletAction = 'login';
@@ -96,9 +270,12 @@ export function createPasswordCredentialPrompt({
   cancel.type = 'button';
   cancel.dataset.walletAction = 'cancel-login';
   cancel.textContent = 'Cancel';
+  if (unlockRemembered) actions.append(unlockRemembered);
   actions.append(submit, cancel);
   form.append(actions);
-  section.append(heading, account, form);
+  section.append(heading, account);
+  if (quarantineManager?.hasEntries) section.append(quarantineManager.container);
+  section.append(form, rememberStatus);
   mountNode.append(section);
   controller?.registerCredentialControls?.({ passwordControl, usernameControl });
 
@@ -112,14 +289,28 @@ export function createPasswordCredentialPrompt({
   const cleanupListeners = () => {
     form.removeEventListener?.('submit', onSubmit);
     cancel.removeEventListener?.('click', onCancel);
+    unlockRemembered?.removeEventListener?.('click', onUnlockRemembered);
+  };
+  const clearSupplementalControls = () => {
+    quarantineManager?.destroy?.();
+    if (rememberControl) {
+      try { rememberControl.checked = false; } catch { /* continue */ }
+      try { rememberControl.defaultChecked = false; } catch { /* continue */ }
+      try { rememberControl.disabled = true; } catch { /* continue */ }
+    }
+    rememberStatus.textContent = '';
+  };
+  const removePrompt = () => {
+    cleanupListeners();
+    clearCredentialForm(form, [usernameControl, passwordControl]);
+    clearSupplementalControls();
+    section.remove?.();
   };
   const rejectAndClear = (code) => {
     if (settled) return;
     settled = true;
-    cleanupListeners();
     try { controller?.revokeNow?.(code); } catch { /* local form cleanup still runs */ }
-    clearCredentialForm(form, [usernameControl, passwordControl]);
-    section.remove?.();
+    removePrompt();
     rejectPromise(new WalletOriginError(code));
   };
   const onSubmit = (event) => {
@@ -127,20 +318,53 @@ export function createPasswordCredentialPrompt({
     if (settled || event?.isTrusted !== true) return;
     settled = true;
     cleanupListeners();
-    resolvePromise({ passwordControl, usernameControl });
+    quarantineManager?.destroy?.();
+    resolvePromise({ passwordControl, rememberControl, rememberStatus, usernameControl });
   };
   const onCancel = (event) => {
     if (event?.isTrusted !== true) return;
     rejectAndClear('USER_CANCELLED');
   };
+  const onUnlockRemembered = (event) => {
+    if (settled || event?.isTrusted !== true) return;
+    settled = true;
+    cleanupListeners();
+    quarantineManager?.destroy?.();
+    clearCredentialForm(form, [usernameControl, passwordControl]);
+    resolvePromise({ remembered: true, rememberStatus });
+  };
+  refreshRememberedUnlock = () => {
+    if (settled || !offerRememberedUnlock) return;
+    let available = false;
+    try { available = controller?.canRestoreRememberedWallet?.() === true; } catch {
+      available = false;
+    }
+    if (available && !unlockRemembered) {
+      unlockRemembered = document.createElement('button');
+      unlockRemembered.type = 'button';
+      unlockRemembered.dataset.walletAction = 'unlock-remembered';
+      unlockRemembered.textContent = 'Unlock remembered wallet';
+      actions.replaceChildren(unlockRemembered, submit, cancel);
+      unlockRemembered.addEventListener?.('click', onUnlockRemembered);
+    } else if (!available && unlockRemembered) {
+      unlockRemembered.removeEventListener?.('click', onUnlockRemembered);
+      unlockRemembered.remove?.();
+      unlockRemembered = null;
+    }
+  };
   form.addEventListener('submit', onSubmit);
   cancel.addEventListener('click', onCancel);
+  unlockRemembered?.addEventListener?.('click', onUnlockRemembered);
   try { usernameControl.focus?.(); } catch { /* focus is best effort */ }
   return Object.freeze({
-    cancel: () => rejectAndClear('STALE_CONTROLLER'),
-    controls: Object.freeze({ passwordControl, usernameControl }),
+    cancel() {
+      if (!settled) rejectAndClear('STALE_CONTROLLER');
+      else removePrompt();
+    },
+    controls: Object.freeze({ passwordControl, rememberControl, rememberStatus, usernameControl }),
     form,
     promise,
+    remove: removePrompt,
   });
 }
 
@@ -185,12 +409,15 @@ function createMnemonicCredentialPrompt({
     form.removeEventListener?.('submit', onSubmit);
     cancel.removeEventListener?.('click', onCancel);
   };
-  const rejectAndClear = () => {
-    if (settled) return;
-    settled = true;
+  const removePrompt = () => {
     cleanupListeners();
     clearCredentialForm(form, [mnemonicControl]);
     section.remove?.();
+  };
+  const rejectAndClear = () => {
+    if (settled) return;
+    settled = true;
+    removePrompt();
     rejectPromise(new WalletOriginError('USER_CANCELLED'));
   };
   const onSubmit = (event) => {
@@ -206,7 +433,14 @@ function createMnemonicCredentialPrompt({
   form.addEventListener('submit', onSubmit);
   cancel.addEventListener('click', onCancel);
   try { mnemonicControl.focus?.(); } catch { /* focus is best effort */ }
-  return Object.freeze({ cancel: rejectAndClear, promise });
+  return Object.freeze({
+    cancel() {
+      if (!settled) rejectAndClear();
+      else removePrompt();
+    },
+    promise,
+    remove: removePrompt,
+  });
 }
 
 function createLegacyProfilePrompt({ document, mount = null, title = 'Choose legacy wallet profile' }) {
@@ -345,6 +579,7 @@ function installAccountSurface({
   controller,
   document,
   identity,
+  isAppCurrent = () => true,
   makeCredentialPrompt,
   mount,
   onClear,
@@ -379,9 +614,28 @@ function installAccountSurface({
   const migration = document.createElement('section');
   migration.className = 'wallet-legacy-migration';
   const legacyLauncher = renderLegacyMigrationLauncher(migration, { document });
+  let forgetAvailable = false;
+  try { forgetAvailable = controller.canForgetRememberedWallet?.() === true; } catch {
+    forgetAvailable = false;
+  }
+  const rememberedWallet = forgetAvailable ? document.createElement('section') : null;
+  const forgetControls = rememberedWallet
+    ? renderRememberedWalletForget(rememberedWallet, { document })
+    : null;
+  if (forgetControls) {
+    forgetControls.launch.dataset.walletAction = 'forget-stored-wallet';
+  }
+  const quarantineManager = installQuarantineManager({
+    clipboard,
+    controller,
+    document,
+  });
   const exitStatus = document.createElement('p');
   exitStatus.className = 'wallet-account-exit-status';
-  section.append(accountView, approvalCard, returnToSite, logout, migration);
+  section.append(accountView, approvalCard);
+  if (rememberedWallet) section.append(rememberedWallet);
+  if (quarantineManager?.hasEntries) section.append(quarantineManager.container);
+  section.append(returnToSite, logout, migration);
   mount.replaceChildren(section);
 
   const approval = new ApprovalConfigurationController({
@@ -410,6 +664,8 @@ function installAccountSurface({
   let destroyed = false;
   let finishing = false;
   let completionPromise = null;
+  let forgetting = false;
+  let forgotten = false;
   let migrationRunning = false;
   let migrationInFlight = 0;
   let surfaceRemoved = false;
@@ -432,12 +688,17 @@ function installAccountSurface({
     for (const bytes of buffers) wipe(bytes);
   };
   const setSensitiveWorkBusy = () => {
-    const busy = copying || migrationRunning;
+    const busy = copying || migrationRunning || forgetting;
     returnToSite.disabled = finishing;
     logout.disabled = finishing;
     if (!destroyed) {
       copy.disabled = busy || !rendered.approvalAvailable;
       legacyLauncher.launch.disabled = busy;
+      if (forgetControls) {
+        forgetControls.launch.disabled = busy || forgotten;
+        forgetControls.confirm.disabled = busy;
+        forgetControls.cancel.disabled = busy;
+      }
     }
   };
   const destroyLegacyHandle = (handle) => {
@@ -459,7 +720,7 @@ function installAccountSurface({
     return legacyHandles.size === 0;
   };
   const onCopy = async (event) => {
-    if (event?.isTrusted !== true || copying || migrationRunning) return;
+    if (event?.isTrusted !== true || copying || migrationRunning || forgetting) return;
     const generation = surfaceGeneration;
     copying = true;
     setSensitiveWorkBusy();
@@ -487,7 +748,7 @@ function installAccountSurface({
     }
   };
   const onLegacyLaunch = async (event) => {
-    if (event?.isTrusted !== true || migrationRunning || copying) return;
+    if (event?.isTrusted !== true || migrationRunning || copying || forgetting) return;
     const profile = legacyLauncher.select.value || 'password-fast-v1-legacy';
     if (profile !== 'password-fast-v1-legacy' && profile !== 'bip39-mnemonic-v1-legacy') {
       legacyLauncher.result.textContent = 'Legacy profile unavailable.';
@@ -588,12 +849,64 @@ function installAccountSurface({
       if (isCurrent(generation)) setSensitiveWorkBusy();
     }
   };
+  const clearForgetConfirmation = () => {
+    if (!forgetControls) return;
+    try { forgetControls.confirmation.value = ''; } catch { /* continue */ }
+    try { forgetControls.confirmation.defaultValue = ''; } catch { /* continue */ }
+  };
+  const onForgetLaunch = (event) => {
+    if (!forgetControls || event?.isTrusted !== true || copying || migrationRunning
+        || forgetting || forgotten || destroyed) return;
+    clearForgetConfirmation();
+    forgetControls.confirmationGroup.hidden = false;
+    forgetControls.status.textContent = `Type ${forgetControls.confirmationKey} to confirm.`;
+    try { forgetControls.confirmation.focus?.(); } catch { /* focus is best effort */ }
+  };
+  const onForgetCancel = (event) => {
+    if (!forgetControls || event?.isTrusted !== true || forgetting || destroyed) return;
+    clearForgetConfirmation();
+    forgetControls.confirmationGroup.hidden = true;
+    forgetControls.status.textContent = 'Forget cancelled.';
+  };
+  const onForgetConfirm = (event) => {
+    if (!forgetControls || event?.isTrusted !== true || copying || migrationRunning
+        || forgetting || forgotten || destroyed) return;
+    const confirmation = forgetControls.confirmation.value;
+    if (confirmation !== forgetControls.confirmationKey) {
+      forgetControls.status.textContent = 'Type the exact storage key to confirm.';
+      return;
+    }
+    forgetting = true;
+    setSensitiveWorkBusy();
+    clearForgetConfirmation();
+    try {
+      controller.forgetRememberedWallet(confirmation);
+      forgotten = true;
+      forgetControls.confirmationGroup.hidden = true;
+      forgetControls.status.textContent = 'Stored wallet forgotten. This account remains signed in.';
+    } catch {
+      forgetControls.status.textContent = 'Stored wallet could not be forgotten.';
+    } finally {
+      forgetting = false;
+      if (!destroyed) setSensitiveWorkBusy();
+    }
+  };
   const terminalizeSurface = (retainExitSurface) => {
     if (!destroyed) {
       destroyed = true;
       surfaceGeneration += 1;
       copy.disabled = true;
       legacyLauncher.launch.disabled = true;
+      if (forgetControls) {
+        forgetControls.launch.disabled = true;
+        forgetControls.confirm.disabled = true;
+        forgetControls.cancel.disabled = true;
+        clearForgetConfirmation();
+        forgetControls.launch.removeEventListener?.('click', onForgetLaunch);
+        forgetControls.confirm.removeEventListener?.('click', onForgetConfirm);
+        forgetControls.cancel.removeEventListener?.('click', onForgetCancel);
+      }
+      quarantineManager?.destroy?.();
       clearSecretBuffers();
       copy.removeEventListener?.('click', onCopy);
       legacyLauncher.launch.removeEventListener?.('click', onLegacyLaunch);
@@ -647,9 +960,11 @@ function installAccountSurface({
       onClear();
       renderCompletion(document, null, message, mount);
       try {
-        return await action();
+        const result = await action();
+        if (!isAppCurrent()) throw new WalletOriginError('STALE_CONTROLLER');
+        return result;
       } catch (error) {
-        renderFailure(document, undefined, mount);
+        if (isAppCurrent()) renderFailure(document, undefined, mount);
         throw error;
       }
     })();
@@ -671,6 +986,9 @@ function installAccountSurface({
   };
   copy.addEventListener('click', onCopy);
   legacyLauncher.launch.addEventListener('click', onLegacyLaunch);
+  forgetControls?.launch.addEventListener?.('click', onForgetLaunch);
+  forgetControls?.confirm.addEventListener?.('click', onForgetConfirm);
+  forgetControls?.cancel.addEventListener?.('click', onForgetCancel);
   returnToSite.addEventListener('click', onReturn);
   logout.addEventListener('click', onLogout);
   return Object.freeze({
@@ -721,16 +1039,42 @@ export function createWalletOriginApp(configuration) {
   let startPromise = null;
   let stopPromise = null;
   let lifecycle = [];
+  let lifecycleGeneration = 0;
+  let lifecycleClosed = false;
 
   const clearPublicAccount = () => {
     const cleaned = accountSurface?.destroy?.() ?? true;
     if (cleaned) accountSurface = null;
     retainedIdentity = null;
   };
+  const clearRenderedMount = () => {
+    try { mount?.replaceChildren?.(); } catch { /* lifecycle cleanup remains best effort */ }
+  };
+  const advanceLifecycleGeneration = () => {
+    lifecycleGeneration = lifecycleGeneration >= Number.MAX_SAFE_INTEGER
+      ? 1
+      : lifecycleGeneration + 1;
+    return lifecycleGeneration;
+  };
+  const invalidateLifecycle = () => {
+    lifecycleClosed = true;
+    advanceLifecycleGeneration();
+  };
+  const isLifecycleCurrent = (generation) => !lifecycleClosed
+    && lifecycleGeneration === generation;
+  const assertLifecycleCurrent = (generation) => {
+    if (!isLifecycleCurrent(generation)) throw new WalletOriginError('STALE_CONTROLLER');
+  };
+  const releasePrompt = (prompt) => {
+    try { prompt?.remove?.(); } catch { /* terminal cleanup remains best effort */ }
+    if (activePrompt === prompt) activePrompt = null;
+  };
   const clearOnLifecycle = () => {
+    invalidateLifecycle();
     activePrompt?.cancel?.();
     activePrompt = null;
     clearPublicAccount();
+    clearRenderedMount();
   };
   const bindLifecycle = (target, type, listener) => {
     target?.addEventListener?.(type, listener);
@@ -751,14 +1095,20 @@ export function createWalletOriginApp(configuration) {
   return Object.freeze({
     controller,
     logout() {
+      if (accountSurface) return accountSurface.logout();
+      invalidateLifecycle();
       activePrompt?.cancel?.();
       activePrompt = null;
-      if (accountSurface) return accountSurface.logout();
       retainedIdentity = null;
       return controller.logout();
     },
     start() {
       if (startPromise) return startPromise;
+      const runGeneration = lifecycleGeneration;
+      if (lifecycleClosed) {
+        startPromise = Promise.reject(new WalletOriginError('STALE_CONTROLLER'));
+        return startPromise;
+      }
       startPromise = (async () => {
         try {
           const transactionId = transactionIdFromLocation(windowObject?.location);
@@ -767,9 +1117,12 @@ export function createWalletOriginApp(configuration) {
           if (typeof controller.prepare !== 'function'
               || typeof controller.executePrepared !== 'function'
               || typeof controller.unlockPassword !== 'function') {
-            return await controller.execute(transactionId);
+            const result = await controller.execute(transactionId);
+            assertLifecycleCurrent(runGeneration);
+            return result;
           }
           const transaction = await controller.prepare(transactionId);
+          assertLifecycleCurrent(runGeneration);
           const rawV1 = transaction.transaction.operation === 'sdn.auth.raw-challenge.v1';
           if (rawV1) {
             const profilePrompt = createLegacyProfilePrompt({
@@ -779,7 +1132,8 @@ export function createWalletOriginApp(configuration) {
             });
             activePrompt = profilePrompt;
             const profile = await profilePrompt.promise;
-            activePrompt = null;
+            assertLifecycleCurrent(runGeneration);
+            if (activePrompt === profilePrompt) activePrompt = null;
             const promptResult = profile === 'password-fast-v1-legacy'
               ? makeCredentialPrompt({
                 controller: null,
@@ -796,26 +1150,56 @@ export function createWalletOriginApp(configuration) {
               });
             activePrompt = promptResult?.promise ? promptResult : null;
             const controls = promptResult?.promise ? await promptResult.promise : await promptResult;
-            activePrompt = null;
-            retainedIdentity = await controller.unlockLegacy({
+            assertLifecycleCurrent(runGeneration);
+            const unlockedIdentity = await controller.unlockLegacy({
               ...controls,
               operation: transaction.transaction.operation,
               profile,
             });
+            assertLifecycleCurrent(runGeneration);
+            retainedIdentity = unlockedIdentity;
           } else {
-            const promptResult = makeCredentialPrompt({
-              controller,
-              document: documentObject,
-              mount,
-              title: `Sign in to ${transaction.binding.clientDisplayName}`,
-              transaction,
-            });
-            activePrompt = promptResult?.promise ? promptResult : null;
-            const controls = promptResult?.promise ? await promptResult.promise : await promptResult;
-            activePrompt = null;
-            retainedIdentity = await controller.unlockPassword(controls);
+            let restoreFailed = false;
+            for (;;) {
+              const promptResult = makeCredentialPrompt({
+                controller,
+                document: documentObject,
+                mount,
+                offerRememberedUnlock: !restoreFailed,
+                title: `Sign in to ${transaction.binding.clientDisplayName}`,
+                transaction,
+              });
+              if (restoreFailed && promptResult?.controls?.rememberStatus) {
+                promptResult.controls.rememberStatus.textContent = 'Remembered wallet unavailable. Enter username and password.';
+              }
+              activePrompt = promptResult?.promise ? promptResult : null;
+              const controls = promptResult?.promise ? await promptResult.promise : await promptResult;
+              assertLifecycleCurrent(runGeneration);
+              if (controls?.remembered === true) {
+                try {
+                  const unlockedIdentity = await controller.unlockRemembered();
+                  assertLifecycleCurrent(runGeneration);
+                  retainedIdentity = unlockedIdentity;
+                  break;
+                } catch (error) {
+                  if (!isLifecycleCurrent(runGeneration)) {
+                    releasePrompt(promptResult);
+                    throw new WalletOriginError('STALE_CONTROLLER');
+                  }
+                  restoreFailed = true;
+                  releasePrompt(promptResult);
+                  continue;
+                }
+              }
+              const unlockedIdentity = await controller.unlockPassword(controls);
+              assertLifecycleCurrent(runGeneration);
+              retainedIdentity = unlockedIdentity;
+              break;
+            }
           }
           const publication = await controller.executePrepared(transaction);
+          assertLifecycleCurrent(runGeneration);
+          releasePrompt(activePrompt);
           if (transaction.transaction.operation === 'sdn.wallet.account.v1') {
             retainedIdentity = controller.copyPublicIdentity();
             accountSurface = installAccountSurface({
@@ -823,6 +1207,7 @@ export function createWalletOriginApp(configuration) {
               controller,
               document: documentObject,
               identity: retainedIdentity,
+              isAppCurrent: () => isLifecycleCurrent(runGeneration),
               makeCredentialPrompt,
               mount,
               onClear: clearPublicAccount,
@@ -841,21 +1226,31 @@ export function createWalletOriginApp(configuration) {
           }
           return publication;
         } catch (error) {
+          const stale = !isLifecycleCurrent(runGeneration);
+          activePrompt?.cancel?.();
+          activePrompt = null;
           clearPublicAccount();
           detachLifecycle();
-          renderFailure(documentObject, error?.code === 'USER_CANCELLED'
-            ? 'Cancelled. You may close this window.'
-            : undefined, mount);
-          await controller.destroy('startup-failure');
+          if (!stale) {
+            renderFailure(documentObject, error?.code === 'USER_CANCELLED'
+              ? 'Cancelled. You may close this window.'
+              : undefined, mount);
+          }
+          await (stopPromise ?? controller.destroy(stale ? 'stale-startup' : 'startup-failure'));
+          if (stale && error?.code !== 'DESTRUCTION_FAILED') {
+            throw new WalletOriginError('STALE_CONTROLLER');
+          }
           throw error;
         }
       })();
       return startPromise;
     },
     stop(reason = 'close') {
+      invalidateLifecycle();
       activePrompt?.cancel?.();
       activePrompt = null;
       clearPublicAccount();
+      clearRenderedMount();
       const destroyAttempt = controller.destroy(reason);
       if (!stopPromise) {
         detachLifecycle();

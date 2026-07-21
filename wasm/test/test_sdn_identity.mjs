@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import init, { createHDWallet } from '../src/index.mjs';
+import * as hdWalletModule from '../src/index.mjs';
 
 const vectors = JSON.parse(await readFile(
   new URL('../../test/fixtures/sdn-wallet-vectors.v1.json', import.meta.url),
@@ -144,6 +145,90 @@ test('init and createHDWallet attach one exact immutable capability object', asy
       assert.equal(Object.hasOwn(wallet.sdn, forbidden), false, forbidden);
       assert.equal(Object.hasOwn(wallet, forbidden), false, forbidden);
     }
+  }
+});
+
+test('wallet-origin capabilities are immutable, module-authentic, and resolver-only', async () => {
+  assert.equal(typeof hdWalletModule.getWalletOriginCapabilities, 'function');
+
+  const first = await init();
+  const second = await createHDWallet();
+  const firstBinding = first.walletOriginCapabilities;
+  const secondBinding = second.walletOriginCapabilities;
+
+  assert.notEqual(firstBinding, secondBinding);
+  for (const [wallet, binding] of [
+    [first, firstBinding],
+    [second, secondBinding],
+  ]) {
+    assert.deepEqual(Object.keys(binding).sort(), ['sdn', 'sha256']);
+    assert.equal(Object.isFrozen(binding), true);
+    assert.equal(binding.sdn, wallet.sdn);
+    assert.equal(typeof binding.sha256, 'function');
+    assert.equal(hdWalletModule.getWalletOriginCapabilities(wallet), binding);
+
+    const descriptor = Object.getOwnPropertyDescriptor(
+      wallet,
+      'walletOriginCapabilities',
+    );
+    assert.deepEqual(descriptor, {
+      value: binding,
+      enumerable: false,
+      writable: false,
+      configurable: false,
+    });
+    assert.equal(Object.keys(wallet).includes('walletOriginCapabilities'), false);
+    assert.throws(() => { wallet.walletOriginCapabilities = null; }, TypeError);
+    assert.throws(() => Object.defineProperty(wallet, 'walletOriginCapabilities', {
+      value: null,
+    }), TypeError);
+  }
+
+  const input = Uint8Array.of(1, 2, 3, 4);
+  const expected = first.utils.sha256(input);
+  const originalSha256 = first.utils.sha256;
+  first.utils.sha256 = () => new Uint8Array(32).fill(0xff);
+  try {
+    assert.deepEqual(firstBinding.sha256(input), expected);
+  } finally {
+    first.utils.sha256 = originalSha256;
+  }
+
+  const forgedPair = Object.create(null);
+  Object.defineProperty(forgedPair, 'walletOriginCapabilities', {
+    value: Object.freeze({ sdn: first.sdn, sha256: secondBinding.sha256 }),
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
+  const copiedBinding = Object.create(null);
+  Object.defineProperty(copiedBinding, 'walletOriginCapabilities', {
+    value: firstBinding,
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
+  const inheritedBinding = Object.create(first);
+
+  for (const candidate of [
+    null,
+    {},
+    forgedPair,
+    copiedBinding,
+    inheritedBinding,
+  ]) {
+    assert.throws(
+      () => hdWalletModule.getWalletOriginCapabilities(candidate),
+      TypeError,
+    );
+  }
+
+  for (const forbidden of [
+    'createWalletOriginCapabilities',
+    'registerWalletOriginCapabilities',
+    'setWalletOriginCapabilities',
+  ]) {
+    assert.equal(Object.hasOwn(hdWalletModule, forbidden), false, forbidden);
   }
 });
 

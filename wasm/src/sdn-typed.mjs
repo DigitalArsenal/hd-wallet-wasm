@@ -512,15 +512,34 @@ export function createSdnTypedCapabilities(wasm) {
   }
 
   const issuedHandles = new WeakMap();
+  const unpublishedRollbackQueue = new Set();
 
   function rollback(nativeValue) {
     if (typeof nativeValue !== 'bigint' || nativeValue === 0n) return;
+    unpublishedRollbackQueue.add(nativeValue);
     try {
       wasm._hd_sdn_destroy_identity(nativeValue);
+      unpublishedRollbackQueue.delete(nativeValue);
     } catch {
-      // Rollback is best-effort only after the native boundary itself failed;
-      // no capability is published regardless.
+      // Keep unpublished native authority retryable. A later derive/import
+      // must drain this exact value before it can allocate another slot.
     }
+  }
+
+  function drainRollbackQueue() {
+    for (const nativeValue of unpublishedRollbackQueue) {
+      try {
+        wasm._hd_sdn_destroy_identity(nativeValue);
+      } catch {
+        fail('CRYPTO_FAILURE');
+      }
+      unpublishedRollbackQueue.delete(nativeValue);
+    }
+  }
+
+  function isDestroyPendingHandle(handle) {
+    if (!isObject(handle)) return false;
+    return issuedHandles.get(handle)?.state === 'destroy-pending';
   }
 
   function recordFor(handle) {
@@ -539,6 +558,7 @@ export function createSdnTypedCapabilities(wasm) {
     expectedAccountIndex,
     cleanupSecrets,
   ) {
+    drainRollbackQueue();
     const scope = createAllocationScope(wasm);
     let pending = 0n;
     let completed = false;
@@ -813,11 +833,12 @@ export function createSdnTypedCapabilities(wasm) {
       let password;
       let prf;
       let authorityEstablished = false;
+      const rejectInputBeforeRead = isDestroyPendingHandle(handle);
       const scope = createAllocationScope(wasm);
       try {
         const record = recordFor(handle);
         authorityEstablished = true;
-        if (isObject(input)) {
+        if (!rejectInputBeforeRead && isObject(input)) {
           callerPassword = input.passwordUtf8;
           callerPrf = input.prfOutput;
         }
@@ -862,7 +883,7 @@ export function createSdnTypedCapabilities(wasm) {
         return scope.bytes(outBytes, required);
       } finally {
         const cleanupFailed = scope.cleanup();
-        if (isObject(input)) {
+        if (!rejectInputBeforeRead && isObject(input)) {
           if (!isUint8Array(callerPassword)) {
             try {
               callerPassword = input.passwordUtf8;
@@ -892,12 +913,14 @@ export function createSdnTypedCapabilities(wasm) {
       const record = issuedHandles.get(handle);
       if (!record) fail('STALE_HANDLE');
       if (record.state === 'destroyed') return;
-      record.state = 'destroyed';
+      record.state = 'destroy-pending';
       try {
         wasm._hd_sdn_destroy_identity(record.nativeValue);
       } catch {
         fail('CRYPTO_FAILURE');
       }
+      record.nativeValue = 0n;
+      record.state = 'destroyed';
     },
   };
 

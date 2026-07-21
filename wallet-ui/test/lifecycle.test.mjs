@@ -2,6 +2,15 @@ import { readFile } from 'node:fs/promises';
 
 import { describe, expect, test, vi } from 'vitest';
 
+vi.mock('hd-wallet-wasm', () => ({
+  getWalletOriginCapabilities(module) {
+    const sdn = module?.sdn ?? module;
+    const hashOwner = module?.utils ?? module;
+    if (!sdn || typeof hashOwner?.sha256 !== 'function') throw new TypeError('invalid owner');
+    return Object.freeze({ sdn, sha256: hashOwner.sha256.bind(hashOwner) });
+  },
+}));
+
 import { createWalletOriginApp, transactionIdFromLocation } from '../origin-app/app.mjs';
 import { WalletOriginController } from '../origin-app/controller.mjs';
 import { deriveExplicitLegacyIdentity } from '../origin-app/account.mjs';

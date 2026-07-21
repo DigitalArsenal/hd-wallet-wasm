@@ -6,6 +6,7 @@ import {
   ApprovalConfigurationController,
   createApprovalConfiguration,
   renderAccount,
+  renderQuarantinedWalletManager,
 } from '../origin-app/account.mjs';
 import {
   PhotoUrlController,
@@ -294,6 +295,42 @@ function jpeg(width = 1, height = 1) {
 }
 
 describe('safe wallet-origin rendering', () => {
+  test('renders origin Account quarantine metadata and exact actions without exposing raw storage', () => {
+    const document = new SafeDocument();
+    const container = document.createElement('section');
+    document.body.append(container);
+    const key = '</code><img src=x onerror=alert(1)>';
+    const rawAttack = '<svg onload=alert(1)>raw-secret</svg>';
+    const rendered = renderQuarantinedWalletManager(container, [{
+      exportable: true,
+      key,
+      oversized: false,
+      raw: rawAttack,
+      rawLength: 42,
+    }, {
+      exportable: false,
+      key: 'hd-wallet.remembered.v2.pending',
+      oversized: true,
+      rawLength: 2_000_000,
+    }], { document });
+
+    expect(container.textContent).toContain(key);
+    expect(container.textContent).not.toContain(rawAttack);
+    expect(document.find((node) => node.tagName === 'img')).toBeNull();
+    expect(document.find((node) => node.tagName === 'svg')).toBeNull();
+    expect(rendered.rows[0].exportButton.dataset).toMatchObject({
+      walletAction: 'export-quarantined-wallet',
+      walletQuarantineKey: key,
+    });
+    expect(rendered.rows[0].deleteButton.dataset).toMatchObject({
+      walletAction: 'delete-quarantined-wallet',
+      walletQuarantineKey: key,
+    });
+    expect(rendered.rows[0].confirmation.dataset.walletQuarantineConfirmation).toBe(key);
+    expect(rendered.rows[1].exportButton.textContent).toBe('Export unavailable');
+    expect(container.textContent).toContain('Export unavailable (2000000 characters)');
+  });
+
   test('renders malicious account and confirmation fields only as complete text nodes', () => {
     const document = new SafeDocument();
     const accountContainer = document.createElement('section');

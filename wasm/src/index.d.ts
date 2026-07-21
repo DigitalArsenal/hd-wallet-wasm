@@ -324,6 +324,11 @@ export interface SdnIdentityCapabilities {
   destroySdnIdentity(handle: SdnIdentityHandle): void;
 }
 
+export interface WalletOriginCapabilities {
+  readonly sdn: SdnIdentityCapabilities;
+  readonly sha256: (bytes: Uint8Array) => Uint8Array;
+}
+
 // =============================================================================
 // Module Types
 // =============================================================================
@@ -403,6 +408,9 @@ export interface HDWalletModule {
 
   // Purpose-separated, instance-bound SDN wallet capabilities
   readonly sdn: SdnIdentityCapabilities;
+
+  // Authenticated, immutable binding used only by the wallet-origin runtime
+  readonly walletOriginCapabilities: WalletOriginCapabilities;
 
   // Aligned binary API for efficient batch operations
   aligned: AlignedAPI;
@@ -1128,6 +1136,11 @@ export default function init(wasmPath?: string): Promise<HDWalletModule>;
  * @param wasmPath - Optional path to WASM file
  */
 export function createHDWallet(wasmPath?: string): Promise<HDWalletModule>;
+
+/** Resolve the immutable wallet-origin binding for its exact initialized owner. */
+export function getWalletOriginCapabilities(
+  module: HDWalletModule,
+): WalletOriginCapabilities;
 
 export const HD_WALLET_SDN_PLUGIN_MANIFEST: SdnPluginManifest;
 export const SDN_PLUGIN_MANIFEST_EXPORTS: {

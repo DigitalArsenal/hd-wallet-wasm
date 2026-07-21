@@ -2,7 +2,7 @@
  * HD Wallet UI - Main Application
  *
  * Standalone wallet interface with HD key derivation, multi-chain address
- * generation, balance fetching, vCard export, and PIN/passkey storage.
+ * generation, balance fetching, and vCard export.
  */
 
 // =============================================================================
@@ -27,7 +27,14 @@ window.Buffer = Buffer;
 // =============================================================================
 
 import { getModalHTML } from './template.js';
-import WalletStorage, { StorageMethod } from './wallet-storage.js';
+import {
+  ACTIVE_REMEMBERED_WALLET_KEY,
+  PENDING_REMEMBERED_WALLET_KEY,
+  deleteQuarantinedWalletRecord,
+  exportQuarantinedWalletRecord,
+  inspectLegacyWalletQuarantine,
+  inspectRememberedWalletStorage,
+} from './wallet-storage.js';
 import { safeCopyText } from './clipboard.js';
 import { normalizeTabHash } from './hash.js';
 import { SessionGenerationGuard } from './session-generation.js';
@@ -2767,36 +2774,6 @@ async function generatePKIKeyPairs(sessionGeneration = currentLegacySession()) {
 // Login / Logout
 // =============================================================================
 
-function hideStoredWalletLoginUI() {
-  const storedTab = $('stored-tab');
-  if (storedTab) storedTab.style.display = 'none';
-
-  const pinSect = $('stored-pin-section');
-  if (pinSect) pinSect.style.display = 'block';
-
-  const psSect = $('stored-passkey-section');
-  if (psSect) psSect.style.display = 'none';
-
-  const divider = $('stored-divider');
-  if (divider) divider.style.display = 'none';
-
-  const dateEl = $('stored-wallet-date');
-  if (dateEl) dateEl.textContent = '';
-
-  const unlockPin = $('pin-input-unlock');
-  if (unlockPin) unlockPin.value = '';
-
-  const unlockBtn = $('unlock-stored-wallet');
-  if (unlockBtn) unlockBtn.disabled = true;
-
-  $qa('.method-tab').forEach(t => t.classList.remove('active'));
-  $qa('.method-content').forEach(c => c.classList.remove('active'));
-  const pwMethod = $('password-method');
-  if (pwMethod) pwMethod.classList.add('active');
-  const pwTab = $q('.method-tab[data-method="password"]');
-  if (pwTab) pwTab.classList.add('active');
-}
-
 function login(keys) {
   const sessionGeneration = legacySessionGuard.begin();
   state.loggedIn = true;
@@ -4270,70 +4247,90 @@ function initGridAnimation() {
 }
 
 // =============================================================================
-// WebAuthn / Passkey Helpers
-// =============================================================================
-
-function isPasskeySupported() {
-  return window.PublicKeyCredential !== undefined &&
-    typeof window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === 'function';
-}
-
-// =============================================================================
 // Login Handler Setup
 // =============================================================================
 
-// Track selected remember method (pin or passkey) for each login type
-const rememberMethod = {
-  password: 'pin',
-  seed: 'pin'
-};
+function browserWalletStorage() {
+  try {
+    const storage = window.localStorage;
+    return storage && typeof storage.getItem === 'function' ? storage : null;
+  } catch {
+    return null;
+  }
+}
+
+function quarantinedWalletEntries(storage) {
+  if (!storage) return [];
+  try {
+    const legacy = inspectLegacyWalletQuarantine(storage);
+    const remembered = inspectRememberedWalletStorage(storage);
+    const records = [...legacy];
+    if (remembered.active.status === 'quarantined') {
+      records.push({ key: ACTIVE_REMEMBERED_WALLET_KEY, raw: remembered.active.raw });
+    }
+    if (remembered.pending.status === 'quarantined') {
+      records.push({ key: PENDING_REMEMBERED_WALLET_KEY, raw: remembered.pending.raw });
+    }
+    return records;
+  } catch {
+    return [];
+  }
+}
+
+function setLegacyWalletQuarantineStatus(message) {
+  const status = $('legacy-wallet-quarantine-status');
+  if (status) status.textContent = message;
+}
+
+function renderLegacyWalletQuarantine() {
+  const section = $('legacy-wallet-quarantine');
+  const list = $('legacy-wallet-quarantine-list');
+  if (!section || !list) return;
+  const storage = browserWalletStorage();
+  const entries = quarantinedWalletEntries(storage);
+  list.replaceChildren();
+  setLegacyWalletQuarantineStatus('');
+  section.style.display = entries.length > 0 ? 'block' : 'none';
+  for (const entry of entries) {
+    const row = createNode('div', 'stored-wallet-quarantine-row');
+    const key = createNode('code', 'stored-wallet-quarantine-key', entry.key);
+    const exportButton = createNode('button', 'glass-btn small', 'Export');
+    exportButton.type = 'button';
+    exportButton.addEventListener('click', async (event) => {
+      if (event.isTrusted !== true) return;
+      try {
+        const raw = exportQuarantinedWalletRecord(storage, entry.key);
+        const copied = raw !== null && await safeCopyText(raw);
+        setLegacyWalletQuarantineStatus(copied
+          ? `Exported ${entry.key} to the clipboard.`
+          : 'Quarantined record export failed.');
+      } catch {
+        setLegacyWalletQuarantineStatus('Quarantined record export failed.');
+      }
+    });
+    const deleteButton = createNode('button', 'glass-btn small', 'Delete');
+    deleteButton.type = 'button';
+    deleteButton.addEventListener('click', (event) => {
+      if (event.isTrusted !== true) return;
+      const confirmation = window.prompt?.(`Type ${entry.key} to delete this quarantined record.`) ?? null;
+      if (confirmation !== entry.key) {
+        setLegacyWalletQuarantineStatus('Deletion cancelled.');
+        return;
+      }
+      try {
+        deleteQuarantinedWalletRecord(storage, entry.key, confirmation);
+        renderLegacyWalletQuarantine();
+      } catch {
+        setLegacyWalletQuarantineStatus('Quarantined record deletion failed.');
+      }
+    });
+    row.append(key, exportButton, deleteButton);
+    list.append(row);
+  }
+}
 
 function setupLoginHandlers() {
-  // Migrate from old storage format if needed
-  WalletStorage.migrateStorage();
-
-  // Check for stored wallet using module
-  const storageMetadata = WalletStorage.getStorageMetadata();
-  const storageMethod = storageMetadata?.method || StorageMethod.NONE;
-
-  if (storageMethod !== StorageMethod.NONE) {
-    const storedTab = $('stored-tab');
-    if (storedTab) storedTab.style.display = '';
-
-    const dateEl = $('stored-wallet-date');
-    if (dateEl && storageMetadata?.date) {
-      dateEl.textContent = `Saved on ${storageMetadata.date}`;
-    }
-
-    const pinSection = $('stored-pin-section');
-    const passkeySection = $('stored-passkey-section');
-    const divider = $('stored-divider');
-
-    if (divider) divider.style.display = 'none';
-
-    if (storageMethod === StorageMethod.PIN) {
-      if (pinSection) pinSection.style.display = 'block';
-      if (passkeySection) passkeySection.style.display = 'none';
-    } else if (storageMethod === StorageMethod.PASSKEY) {
-      if (pinSection) pinSection.style.display = 'none';
-      if (passkeySection) passkeySection.style.display = 'block';
-    }
-
-    // Pre-select stored tab (but don't open modal automatically)
-    $qa('.method-tab').forEach(t => t.classList.remove('active'));
-    $qa('.method-content').forEach(c => c.classList.remove('active'));
-    if (storedTab) storedTab.classList.add('active');
-    const storedMethod = $('stored-method');
-    if (storedMethod) storedMethod.classList.add('active');
-  }
-
-  // Hide passkey buttons if not supported
-  if (!isPasskeySupported()) {
-    const ppBtn = $('passkey-btn-password');
-    if (ppBtn) ppBtn.style.display = 'none';
-    const psBtn = $('passkey-btn-seed');
-    if (psBtn) psBtn.style.display = 'none';
-  }
+  renderLegacyWalletQuarantine();
 
   // Method tab switching
   $qa('.method-tab').forEach(tab => {
@@ -4343,51 +4340,6 @@ function setupLoginHandlers() {
       tab.classList.add('active');
       const methodEl = $(`${tab.dataset.method}-method`);
       if (methodEl) methodEl.classList.add('active');
-    });
-  });
-
-  // Remember method selector (PIN vs Passkey)
-  $qa('.remember-method-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const target = btn.dataset.target;
-      const method = btn.dataset.method;
-      rememberMethod[target] = method;
-
-      $qa(`.remember-method-btn[data-target="${target}"]`).forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-
-      const pinGroup = $(`pin-group-${target}`);
-      const passkeyInfo = $(`passkey-info-${target}`);
-      if (pinGroup) pinGroup.style.display = method === 'pin' ? 'block' : 'none';
-      if (passkeyInfo) passkeyInfo.style.display = method === 'passkey' ? 'flex' : 'none';
-    });
-  });
-
-  // Remember wallet checkbox handlers
-  $('remember-wallet-password')?.addEventListener('change', (e) => {
-    const opts = $('remember-options-password');
-    if (opts) opts.style.display = e.target.checked ? 'block' : 'none';
-    if (e.target.checked && rememberMethod.password === 'pin') {
-      $('pin-input-password')?.focus();
-    }
-  });
-
-  $('remember-wallet-seed')?.addEventListener('change', (e) => {
-    const opts = $('remember-options-seed');
-    if (opts) opts.style.display = e.target.checked ? 'block' : 'none';
-    if (e.target.checked && rememberMethod.seed === 'pin') {
-      $('pin-input-seed')?.focus();
-    }
-  });
-
-  // PIN input validation
-  ['pin-input-password', 'pin-input-seed', 'pin-input-unlock'].forEach(id => {
-    $(id)?.addEventListener('input', (e) => {
-      e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6);
-      if (id === 'pin-input-unlock') {
-        const unlockBtn = $('unlock-stored-wallet');
-        if (unlockBtn) unlockBtn.disabled = e.target.value.length !== 6;
-      }
     });
   });
 
@@ -4418,16 +4370,8 @@ function setupLoginHandlers() {
   $('derive-from-password')?.addEventListener('click', async () => {
     const username = $('wallet-username')?.value;
     const password = $('wallet-password')?.value;
-    const rememberWallet = $('remember-wallet-password')?.checked;
-    const usePasskey = rememberMethod.password === 'passkey';
-    const pin = $('pin-input-password')?.value;
 
     if (!username || !password || password.length < 24) {
-      return;
-    }
-
-    if (rememberWallet && !usePasskey && (!pin || pin.length !== 6)) {
-      alert('Please enter a 6-digit PIN to store your wallet');
       return;
     }
 
@@ -4441,39 +4385,6 @@ function setupLoginHandlers() {
       // Best-effort: don't keep the password in the input field after login.
       const pwEl = $('wallet-password');
       if (pwEl) pwEl.value = '';
-
-      if (rememberWallet) {
-        const walletData = {
-          type: 'masterSeed',
-          source: 'password',
-          username,
-          masterSeed: Array.from(state.masterSeed),
-        };
-
-        if (usePasskey) {
-          await WalletStorage.storeWithPasskey(walletData, {
-            rpName: 'HD Wallet',
-            userName: username,
-            userDisplayName: username
-          });
-          const pinSect = $('stored-pin-section');
-          if (pinSect) pinSect.style.display = 'none';
-          const psSect = $('stored-passkey-section');
-          if (psSect) psSect.style.display = 'block';
-        } else {
-          await WalletStorage.storeWithPIN(pin, walletData);
-          const pinSect = $('stored-pin-section');
-          if (pinSect) pinSect.style.display = 'block';
-          const psSect = $('stored-passkey-section');
-          if (psSect) psSect.style.display = 'none';
-        }
-        const storedTab = $('stored-tab');
-        if (storedTab) storedTab.style.display = '';
-        const divider = $('stored-divider');
-        if (divider) divider.style.display = 'none';
-        const dateEl = $('stored-wallet-date');
-        if (dateEl) dateEl.textContent = `Saved on ${new Date().toLocaleDateString()}`;
-      }
 
       login(keys);
     } catch (err) {
@@ -4524,15 +4435,6 @@ function setupLoginHandlers() {
     const phrase = $('seed-phrase')?.value;
     if (!phrase || !validateSeedPhrase(phrase)) return;
 
-    const rememberWallet = $('remember-wallet-seed')?.checked;
-    const usePasskey = rememberMethod.seed === 'passkey';
-    const pin = $('pin-input-seed')?.value;
-
-    if (rememberWallet && !usePasskey && (!pin || pin.length !== 6)) {
-      alert('Please enter a 6-digit PIN to store your wallet');
-      return;
-    }
-
     const btn = $('derive-from-seed');
     btn.disabled = true;
     btn.textContent = 'Logging in...';
@@ -4544,38 +4446,6 @@ function setupLoginHandlers() {
       const seedEl = $('seed-phrase');
       if (seedEl) seedEl.value = '';
 
-      if (rememberWallet) {
-        const walletData = {
-          type: 'masterSeed',
-          source: 'seed',
-          masterSeed: Array.from(state.masterSeed),
-        };
-
-        if (usePasskey) {
-          await WalletStorage.storeWithPasskey(walletData, {
-            rpName: 'HD Wallet',
-            userName: 'seed-wallet',
-            userDisplayName: 'Seed Phrase Wallet'
-          });
-          const pinSect = $('stored-pin-section');
-          if (pinSect) pinSect.style.display = 'none';
-          const psSect = $('stored-passkey-section');
-          if (psSect) psSect.style.display = 'block';
-        } else {
-          await WalletStorage.storeWithPIN(pin, walletData);
-          const pinSect = $('stored-pin-section');
-          if (pinSect) pinSect.style.display = 'block';
-          const psSect = $('stored-passkey-section');
-          if (psSect) psSect.style.display = 'none';
-        }
-        const storedTab = $('stored-tab');
-        if (storedTab) storedTab.style.display = '';
-        const divider = $('stored-divider');
-        if (divider) divider.style.display = 'none';
-        const dateEl = $('stored-wallet-date');
-        if (dateEl) dateEl.textContent = `Saved on ${new Date().toLocaleDateString()}`;
-      }
-
       login(keys);
     } catch (err) {
       alert('Error: ' + err.message);
@@ -4585,112 +4455,6 @@ function setupLoginHandlers() {
     }
   });
 
-  // Unlock stored wallet with PIN
-  $('unlock-stored-wallet')?.addEventListener('click', async () => {
-    const pin = $('pin-input-unlock')?.value;
-    if (!pin || pin.length !== 6) {
-      alert('Please enter a 6-digit PIN');
-      return;
-    }
-
-    const btn = $('unlock-stored-wallet');
-    btn.disabled = true;
-    btn.textContent = 'Unlocking...';
-
-    try {
-      const walletData = await WalletStorage.retrieveWithPIN(pin);
-
-      let keys;
-      const storedSeed = walletData.masterSeed || walletData.seed || walletData.hdSeed;
-      if (storedSeed) {
-        keys = await deriveKeysFromMasterSeed(new Uint8Array(storedSeed));
-      } else if (walletData.type === 'password') {
-        // Legacy format: stored password/seedPhrase (deprecated). Unlock, then upgrade storage.
-        keys = await deriveKeysFromPassword(walletData.username, walletData.password);
-        await WalletStorage.storeWithPIN(pin, {
-          type: 'masterSeed',
-          source: 'password',
-          username: walletData.username,
-          masterSeed: Array.from(state.masterSeed),
-        });
-      } else if (walletData.type === 'seed') {
-        keys = await deriveKeysFromSeed(walletData.seedPhrase);
-        await WalletStorage.storeWithPIN(pin, {
-          type: 'masterSeed',
-          source: 'seed',
-          masterSeed: Array.from(state.masterSeed),
-        });
-      } else {
-        throw new Error('Unknown stored wallet format');
-      }
-
-      login(keys);
-    } catch (err) {
-      alert('Error: ' + err.message);
-      const pinInput = $('pin-input-unlock');
-      if (pinInput) pinInput.value = '';
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'Unlock with PIN';
-    }
-  });
-
-  // Unlock stored wallet with Passkey
-  $('unlock-with-passkey')?.addEventListener('click', async () => {
-    const btn = $('unlock-with-passkey');
-    btn.disabled = true;
-    btn.textContent = 'Authenticating...';
-
-    try {
-      const walletData = await WalletStorage.retrieveWithPasskey();
-
-      let keys;
-      const storedSeed = walletData.masterSeed || walletData.seed || walletData.hdSeed;
-      if (storedSeed) {
-        keys = await deriveKeysFromMasterSeed(new Uint8Array(storedSeed));
-      } else if (walletData.type === 'password') {
-        keys = await deriveKeysFromPassword(walletData.username, walletData.password);
-        await WalletStorage.storeWithPasskey({
-          type: 'masterSeed',
-          source: 'password',
-          username: walletData.username,
-          masterSeed: Array.from(state.masterSeed),
-        }, {
-          rpName: 'HD Wallet',
-          userName: walletData.username || 'wallet-user',
-          userDisplayName: walletData.username || 'Wallet User'
-        });
-      } else if (walletData.type === 'seed') {
-        keys = await deriveKeysFromSeed(walletData.seedPhrase);
-        await WalletStorage.storeWithPasskey({
-          type: 'masterSeed',
-          source: 'seed',
-          masterSeed: Array.from(state.masterSeed),
-        }, {
-          rpName: 'HD Wallet',
-          userName: 'seed-wallet',
-          userDisplayName: 'Seed Phrase Wallet'
-        });
-      } else {
-        throw new Error('Unknown stored wallet format');
-      }
-
-      login(keys);
-    } catch (err) {
-      alert('Error: ' + err.message);
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'Unlock with Passkey';
-    }
-  });
-
-  // Forget stored wallet
-  $('forget-stored-wallet')?.addEventListener('click', () => {
-    if (confirm('Are you sure you want to forget your stored wallet? You will need to enter your password or seed phrase again.')) {
-      WalletStorage.clearStorage();
-      hideStoredWalletLoginUI();
-    }
-  });
 }
 
 // =============================================================================
@@ -6541,7 +6305,6 @@ export async function init(rootElementOrOptions, options = {}) {
   const normalized = normalizeCreateWalletUIArguments(rootElementOrOptions, options);
   const rootElement = normalized.element;
   const {
-    autoOpenWallet = false,
     onLogin = null,
     openAccountAfterLogin = true,
   } = normalized.options;
@@ -6615,23 +6378,9 @@ export async function init(rootElementOrOptions, options = {}) {
       }
     }
 
-    // Check if there's a stored wallet
-    const storageMetadata = WalletStorage.getStorageMetadata();
-    const hasStoredWallet = storageMetadata?.method && storageMetadata.method !== StorageMethod.NONE;
-
-    // Auto-open login modal if stored wallet found (opt-in for integrators)
-    if (hasStoredWallet && autoOpenWallet) {
-      const loginModal = $('login-modal');
-      if (loginModal) {
-        loginModal.classList.add('active');
-        // Switch to stored wallet tab
-        const storedTab = loginModal.querySelector('[data-tab="stored"]');
-        if (storedTab) storedTab.click();
-      }
-    }
-
-    // Auto-login with saved PKI keys if no stored wallet
-    if (hasSavedKeys && !hasStoredWallet) {
+    // Auto-login with saved PKI keys. Remembered wallet records are handled
+    // exclusively by the isolated wallet-origin controller.
+    if (hasSavedKeys) {
       const tempEd25519Seed = hdWallet().utils.getRandomBytes(32);
       const tempKeys = {
         x25519: generateKeyPair(Curve.X25519),
@@ -6660,6 +6409,8 @@ export async function init(rootElementOrOptions, options = {}) {
  * Create an isolated wallet-origin UI instance that can be controlled
  * programmatically. Both public call forms normalize into this same controller;
  * no native handle or signing capability is returned to the caller.
+ * The isolated Account surface owns the separate `forget-stored-wallet` action;
+ * legacy logout never deletes remembered or quarantined records.
  *
  * @param {Node}   [rootElement]  - Optional root element for DOM queries
  * @param {Object} [options]      - Wallet-origin dependencies and UI options

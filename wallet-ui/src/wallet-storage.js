@@ -1,776 +1,398 @@
-/**
- * Wallet Storage Module
- *
- * Industry-standard implementation for securely storing wallet credentials
- * using WebAuthn PRF extension or PIN-based encryption.
- *
- * Based on best practices from:
- * - Yubico WebAuthn PRF Developer Guide
- * - wwWallet FUNKE implementation
- * - W3C WebAuthn PRF Extension specification
- *
- * @module wallet-storage
- */
+const PROFILE = 'webauthn-prf-hkdf-sha256-aes256gcm-v2';
+const IDENTITY_SCHEME = 'sdn-bip32-slip10-purpose-v1';
+const SEED_PROFILE = 'password-scrypt-v2';
+const RECORD_FIELDS = Object.freeze([
+  'aad',
+  'canonicalUsername',
+  'ciphertextBase64url',
+  'createdAt',
+  'credentialIdBase64url',
+  'hkdfSaltBase64url',
+  'nonceBase64url',
+  'prfInputBase64url',
+  'schemaVersion',
+  'storageProfile',
+]);
+const AAD_FIELDS = Object.freeze([
+  'credentialIdBase64url',
+  'identityScheme',
+  'schemaVersion',
+  'seedProfile',
+  'storageProfile',
+  'usernameSha256',
+]);
+const RFC3339_MILLISECONDS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
+const LOWER_HEX_32 = /^[0-9a-f]{64}$/u;
+const BASE64URL = /^[A-Za-z0-9_-]+$/u;
+const encoder = new TextEncoder();
 
-import initHDWallet from 'hd-wallet-wasm';
+export const ACTIVE_REMEMBERED_WALLET_KEY = 'sdn.wallet.remembered.v2';
+export const PENDING_REMEMBERED_WALLET_KEY = `${ACTIVE_REMEMBERED_WALLET_KEY}.pending`;
+// A canonical v2 record is below 5 KiB at the native 1,024-byte ciphertext and
+// credential-ID ceilings. 16 KiB leaves migration headroom without allowing a
+// quarantined localStorage value to become an unbounded clipboard/DOM payload.
+export const MAX_QUARANTINE_EXPORT_CHARACTERS = 16 * 1024;
+export const LEGACY_WALLET_QUARANTINE_KEYS = Object.freeze([
+  'wallet_storage_metadata',
+  'wallet_storage_encrypted',
+  'wallet_storage_passkey_credential',
+  'encrypted_wallet',
+  'passkey_credential',
+  'passkey_wallet',
+]);
 
-// =============================================================================
-// Storage Keys
-// =============================================================================
+const deletableKeys = new Set([
+  ACTIVE_REMEMBERED_WALLET_KEY,
+  PENDING_REMEMBERED_WALLET_KEY,
+  ...LEGACY_WALLET_QUARANTINE_KEYS,
+]);
+const issuedTransactions = new WeakSet();
 
-const STORAGE_PREFIX = 'wallet_storage_';
-const METADATA_KEY = `${STORAGE_PREFIX}metadata`;
-const ENCRYPTED_DATA_KEY = `${STORAGE_PREFIX}encrypted`;
-const PASSKEY_CREDENTIAL_KEY = `${STORAGE_PREFIX}passkey_credential`;
-
-// Version for future migrations
-const STORAGE_VERSION = 3;
-
-// AES-GCM standard IV size (96-bit)
-const AES_GCM_IV_LENGTH = 12;
-
-// 6-digit PINs have low entropy; PBKDF2 must be expensive to slow offline brute force.
-// (This is still not a substitute for rate-limiting when an attacker can query online.)
-const PIN_PBKDF2_ITERATIONS = 600000;
-const LEGACY_PIN_PBKDF2_ITERATIONS = 100000;
-const AES_GCM_TAG_LENGTH = 16;
-
-let walletPromise = null;
-
-function getWallet() {
-  if (!walletPromise) walletPromise = initHDWallet();
-  return walletPromise;
-}
-
-function asUint8Array(value) {
-  if (value instanceof Uint8Array) return value;
-  if (ArrayBuffer.isView(value)) {
-    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+export class WalletStorageError extends Error {
+  constructor(code) {
+    super(code);
+    this.name = 'WalletStorageError';
+    this.code = code;
   }
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-  throw new Error('Expected byte array');
 }
 
-// =============================================================================
-// Storage Method Enum
-// =============================================================================
+function fail(code) {
+  throw new WalletStorageError(code);
+}
 
-export const StorageMethod = {
-  NONE: 'none',
-  PIN: 'pin',
-  PASSKEY: 'passkey'
-};
+function ordinaryRecord(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
 
-// =============================================================================
-// Utility Functions
-// =============================================================================
+function exactRecord(input, fields) {
+  if (!ordinaryRecord(input)) fail('INVALID_REMEMBERED_WALLET');
+  let keys;
+  try { keys = Reflect.ownKeys(input); } catch { fail('INVALID_REMEMBERED_WALLET'); }
+  if (keys.some((key) => typeof key !== 'string')) fail('INVALID_REMEMBERED_WALLET');
+  const expected = [...fields].sort();
+  const actual = [...keys].sort();
+  if (actual.length !== expected.length
+      || actual.some((key, index) => key !== expected[index])) {
+    fail('INVALID_REMEMBERED_WALLET');
+  }
+  const result = {};
+  for (const field of expected) {
+    let descriptor;
+    try { descriptor = Object.getOwnPropertyDescriptor(input, field); } catch {
+      fail('INVALID_REMEMBERED_WALLET');
+    }
+    if (!descriptor?.enumerable || !('value' in descriptor) || descriptor.value === undefined) {
+      fail('INVALID_REMEMBERED_WALLET');
+    }
+    result[field] = descriptor.value;
+  }
+  return result;
+}
 
-/**
- * Convert ArrayBuffer to base64 string
- */
-function arrayBufferToBase64(buffer) {
-  const bytes = new Uint8Array(buffer);
+function wellFormedString(value) {
+  if (typeof value !== 'string') return false;
+  for (let index = 0; index < value.length; index += 1) {
+    const first = value.charCodeAt(index);
+    if (first >= 0xd800 && first <= 0xdbff) {
+      const second = value.charCodeAt(++index);
+      if (!(second >= 0xdc00 && second <= 0xdfff)) return false;
+    } else if (first >= 0xdc00 && first <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function encodeBase64url(bytes) {
   let binary = '';
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i]);
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
   }
-  return btoa(binary);
+  return btoa(binary).replace(/\+/gu, '-').replace(/\//gu, '_').replace(/=+$/u, '');
 }
 
-/**
- * Convert base64 string to Uint8Array
- */
-function base64ToUint8Array(base64) {
-  const binary = atob(base64);
+export function decodeCanonicalBase64url(value, { minimum = 0, maximum = 65536, exact = null } = {}) {
+  if (typeof value !== 'string' || value.length === 0 || !BASE64URL.test(value)) {
+    fail('INVALID_REMEMBERED_WALLET');
+  }
+  const remainder = value.length % 4;
+  if (remainder === 1) fail('INVALID_REMEMBERED_WALLET');
+  const padded = value.replace(/-/gu, '+').replace(/_/gu, '/') + '='.repeat((4 - remainder) % 4);
+  let binary;
+  try { binary = atob(padded); } catch { fail('INVALID_REMEMBERED_WALLET'); }
   const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  if (encodeBase64url(bytes) !== value || bytes.length < minimum || bytes.length > maximum
+      || (exact !== null && bytes.length !== exact)) {
+    fail('INVALID_REMEMBERED_WALLET');
   }
   return bytes;
 }
 
-/**
- * Generate cryptographically secure random bytes
- */
-async function generateRandomBytes(length) {
-  const wallet = await getWallet();
-  return wallet.utils.getRandomBytes(length);
-}
-
-// =============================================================================
-// Key Derivation (HKDF - Industry Standard)
-// =============================================================================
-
-/**
- * Derive encryption key using HKDF (HMAC-based Key Derivation Function)
- * This is the industry-standard approach recommended by Yubico and others.
- *
- * @param {Uint8Array} inputKeyMaterial - The input key material (from PRF or PIN hash)
- * @param {Uint8Array} salt - Salt for HKDF
- * @param {string} info - Context info string
- * @param {number} length - Desired key length in bytes
- * @returns {Promise<Uint8Array>} Derived key
- */
-async function hkdfDerive(inputKeyMaterial, salt, info, length) {
-  const encoder = new TextEncoder();
-  const wallet = await getWallet();
-  const infoBytes = typeof info === 'string' ? encoder.encode(info) : asUint8Array(info);
-  return wallet.utils.hkdf(asUint8Array(inputKeyMaterial), asUint8Array(salt), infoBytes, length);
-}
-
-/**
- * Derive encryption key from key material (HKDF).
- */
-async function deriveEncryptionKey(keyMaterial, context) {
-  const salt = new TextEncoder().encode(`wallet-storage-v${STORAGE_VERSION}`);
-
-  const encryptionKey = await hkdfDerive(
-    keyMaterial,
-    salt,
-    `${context}-encryption-key`,
-    32
-  );
-
-  return encryptionKey;
-}
-
-/**
- * Legacy: v1/v2 storage used a deterministic IV derived via HKDF.
- * This exists only to decrypt and upgrade old stored blobs.
- */
-async function deriveLegacyKeyAndIV(keyMaterial, context, version) {
-  const salt = new TextEncoder().encode(`wallet-storage-v${version}`);
-  const encryptionKey = await hkdfDerive(
-    keyMaterial,
-    salt,
-    `${context}-encryption-key`,
-    32
-  );
-  const iv = await hkdfDerive(
-    keyMaterial,
-    salt,
-    `${context}-encryption-iv`,
-    AES_GCM_IV_LENGTH
-  );
-  return { encryptionKey, iv };
-}
-
-// =============================================================================
-// PIN-Based Encryption
-// =============================================================================
-
-/**
- * Derive key material from a 6-digit PIN
- * Uses PBKDF2 for additional security against brute-force attacks
- */
-async function deriveKeyFromPIN(pin, storedSalt, iterations = PIN_PBKDF2_ITERATIONS) {
-  if (!/^\d{6}$/.test(pin)) {
-    throw new Error('PIN must be exactly 6 digits');
+function canonicalJson(value) {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') {
+    return JSON.stringify(value);
   }
-
-  const encoder = new TextEncoder();
-  const pinBytes = encoder.encode(pin);
-
-  // Use stored salt or generate new one
-  const salt = storedSalt || await generateRandomBytes(16);
-  const wallet = await getWallet();
-
-  return {
-    keyMaterial: wallet.utils.pbkdf2(pinBytes, salt, iterations, 32),
-    salt
-  };
+  if (typeof value === 'number' && Number.isFinite(value)) return JSON.stringify(value);
+  if (!ordinaryRecord(value)) fail('INVALID_REMEMBERED_WALLET');
+  return `{${Object.keys(value).sort().map((key) => (
+    `${JSON.stringify(key)}:${canonicalJson(value[key])}`
+  )).join(',')}}`;
 }
 
-// =============================================================================
-// WebAuthn PRF Extension
-// =============================================================================
-
-/**
- * Check if WebAuthn/Passkeys are supported
- */
-export function isPasskeySupported() {
-  return !!(
-    window.PublicKeyCredential &&
-    typeof window.PublicKeyCredential === 'function'
-  );
-}
-
-/**
- * Check if PRF extension is likely supported
- * Note: Full support detection requires actually creating a credential
- */
-export async function isPRFLikelySupported() {
-  if (!isPasskeySupported()) return false;
-
-  try {
-    // Check if platform authenticator is available
-    const available = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
-    return available;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Generate WebAuthn challenge
- */
-async function generateChallenge() {
-  return generateRandomBytes(32);
-}
-
-/**
- * Create PRF input salts for key derivation
- * Following the recommended pattern from Yubico for key rotation support
- */
-function createPRFInputs() {
-  const encoder = new TextEncoder();
-  return {
-    // Primary key derivation salt
-    first: encoder.encode('wallet-storage-prf-v2-primary'),
-    // Secondary salt for future key rotation support
-    second: encoder.encode('wallet-storage-prf-v2-secondary')
-  };
-}
-
-/**
- * Register a new passkey and derive encryption key material
- *
- * @param {Object} options - Registration options
- * @param {string} options.rpName - Relying party name (e.g., 'My App')
- * @param {string} options.userName - User identifier
- * @param {string} options.userDisplayName - User display name
- * @returns {Promise<{credentialId: string, keyMaterial: Uint8Array, hasPRF: boolean}>}
- */
-export async function registerPasskey(options = {}) {
-  if (!isPasskeySupported()) {
-    throw new Error('Passkeys are not supported on this device');
-  }
-
-  const {
-    rpName = 'Wallet Storage',
-    userName = 'wallet-user',
-    userDisplayName = 'Wallet User'
-  } = options;
-
-  const challenge = await generateChallenge();
-  const userId = await generateRandomBytes(16);
-  const prfInputs = createPRFInputs();
-
-  const publicKeyCredentialCreationOptions = {
-    challenge,
-    rp: {
-      name: rpName,
-      id: window.location.hostname
-    },
-    user: {
-      id: userId,
-      name: userName,
-      displayName: userDisplayName
-    },
-    pubKeyCredParams: [
-      { alg: -7, type: 'public-key' },   // ES256 (P-256)
-      { alg: -257, type: 'public-key' }  // RS256
-    ],
-    authenticatorSelection: {
-      authenticatorAttachment: 'platform',
-      userVerification: 'required',
-      residentKey: 'preferred' // Changed from 'required' for broader compatibility
-    },
-    timeout: 60000,
-    attestation: 'none',
-    extensions: {
-      prf: {
-        eval: {
-          first: prfInputs.first
-        }
-      }
-    }
-  };
-
-  const credential = await navigator.credentials.create({
-    publicKey: publicKeyCredentialCreationOptions
+function freezeRecord(record) {
+  return Object.freeze({
+    aad: Object.freeze({ ...record.aad }),
+    canonicalUsername: record.canonicalUsername,
+    ciphertextBase64url: record.ciphertextBase64url,
+    createdAt: record.createdAt,
+    credentialIdBase64url: record.credentialIdBase64url,
+    hkdfSaltBase64url: record.hkdfSaltBase64url,
+    nonceBase64url: record.nonceBase64url,
+    prfInputBase64url: record.prfInputBase64url,
+    schemaVersion: record.schemaVersion,
+    storageProfile: record.storageProfile,
   });
-
-  // Extract PRF result or fall back to credential ID
-  const extensionResults = credential.getClientExtensionResults();
-  const prfResult = extensionResults?.prf?.results?.first;
-
-  let keyMaterial;
-  let hasPRF = false;
-
-  if (prfResult && prfResult.byteLength > 0) {
-    keyMaterial = new Uint8Array(prfResult);
-    hasPRF = true;
-  } else {
-    // PRF not available — derive key material from credential ID + a fixed salt.
-    const rawId = new Uint8Array(credential.rawId);
-    const salt = new TextEncoder().encode('wallet-storage-credid-fallback-v1');
-    keyMaterial = await hkdfDerive(rawId, salt, new Uint8Array(0), 32);
-  }
-
-  return {
-    credentialId: arrayBufferToBase64(credential.rawId),
-    keyMaterial,
-    hasPRF
-  };
 }
 
-/**
- * Authenticate with existing passkey and derive encryption key material
- *
- * @param {string} credentialId - Base64-encoded credential ID
- * @returns {Promise<{keyMaterial: Uint8Array, hasPRF: boolean}>}
- */
-export async function authenticatePasskey(credentialId) {
-  if (!isPasskeySupported()) {
-    throw new Error('Passkeys are not supported on this device');
+export function validateRememberedWalletRecord(input) {
+  const value = exactRecord(input, RECORD_FIELDS);
+  const aad = exactRecord(value.aad, AAD_FIELDS);
+  const usernameBytes = wellFormedString(value.canonicalUsername)
+    ? encoder.encode(value.canonicalUsername)
+    : null;
+  if (value.schemaVersion !== 2 || value.storageProfile !== PROFILE
+      || aad.schemaVersion !== 2 || aad.storageProfile !== PROFILE
+      || aad.identityScheme !== IDENTITY_SCHEME || aad.seedProfile !== SEED_PROFILE
+      || !usernameBytes || usernameBytes.length < 3 || usernameBytes.length > 64
+      || !/^[a-z0-9][a-z0-9._-]*$/u.test(value.canonicalUsername)
+      || !LOWER_HEX_32.test(aad.usernameSha256)
+      || value.credentialIdBase64url !== aad.credentialIdBase64url
+      || !wellFormedString(value.createdAt) || !RFC3339_MILLISECONDS.test(value.createdAt)
+      || new Date(value.createdAt).toISOString() !== value.createdAt) {
+    fail('INVALID_REMEMBERED_WALLET');
   }
+  decodeCanonicalBase64url(value.credentialIdBase64url, { minimum: 1, maximum: 1024 });
+  decodeCanonicalBase64url(value.ciphertextBase64url, { minimum: 17, maximum: 1024 });
+  decodeCanonicalBase64url(value.hkdfSaltBase64url, { exact: 32 });
+  decodeCanonicalBase64url(value.nonceBase64url, { exact: 12 });
+  decodeCanonicalBase64url(value.prfInputBase64url, { exact: 32 });
+  return freezeRecord({ ...value, aad });
+}
 
-  const challenge = await generateChallenge();
-  const prfInputs = createPRFInputs();
-  const credentialIdBytes = base64ToUint8Array(credentialId);
+export function serializeRememberedWalletRecord(input) {
+  return canonicalJson(validateRememberedWalletRecord(input));
+}
 
-  const publicKeyCredentialRequestOptions = {
-    challenge,
-    allowCredentials: [{
-      id: credentialIdBytes,
-      type: 'public-key',
-      transports: ['internal', 'hybrid'] // Support both platform and cross-device
-    }],
-    userVerification: 'required',
-    timeout: 60000,
-    extensions: {
-      prf: {
-        eval: {
-          first: prfInputs.first
-        }
-      }
-    }
-  };
+export function parseRememberedWalletRecord(serialized) {
+  if (typeof serialized !== 'string' || serialized.length === 0 || serialized.length > 131072) {
+    fail('INVALID_REMEMBERED_WALLET');
+  }
+  let parsed;
+  try { parsed = JSON.parse(serialized); } catch { fail('INVALID_REMEMBERED_WALLET'); }
+  const record = validateRememberedWalletRecord(parsed);
+  if (canonicalJson(record) !== serialized) fail('INVALID_REMEMBERED_WALLET');
+  return record;
+}
 
-  const assertion = await navigator.credentials.get({
-    publicKey: publicKeyCredentialRequestOptions
+function readSlot(storage, key, { pending = false } = {}) {
+  if (!storage || typeof storage.getItem !== 'function') fail('STORAGE_UNAVAILABLE');
+  let raw;
+  try { raw = storage.getItem(key); } catch { fail('STORAGE_UNAVAILABLE'); }
+  if (raw === null) return Object.freeze({ raw: null, record: null, status: 'empty' });
+  if (typeof raw !== 'string') fail('STORAGE_UNAVAILABLE');
+  const oversized = raw.length > MAX_QUARANTINE_EXPORT_CHARACTERS;
+  if (pending || oversized) {
+    return Object.freeze({
+      exportable: !oversized,
+      oversized,
+      raw: oversized ? null : raw,
+      rawLength: raw.length,
+      record: null,
+      status: 'quarantined',
+    });
+  }
+  try {
+    const record = parseRememberedWalletRecord(raw);
+    return Object.freeze({
+      raw,
+      record,
+      status: pending ? 'quarantined' : 'valid',
+    });
+  } catch {
+    return Object.freeze({
+      exportable: true,
+      oversized: false,
+      raw,
+      rawLength: raw.length,
+      record: null,
+      status: 'quarantined',
+    });
+  }
+}
+
+export function inspectRememberedWalletStorage(storage) {
+  const pending = readSlot(storage, PENDING_REMEMBERED_WALLET_KEY, { pending: true });
+  const active = readSlot(storage, ACTIVE_REMEMBERED_WALLET_KEY);
+  const pendingEmpty = pending.status === 'empty';
+  const activeSafe = active.status === 'empty' || active.status === 'valid';
+  return Object.freeze({
+    active,
+    canRestore: pendingEmpty && active.status === 'valid',
+    canSetup: pendingEmpty && activeSafe,
+    pending,
   });
+}
 
-  // Extract PRF result or fall back to credential ID
-  const extensionResults = assertion.getClientExtensionResults();
-  const prfResult = extensionResults?.prf?.results?.first;
+export function beginRememberedWalletWrite(storage, candidate) {
+  const state = inspectRememberedWalletStorage(storage);
+  if (!state.canSetup) fail('STORAGE_QUARANTINED');
+  const serialized = serializeRememberedWalletRecord(candidate);
+  try { storage.setItem(PENDING_REMEMBERED_WALLET_KEY, serialized); } catch (error) { throw error; }
+  let readback;
+  try { readback = storage.getItem(PENDING_REMEMBERED_WALLET_KEY); } catch { fail('STORAGE_UNAVAILABLE'); }
+  if (readback !== serialized) fail('STORAGE_WRITE_FAILED');
+  parseRememberedWalletRecord(readback);
+  const transaction = Object.freeze({
+    previousActiveRaw: state.active.raw,
+    serialized,
+    storage,
+  });
+  issuedTransactions.add(transaction);
+  return transaction;
+}
 
-  let keyMaterial;
-  let hasPRF = false;
-
-  if (prfResult && prfResult.byteLength > 0) {
-    keyMaterial = new Uint8Array(prfResult);
-    hasPRF = true;
-  } else {
-    // PRF not available — derive key material from credential ID + a fixed salt.
-    const rawId = new Uint8Array(assertion.rawId);
-    const salt = new TextEncoder().encode('wallet-storage-credid-fallback-v1');
-    keyMaterial = await hkdfDerive(rawId, salt, new Uint8Array(0), 32);
+export function commitRememberedWalletWrite(storage, transaction) {
+  if (!issuedTransactions.has(transaction) || transaction.storage !== storage) {
+    fail('INVALID_STORAGE_TRANSACTION');
   }
-
-  return { keyMaterial, hasPRF };
-}
-
-// =============================================================================
-// Encryption/Decryption
-// =============================================================================
-
-/**
- * Encrypt data using AES-256-GCM
- */
-async function encryptData(data, encryptionKey, aad) {
-  const encoder = new TextEncoder();
-  const plaintext = encoder.encode(JSON.stringify(data));
-  const iv = await generateRandomBytes(AES_GCM_IV_LENGTH);
-  const wallet = await getWallet();
-  const { ciphertext, tag } = wallet.utils.aesGcm.encrypt(
-    asUint8Array(encryptionKey),
-    plaintext,
-    iv,
-    aad ? asUint8Array(aad) : new Uint8Array(0)
-  );
-  const sealed = new Uint8Array(ciphertext.length + tag.length);
-  sealed.set(ciphertext, 0);
-  sealed.set(tag, ciphertext.length);
-
-  return { iv, ciphertext: sealed };
-}
-
-/**
- * Decrypt data using AES-256-GCM
- */
-async function decryptData(ciphertext, encryptionKey, iv, aad) {
-  const sealed = asUint8Array(ciphertext);
-  if (sealed.length <= AES_GCM_TAG_LENGTH) {
-    throw new Error('Ciphertext is too short');
-  }
-
-  const wallet = await getWallet();
-  const plaintext = wallet.utils.aesGcm.decrypt(
-    asUint8Array(encryptionKey),
-    sealed.subarray(0, sealed.length - AES_GCM_TAG_LENGTH),
-    sealed.subarray(sealed.length - AES_GCM_TAG_LENGTH),
-    asUint8Array(iv),
-    aad ? asUint8Array(aad) : new Uint8Array(0)
-  );
-
-  const decoder = new TextDecoder();
-  return JSON.parse(decoder.decode(plaintext));
-}
-
-// =============================================================================
-// High-Level Storage API
-// =============================================================================
-
-function getAadForMethod(method) {
-  // Small AAD to bind ciphertexts to this module + method.
-  // (Replay protection against localStorage rollback is not achievable without an external monotonic anchor.)
-  return new TextEncoder().encode(`wallet-storage|v${STORAGE_VERSION}|${method}`);
-}
-
-/**
- * Get storage metadata
- * @returns {Object|null} Storage metadata or null if no wallet stored
- */
-export function getStorageMetadata() {
+  issuedTransactions.delete(transaction);
+  let pending;
+  let active;
   try {
-    const metadataJson = localStorage.getItem(METADATA_KEY);
-    if (!metadataJson) return null;
-
-    const metadata = JSON.parse(metadataJson);
-    return {
-      method: metadata.method || StorageMethod.NONE,
-      timestamp: metadata.timestamp,
-      date: new Date(metadata.timestamp).toLocaleDateString(),
-      version: metadata.version,
-      hasPRF: metadata.hasPRF || false
-    };
+    pending = storage.getItem(PENDING_REMEMBERED_WALLET_KEY);
+    active = storage.getItem(ACTIVE_REMEMBERED_WALLET_KEY);
   } catch {
-    return null;
+    fail('STORAGE_UNAVAILABLE');
   }
+  if (pending !== transaction.serialized || active !== transaction.previousActiveRaw) {
+    fail('STORAGE_COLLISION');
+  }
+  storage.removeItem(PENDING_REMEMBERED_WALLET_KEY);
+  if (storage.getItem(PENDING_REMEMBERED_WALLET_KEY) !== null) fail('STORAGE_WRITE_FAILED');
+  storage.setItem(ACTIVE_REMEMBERED_WALLET_KEY, transaction.serialized);
 }
 
-/**
- * Check if a wallet is stored
- * @returns {boolean}
- */
-export function hasStoredWallet() {
-  return getStorageMetadata() !== null;
-}
-
-/**
- * Get the storage method used
- * @returns {string} StorageMethod value
- */
-export function getStorageMethod() {
-  const metadata = getStorageMetadata();
-  return metadata?.method || StorageMethod.NONE;
-}
-
-/**
- * Store wallet data with PIN encryption
- *
- * @param {string} pin - 6-digit PIN
- * @param {Object} walletData - Data to encrypt and store
- * @returns {Promise<boolean>}
- */
-export async function storeWithPIN(pin, walletData) {
-  // Derive key from PIN
-  const { keyMaterial, salt } = await deriveKeyFromPIN(pin);
-  const encryptionKey = await deriveEncryptionKey(keyMaterial, 'pin');
-
-  // Encrypt wallet data
-  const aad = getAadForMethod(StorageMethod.PIN);
-  const { ciphertext, iv } = await encryptData(walletData, encryptionKey, aad);
-
-  // Store encrypted data
-  const encryptedData = {
-    ciphertext: arrayBufferToBase64(ciphertext),
-    iv: arrayBufferToBase64(iv),
-    salt: arrayBufferToBase64(salt)
-  };
-  localStorage.setItem(ENCRYPTED_DATA_KEY, JSON.stringify(encryptedData));
-
-  // Store metadata
-  const metadata = {
-    method: StorageMethod.PIN,
-    timestamp: Date.now(),
-    version: STORAGE_VERSION
-  };
-  localStorage.setItem(METADATA_KEY, JSON.stringify(metadata));
-
-  return true;
-}
-
-/**
- * Retrieve wallet data with PIN
- *
- * @param {string} pin - 6-digit PIN
- * @returns {Promise<Object>} Decrypted wallet data
- */
-export async function retrieveWithPIN(pin) {
-  const metadata = getStorageMetadata();
-  if (!metadata || metadata.method !== StorageMethod.PIN) {
-    throw new Error('No PIN-encrypted wallet found');
-  }
-
-  const encryptedJson = localStorage.getItem(ENCRYPTED_DATA_KEY);
-  if (!encryptedJson) {
-    throw new Error('Encrypted data not found');
-  }
-
-  const encryptedData = JSON.parse(encryptedJson);
-  const salt = base64ToUint8Array(encryptedData.salt);
-  const ciphertext = base64ToUint8Array(encryptedData.ciphertext);
-  const iv = encryptedData.iv ? base64ToUint8Array(encryptedData.iv) : null;
-
-  // Derive key from PIN with stored salt
-  const { keyMaterial } = await deriveKeyFromPIN(pin, salt, iv ? PIN_PBKDF2_ITERATIONS : LEGACY_PIN_PBKDF2_ITERATIONS);
-  const aad = getAadForMethod(StorageMethod.PIN);
-
-  try {
-    let walletData;
-    if (iv) {
-      const encryptionKey = await deriveEncryptionKey(keyMaterial, 'pin');
-      walletData = await decryptData(ciphertext, encryptionKey, iv, aad);
-    } else {
-      // Legacy v1/v2 deterministic-IV storage. Decrypt and upgrade in-place.
-      const legacyVersion = metadata.version || 2;
-      const { encryptionKey: legacyKey, iv: legacyIv } = await deriveLegacyKeyAndIV(keyMaterial, 'pin', legacyVersion);
-      walletData = await decryptData(ciphertext, legacyKey, legacyIv);
-
-      // Upgrade stored blob to v3 (random IV) after successful decrypt.
-      const newKey = await deriveEncryptionKey(keyMaterial, 'pin');
-      const { ciphertext: newCt, iv: newIv } = await encryptData(walletData, newKey, aad);
-      localStorage.setItem(ENCRYPTED_DATA_KEY, JSON.stringify({
-        ciphertext: arrayBufferToBase64(newCt),
-        iv: arrayBufferToBase64(newIv),
-        salt: arrayBufferToBase64(salt)
-      }));
-      localStorage.setItem(METADATA_KEY, JSON.stringify({
-        ...metadata,
-        version: STORAGE_VERSION
-      }));
-    }
-    return walletData;
-  } catch (e) {
-    throw new Error('Invalid PIN or corrupted data');
-  }
-}
-
-/**
- * Store wallet data with passkey encryption
- *
- * @param {Object} walletData - Data to encrypt and store
- * @param {Object} options - Passkey options
- * @returns {Promise<boolean>}
- */
-export async function storeWithPasskey(walletData, options = {}) {
-  // Prefer reusing an existing stored passkey credential to avoid creating duplicates.
-  let credentialId = null;
-  let keyMaterial = null;
-  let hasPRF = false;
-
-  try {
-    const existing = localStorage.getItem(PASSKEY_CREDENTIAL_KEY);
-    if (existing) {
-      const parsed = JSON.parse(existing);
-      if (parsed?.id) {
-        credentialId = parsed.id;
-        const auth = await authenticatePasskey(credentialId);
-        keyMaterial = auth.keyMaterial;
-        hasPRF = auth.hasPRF;
-      }
-    }
-  } catch {
-    // Ignore and fall back to registration below.
-  }
-
-  if (!keyMaterial) {
-    const reg = await registerPasskey(options);
-    credentialId = reg.credentialId;
-    keyMaterial = reg.keyMaterial;
-    hasPRF = reg.hasPRF;
-  }
-
-  // Derive encryption key
-  const encryptionKey = await deriveEncryptionKey(keyMaterial, 'passkey');
-
-  // Encrypt wallet data
-  const aad = getAadForMethod(StorageMethod.PASSKEY);
-  const { ciphertext, iv } = await encryptData(walletData, encryptionKey, aad);
-
-  // Store credential info
-  const credentialData = {
-    id: credentialId,
-    hasPRF
-  };
-  localStorage.setItem(PASSKEY_CREDENTIAL_KEY, JSON.stringify(credentialData));
-
-  // Store encrypted data
-  const encryptedData = {
-    ciphertext: arrayBufferToBase64(ciphertext),
-    iv: arrayBufferToBase64(iv)
-  };
-  localStorage.setItem(ENCRYPTED_DATA_KEY, JSON.stringify(encryptedData));
-
-  // Store metadata
-  const metadata = {
-    method: StorageMethod.PASSKEY,
-    timestamp: Date.now(),
-    version: STORAGE_VERSION,
-    hasPRF
-  };
-  localStorage.setItem(METADATA_KEY, JSON.stringify(metadata));
-
-  return true;
-}
-
-/**
- * Retrieve wallet data with passkey
- *
- * @returns {Promise<Object>} Decrypted wallet data
- */
-export async function retrieveWithPasskey() {
-  const metadata = getStorageMetadata();
-  if (!metadata || metadata.method !== StorageMethod.PASSKEY) {
-    throw new Error('No passkey-encrypted wallet found');
-  }
-  const credentialJson = localStorage.getItem(PASSKEY_CREDENTIAL_KEY);
-  if (!credentialJson) {
-    throw new Error('Passkey credential not found');
-  }
-
-  const credentialData = JSON.parse(credentialJson);
-
-  const encryptedJson = localStorage.getItem(ENCRYPTED_DATA_KEY);
-  if (!encryptedJson) {
-    throw new Error('Encrypted data not found');
-  }
-
-  const encryptedData = JSON.parse(encryptedJson);
-  const ciphertext = base64ToUint8Array(encryptedData.ciphertext);
-  const iv = encryptedData.iv ? base64ToUint8Array(encryptedData.iv) : null;
-
-  // Authenticate with passkey and get key material
-  const { keyMaterial } = await authenticatePasskey(credentialData.id);
-
-  // Derive encryption key
-  const aad = getAadForMethod(StorageMethod.PASSKEY);
-
-  try {
-    let walletData;
-    if (iv) {
-      const encryptionKey = await deriveEncryptionKey(keyMaterial, 'passkey');
-      walletData = await decryptData(ciphertext, encryptionKey, iv, aad);
-    } else {
-      // Legacy v1/v2 deterministic-IV storage. Decrypt and upgrade in-place.
-      const legacyVersion = metadata.version || 2;
-      const { encryptionKey: legacyKey, iv: legacyIv } = await deriveLegacyKeyAndIV(keyMaterial, 'passkey', legacyVersion);
-      walletData = await decryptData(ciphertext, legacyKey, legacyIv);
-
-      const newKey = await deriveEncryptionKey(keyMaterial, 'passkey');
-      const { ciphertext: newCt, iv: newIv } = await encryptData(walletData, newKey, aad);
-      localStorage.setItem(ENCRYPTED_DATA_KEY, JSON.stringify({
-        ciphertext: arrayBufferToBase64(newCt),
-        iv: arrayBufferToBase64(newIv)
-      }));
-      localStorage.setItem(METADATA_KEY, JSON.stringify({
-        ...metadata,
-        version: STORAGE_VERSION,
-        hasPRF: true
-      }));
-    }
-    return walletData;
-  } catch (e) {
-    throw new Error('Passkey authentication failed or data corrupted');
-  }
-}
-
-/**
- * Clear all stored wallet data
- */
-export function clearStorage() {
-  localStorage.removeItem(METADATA_KEY);
-  localStorage.removeItem(ENCRYPTED_DATA_KEY);
-  localStorage.removeItem(PASSKEY_CREDENTIAL_KEY);
-  localStorage.removeItem('encrypted_wallet');
-  localStorage.removeItem('passkey_credential');
-  localStorage.removeItem('passkey_wallet');
-}
-
-/**
- * Migrate from old storage format (v1) to new format (v2)
- * Call this on app initialization
- */
-export function migrateStorage() {
-  // Check for old v1 keys
-  const oldPinWallet = localStorage.getItem('encrypted_wallet');
-  const oldPasskeyCredential = localStorage.getItem('passkey_credential');
-  const oldPasskeyWallet = localStorage.getItem('passkey_wallet');
-
-  // Already migrated or no old data
-  if (getStorageMetadata() !== null) return;
-  if (!oldPinWallet && !oldPasskeyCredential) return;
-
-  console.log('Migrating wallet storage from legacy format...');
-
-  if (oldPasskeyCredential && oldPasskeyWallet) {
-    // Migrate passkey storage
+function readQuarantineCandidate(storage, key) {
+  if (!deletableKeys.has(key)) fail('INVALID_STORAGE_KEY');
+  if (!storage || typeof storage.getItem !== 'function') fail('STORAGE_UNAVAILABLE');
+  let raw;
+  try { raw = storage.getItem(key); } catch { fail('STORAGE_UNAVAILABLE'); }
+  if (raw === null) return null;
+  if (typeof raw !== 'string') fail('STORAGE_UNAVAILABLE');
+  if (key === ACTIVE_REMEMBERED_WALLET_KEY
+      && raw.length <= MAX_QUARANTINE_EXPORT_CHARACTERS) {
     try {
-      const credential = JSON.parse(oldPasskeyCredential);
-      const wallet = JSON.parse(oldPasskeyWallet);
-
-      localStorage.setItem(PASSKEY_CREDENTIAL_KEY, JSON.stringify({
-        id: credential.id,
-        hasPRF: credential.hasPRF || false
-      }));
-
-      localStorage.setItem(ENCRYPTED_DATA_KEY, JSON.stringify({
-        ciphertext: wallet.ciphertext
-      }));
-
-      localStorage.setItem(METADATA_KEY, JSON.stringify({
-        method: StorageMethod.PASSKEY,
-        timestamp: credential.timestamp || wallet.timestamp || Date.now(),
-        // Preserve legacy version so decrypt can derive the correct legacy HKDF salt/IV,
-        // then upgrade in-place on first successful retrieval.
-        version: credential.version || wallet.version || 2,
-        hasPRF: credential.hasPRF || false
-      }));
-
-      // Clean up old keys
-      localStorage.removeItem('passkey_credential');
-      localStorage.removeItem('passkey_wallet');
-
-      console.log('Passkey storage migrated successfully');
-    } catch (e) {
-      console.error('Failed to migrate passkey storage:', e);
+      parseRememberedWalletRecord(raw);
+      fail('NOT_QUARANTINED');
+    } catch (error) {
+      if (error instanceof WalletStorageError && error.code === 'NOT_QUARANTINED') throw error;
     }
-  } else if (oldPinWallet) {
-    // Migrate PIN storage - can't fully migrate since we need the salt
-    // User will need to re-enter their wallet
-    console.log('PIN storage detected but cannot be migrated - user will need to re-login');
-    localStorage.removeItem('encrypted_wallet');
+  }
+  return Object.freeze({
+    exportable: raw.length <= MAX_QUARANTINE_EXPORT_CHARACTERS,
+    key,
+    oversized: raw.length > MAX_QUARANTINE_EXPORT_CHARACTERS,
+    raw,
+    rawLength: raw.length,
+  });
+}
+
+function publicQuarantineEntry(candidate) {
+  return Object.freeze({
+    exportable: candidate.exportable,
+    key: candidate.key,
+    oversized: candidate.oversized,
+    rawLength: candidate.rawLength,
+  });
+}
+
+export function inspectQuarantinedWalletStorage(storage) {
+  const entries = [];
+  for (const key of [
+    ACTIVE_REMEMBERED_WALLET_KEY,
+    PENDING_REMEMBERED_WALLET_KEY,
+    ...LEGACY_WALLET_QUARANTINE_KEYS,
+  ]) {
+    let candidate;
+    try { candidate = readQuarantineCandidate(storage, key); } catch (error) {
+      if (error instanceof WalletStorageError && error.code === 'NOT_QUARANTINED') continue;
+      throw error;
+    }
+    if (candidate) entries.push(publicQuarantineEntry(candidate));
+  }
+  return Object.freeze(entries);
+}
+
+export function inspectLegacyWalletQuarantine(storage) {
+  return Object.freeze(inspectQuarantinedWalletStorage(storage).filter(
+    ({ key }) => LEGACY_WALLET_QUARANTINE_KEYS.includes(key),
+  ));
+}
+
+export function exportQuarantinedWalletRecord(storage, key) {
+  const candidate = readQuarantineCandidate(storage, key);
+  if (!candidate) fail('QUARANTINE_NOT_FOUND');
+  if (!candidate.exportable) fail('QUARANTINE_EXPORT_TOO_LARGE');
+  return candidate.raw;
+}
+
+export function deleteQuarantinedWalletRecord(storage, key, confirmation) {
+  if (!deletableKeys.has(key)) fail('INVALID_STORAGE_KEY');
+  if (confirmation !== key) fail('CONFIRMATION_REQUIRED');
+  const candidate = readQuarantineCandidate(storage, key);
+  if (!candidate) fail('QUARANTINE_NOT_FOUND');
+  try {
+    storage.removeItem(key);
+    if (storage.getItem(key) !== null) fail('STORAGE_WRITE_FAILED');
+  } catch (error) {
+    if (error instanceof WalletStorageError) throw error;
+    fail('STORAGE_UNAVAILABLE');
   }
 }
 
-// =============================================================================
-// Export default object for convenience
-// =============================================================================
+export function forgetRememberedWallet(storage, confirmation) {
+  if (confirmation !== ACTIVE_REMEMBERED_WALLET_KEY) fail('CONFIRMATION_REQUIRED');
+  const active = readSlot(storage, ACTIVE_REMEMBERED_WALLET_KEY);
+  if (active.status === 'empty') fail('REMEMBER_UNAVAILABLE');
+  if (active.status !== 'valid') fail('STORAGE_QUARANTINED');
+  try {
+    storage.removeItem(ACTIVE_REMEMBERED_WALLET_KEY);
+    if (storage.getItem(ACTIVE_REMEMBERED_WALLET_KEY) !== null) {
+      fail('STORAGE_WRITE_FAILED');
+    }
+  } catch (error) {
+    if (error instanceof WalletStorageError) throw error;
+    fail('STORAGE_UNAVAILABLE');
+  }
+}
 
-export default {
-  StorageMethod,
-  isPasskeySupported,
-  isPRFLikelySupported,
-  getStorageMetadata,
-  hasStoredWallet,
-  getStorageMethod,
-  storeWithPIN,
-  retrieveWithPIN,
-  storeWithPasskey,
-  retrieveWithPasskey,
-  clearStorage,
-  migrateStorage
-};
+export default Object.freeze({
+  ACTIVE_REMEMBERED_WALLET_KEY,
+  LEGACY_WALLET_QUARANTINE_KEYS,
+  MAX_QUARANTINE_EXPORT_CHARACTERS,
+  PENDING_REMEMBERED_WALLET_KEY,
+  beginRememberedWalletWrite,
+  commitRememberedWalletWrite,
+  deleteQuarantinedWalletRecord,
+  exportQuarantinedWalletRecord,
+  forgetRememberedWallet,
+  inspectLegacyWalletQuarantine,
+  inspectQuarantinedWalletStorage,
+  inspectRememberedWalletStorage,
+  parseRememberedWalletRecord,
+  serializeRememberedWalletRecord,
+  validateRememberedWalletRecord,
+});

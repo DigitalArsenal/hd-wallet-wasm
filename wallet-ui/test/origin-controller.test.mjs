@@ -1,13 +1,35 @@
 import { readFile } from 'node:fs/promises';
 
 import { describe, expect, test } from 'vitest';
+import { vi } from 'vitest';
+
+vi.mock('hd-wallet-wasm', () => ({
+  getWalletOriginCapabilities(module) {
+    if (module?.__rejectCapabilities === true) throw new TypeError('invalid owner');
+    const descriptor = Object.getOwnPropertyDescriptor(module ?? {}, 'walletOriginCapabilities');
+    if (descriptor) {
+      if (descriptor.value !== module.__testBinding) throw new TypeError('invalid owner');
+      return descriptor.value;
+    }
+    const sdn = module?.sdn ?? module;
+    const hashOwner = module?.utils ?? module;
+    if (!sdn || typeof hashOwner?.sha256 !== 'function') throw new TypeError('invalid owner');
+    return Object.freeze({ sdn, sha256: hashOwner.sha256.bind(hashOwner) });
+  },
+}));
 
 import { resolveRegistryBinding, verifyRegistry } from '../origin-app/registry.mjs';
 import { ApprovalConfigurationController } from '../origin-app/account.mjs';
 import { WalletOriginController } from '../origin-app/controller.mjs';
 import { requestTrustedConfirmation, validateWalletTransaction } from '../origin-app/operations.mjs';
-import { createWalletOriginApp } from '../origin-app/app.mjs';
+import { createPasswordCredentialPrompt, createWalletOriginApp } from '../origin-app/app.mjs';
 import { createSameOriginWalletRelay } from '../origin-app/relay.mjs';
+import {
+  ACTIVE_REMEMBERED_WALLET_KEY,
+  LEGACY_WALLET_QUARANTINE_KEYS,
+  PENDING_REMEMBERED_WALLET_KEY,
+  serializeRememberedWalletRecord,
+} from '../src/wallet-storage.js';
 
 const registryReleaseSha256 = verifyRegistry().registryReleaseSha256;
 const sdnWalletVectors = JSON.parse(await readFile(
@@ -185,6 +207,16 @@ class FakeDocument extends FakeEventTarget {
     visit(this.body);
     return found;
   }
+
+  findAll(predicate) {
+    const found = [];
+    const visit = (node) => {
+      if (predicate(node)) found.push(node);
+      node.children.forEach(visit);
+    };
+    visit(this.body);
+    return found;
+  }
 }
 
 function fakeWindow(document) {
@@ -243,6 +275,56 @@ function identity(seed = '1') {
     ],
     schemaVersion: 1,
     seedProfile: 'password-scrypt-v2',
+  };
+}
+
+function rememberedBase64url(length, value) {
+  let binary = '';
+  for (const byte of new Uint8Array(length).fill(value)) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/gu, '-').replace(/\//gu, '_').replace(/=+$/u, '');
+}
+
+function validRememberedRecord() {
+  const credentialIdBase64url = rememberedBase64url(32, 0xa1);
+  return serializeRememberedWalletRecord({
+    aad: {
+      credentialIdBase64url,
+      identityScheme: 'sdn-bip32-slip10-purpose-v1',
+      schemaVersion: 2,
+      seedProfile: 'password-scrypt-v2',
+      storageProfile: 'webauthn-prf-hkdf-sha256-aes256gcm-v2',
+      usernameSha256: '66'.repeat(32),
+    },
+    canonicalUsername: 'alice_01',
+    ciphertextBase64url: rememberedBase64url(64, 0x7c),
+    createdAt: '2026-07-21T12:00:00.000Z',
+    credentialIdBase64url,
+    hkdfSaltBase64url: rememberedBase64url(32, 0x20),
+    nonceBase64url: rememberedBase64url(12, 0x40),
+    prfInputBase64url: rememberedBase64url(32, 0x60),
+    schemaVersion: 2,
+    storageProfile: 'webauthn-prf-hkdf-sha256-aes256gcm-v2',
+  });
+}
+
+function memoryStorage(entries = []) {
+  const map = new Map(entries);
+  const operations = [];
+  return {
+    getItem(key) {
+      operations.push(['getItem', key]);
+      return map.get(key) ?? null;
+    },
+    map,
+    operations,
+    removeItem(key) {
+      operations.push(['removeItem', key]);
+      map.delete(key);
+    },
+    setItem(key, value) {
+      operations.push(['setItem', key, String(value)]);
+      map.set(key, String(value));
+    },
   };
 }
 
@@ -744,7 +826,388 @@ function fixture() {
   };
 }
 
+describe('modern password prompt remembered-wallet control', () => {
+  test('shows Remember on this device visibly and unchecked on supported platforms', () => {
+    const document = new FakeDocument();
+    createPasswordCredentialPrompt({
+      controller: {
+        registerCredentialControls() {},
+        supportsRememberedWallet: () => true,
+      },
+      document,
+    });
+
+    const remember = document.find((node) => node.dataset.walletRemember === 'prf-only');
+    expect(remember).toBeTruthy();
+    expect(remember.type).toBe('checkbox');
+    expect(remember.checked).toBe(false);
+    expect(remember.defaultChecked).toBe(false);
+    expect(remember.disabled).toBe(false);
+    expect(remember.parentNode.textContent).toContain('Remember on this device');
+  });
+
+  test('keeps the visible Remember control unselectable on unsupported platforms', () => {
+    const document = new FakeDocument();
+    createPasswordCredentialPrompt({
+      controller: {
+        registerCredentialControls() {},
+        supportsRememberedWallet: () => false,
+      },
+      document,
+    });
+
+    const remember = document.find((node) => node.dataset.walletRemember === 'prf-only');
+    expect(remember).toBeTruthy();
+    expect(remember.disabled).toBe(true);
+    expect(remember.checked).toBe(false);
+    expect(remember.defaultChecked).toBe(false);
+  });
+
+  test('offers remembered restore only as an explicit trusted action', async () => {
+    const document = new FakeDocument();
+    const prompt = createPasswordCredentialPrompt({
+      controller: {
+        canRestoreRememberedWallet: () => true,
+        registerCredentialControls() {},
+        supportsRememberedWallet: () => true,
+      },
+      document,
+    });
+    const unlock = document.findAction('unlock-remembered');
+    expect(unlock).toBeTruthy();
+    let settled = false;
+    prompt.promise.then(() => { settled = true; });
+
+    unlock.dispatch('click', { isTrusted: false });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    unlock.dispatch('click', { isTrusted: true });
+
+    await expect(prompt.promise).resolves.toMatchObject({ remembered: true });
+  });
+
+  test('lists every classified quarantine and uses trusted bounded export and exact deletion', async () => {
+    const document = new FakeDocument();
+    const keys = [
+      ACTIVE_REMEMBERED_WALLET_KEY,
+      PENDING_REMEMBERED_WALLET_KEY,
+      ...LEGACY_WALLET_QUARANTINE_KEYS,
+    ];
+    let entries = keys.map((key) => ({
+      exportable: true,
+      key,
+      oversized: false,
+      rawLength: 17,
+    }));
+    const deleted = [];
+    const writes = [];
+    const controller = {
+      canRestoreRememberedWallet: () => !entries.some(({ key }) => key === PENDING_REMEMBERED_WALLET_KEY),
+      deleteQuarantinedWalletRecord(key, confirmation) {
+        expect(confirmation).toBe(key);
+        deleted.push(key);
+        entries = entries.filter((entry) => entry.key !== key);
+      },
+      exportQuarantinedWalletRecord: (key) => `raw:${key}:<img onerror=attack>`,
+      generation: 7,
+      isUiGenerationCurrent: (generation) => generation === 7,
+      listQuarantinedWalletRecords: () => entries,
+      registerCredentialControls() {},
+      supportsRememberedWallet: () => true,
+    };
+    createPasswordCredentialPrompt({
+      clipboard: { async writeText(value) { writes.push(value); } },
+      controller,
+      document,
+    });
+
+    const labels = document.findAll((node) => node.dataset.walletQuarantineLabel === 'true');
+    expect(labels.map((node) => node.textContent)).toEqual(keys);
+    expect(document.body.textContent).not.toContain('<img onerror=attack>');
+    const pendingExport = document.find((node) => (
+      node.dataset.walletAction === 'export-quarantined-wallet'
+      && node.dataset.walletQuarantineKey === PENDING_REMEMBERED_WALLET_KEY
+    ));
+    pendingExport.dispatch('click', { isTrusted: false });
+    await Promise.resolve();
+    expect(writes).toEqual([]);
+    pendingExport.dispatch('click', { isTrusted: true });
+    await until(() => writes.length === 1);
+    expect(writes[0]).toBe(`raw:${PENDING_REMEMBERED_WALLET_KEY}:<img onerror=attack>`);
+
+    const launchDelete = document.find((node) => (
+      node.dataset.walletAction === 'delete-quarantined-wallet'
+      && node.dataset.walletQuarantineKey === PENDING_REMEMBERED_WALLET_KEY
+    ));
+    const confirmation = document.find((node) => (
+      node.dataset.walletQuarantineConfirmation === PENDING_REMEMBERED_WALLET_KEY
+    ));
+    const confirmDelete = document.find((node) => (
+      node.dataset.walletAction === 'confirm-delete-quarantined-wallet'
+      && node.dataset.walletQuarantineKey === PENDING_REMEMBERED_WALLET_KEY
+    ));
+    expect(confirmDelete.parentNode.hidden).toBe(true);
+    launchDelete.dispatch('click', { isTrusted: false });
+    expect(confirmDelete.parentNode.hidden).toBe(true);
+    launchDelete.dispatch('click', { isTrusted: true });
+    expect(confirmDelete.parentNode.hidden).toBe(false);
+    confirmation.value = 'wrong';
+    confirmDelete.dispatch('click', { isTrusted: true });
+    expect(deleted).toEqual([]);
+    confirmation.value = PENDING_REMEMBERED_WALLET_KEY;
+    confirmDelete.dispatch('click', { isTrusted: false });
+    expect(deleted).toEqual([]);
+    confirmDelete.dispatch('click', { isTrusted: true });
+    await until(() => deleted.length === 1);
+    expect(deleted).toEqual([PENDING_REMEMBERED_WALLET_KEY]);
+    expect(document.findAction('unlock-remembered')).toBeTruthy();
+    expect(document.findAction('login')).toBeTruthy();
+  });
+
+  test('late quarantine clipboard completion cannot mutate a removed prompt', async () => {
+    const document = new FakeDocument();
+    const write = deferred();
+    const controller = {
+      canRestoreRememberedWallet: () => false,
+      exportQuarantinedWalletRecord: () => 'bounded quarantine',
+      generation: 2,
+      isUiGenerationCurrent: (generation) => generation === 2,
+      listQuarantinedWalletRecords: () => [{
+        exportable: true,
+        key: PENDING_REMEMBERED_WALLET_KEY,
+        oversized: false,
+        rawLength: 18,
+      }],
+      registerCredentialControls() {},
+      supportsRememberedWallet: () => true,
+    };
+    const prompt = createPasswordCredentialPrompt({
+      clipboard: { writeText: () => write.promise },
+      controller,
+      document,
+    });
+    const exportButton = document.findAction('export-quarantined-wallet');
+    const status = document.find((node) => node.dataset.walletQuarantineStatus === 'true');
+    const confirmation = document.find((node) => (
+      node.dataset.walletQuarantineConfirmation === PENDING_REMEMBERED_WALLET_KEY
+    ));
+    confirmation.value = PENDING_REMEMBERED_WALLET_KEY;
+    exportButton.dispatch('click', { isTrusted: true });
+    prompt.remove();
+    expect(confirmation.value).toBe('');
+    expect(status.textContent).toBe('');
+    write.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(status.textContent).toBe('');
+    expect(document.findAction('login')).toBeNull();
+  });
+});
+
 describe('WalletOriginController generation and handle ownership', () => {
+  test('origin quarantine APIs exclude valid active storage from generic management', () => {
+    const document = new FakeDocument();
+    const window = fakeWindow(document);
+    const active = validRememberedRecord();
+    const storage = memoryStorage([[ACTIVE_REMEMBERED_WALLET_KEY, active]]);
+    const controller = new WalletOriginController({
+      document,
+      registry: {},
+      relay: {},
+      storage,
+      wasm: {
+        derivePasswordIdentity() {},
+        destroySdnIdentity() {},
+        sha256() { return new Uint8Array(32); },
+      },
+      window,
+    });
+
+    expect(controller.listQuarantinedWalletRecords()).toEqual([]);
+    expect(() => controller.deleteQuarantinedWalletRecord(
+      ACTIVE_REMEMBERED_WALLET_KEY,
+      ACTIVE_REMEMBERED_WALLET_KEY,
+    )).toThrowError(/NOT_QUARANTINED/u);
+    expect(storage.map.get(ACTIVE_REMEMBERED_WALLET_KEY)).toBe(active);
+  });
+
+  test('rejects a forged cross-module capability owner before platform or raw calls', () => {
+    const document = new FakeDocument();
+    const window = fakeWindow(document);
+    let rawCalls = 0;
+    let platformCalls = 0;
+
+    expect(() => new WalletOriginController({
+      credentials: {
+        create() { platformCalls += 1; },
+        get() { platformCalls += 1; },
+      },
+      document,
+      registry: {},
+      relay: {},
+      rng: { getRandomValues(bytes) { return bytes; } },
+      storage: { getItem: () => null, removeItem() {}, setItem() {} },
+      wasm: {
+        __rejectCapabilities: true,
+        derivePasswordIdentity() { rawCalls += 1; },
+        destroySdnIdentity() { rawCalls += 1; },
+        sha256() { rawCalls += 1; return new Uint8Array(32); },
+      },
+      window,
+    })).toThrowError(/WASM_UNAVAILABLE/u);
+    expect(rawCalls).toBe(0);
+    expect(platformCalls).toBe(0);
+  });
+
+  test('selected Remember owns two distinct password copies and preserves the fresh source handle', async () => {
+    const document = new FakeDocument();
+    const window = fakeWindow(document);
+    const storageMap = new Map();
+    const storage = {
+      getItem: (key) => storageMap.get(key) ?? null,
+      removeItem: (key) => storageMap.delete(key),
+      setItem: (key, value) => storageMap.set(key, String(value)),
+    };
+    const passwordCopies = [];
+    const destroyed = [];
+    const credentialId = new Uint8Array(32).fill(0xa1);
+    const prfOutput = new Uint8Array(32).fill(0xb2);
+    const rawId = () => credentialId.slice().buffer;
+    const wasm = {
+      async derivePasswordIdentity(input) {
+        passwordCopies.push(input.passwordUtf8);
+        return { handle: 'source-handle', identity: identity() };
+      },
+      destroySdnIdentity(handle) { destroyed.push(handle); },
+      importRememberedIdentity() {
+        return { handle: 'verification-handle', identity: identity() };
+      },
+      sealRememberedIdentity(_handle, input) {
+        passwordCopies.push(input.passwordUtf8);
+        return new Uint8Array(64).fill(0x7c);
+      },
+      sha256() { return new Uint8Array(32).fill(0x66); },
+    };
+    const credentials = {
+        async create() {
+          return {
+            type: 'public-key',
+            rawId: rawId(),
+            getClientExtensionResults: () => ({ prf: { enabled: true } }),
+          };
+        },
+        async get() {
+          return {
+            type: 'public-key',
+            rawId: rawId(),
+            getClientExtensionResults: () => ({
+              prf: { results: { first: prfOutput.slice().buffer } },
+            }),
+          };
+        },
+      };
+    const controllerConfiguration = {
+      credentials,
+      document,
+      registry: {},
+      relay: {},
+      rng: {
+        getRandomValues(bytes) { bytes.fill(0x5a); return bytes; },
+        observedWrite: () => true,
+      },
+      storage,
+      wasm,
+      window,
+    };
+    const controller = new WalletOriginController(controllerConfiguration);
+    const controls = approvalControls('  ALICE  ', 'correct horse battery staple');
+    controls.rememberControl = { checked: true, disabled: false };
+    controls.rememberStatus = { textContent: '' };
+
+    await controller.unlockPassword(controls);
+
+    expect(passwordCopies).toHaveLength(2);
+    expect(passwordCopies[0]).not.toBe(passwordCopies[1]);
+    expect(passwordCopies.every((bytes) => bytes.every((byte) => byte === 0))).toBe(true);
+    expect(destroyed).toEqual(['verification-handle']);
+    expect(storageMap.has(ACTIVE_REMEMBERED_WALLET_KEY)).toBe(true);
+    expect(controls.rememberStatus.textContent).toBe('Wallet remembered on this device.');
+
+    controller.revokeNow('replacement');
+    const restoredController = new WalletOriginController(controllerConfiguration);
+    await expect(restoredController.unlockRemembered()).resolves.toEqual(identity());
+    expect(restoredController.copyPublicIdentity()).toEqual(identity());
+    expect(destroyed).toEqual(['verification-handle', 'source-handle']);
+  });
+
+  test('an auxiliary remembered handle cleanup failure destroys the source and grants no publication', async () => {
+    const document = new FakeDocument();
+    const window = fakeWindow(document);
+    const storageMap = new Map();
+    const destroyAttempts = [];
+    let publications = 0;
+    const credentialId = new Uint8Array(32).fill(0xa1);
+    const controller = new WalletOriginController({
+      credentials: {
+        async create() {
+          return {
+            type: 'public-key',
+            rawId: credentialId.slice().buffer,
+            getClientExtensionResults: () => ({ prf: { enabled: true } }),
+          };
+        },
+        async get() {
+          return {
+            type: 'public-key',
+            rawId: credentialId.slice().buffer,
+            getClientExtensionResults: () => ({
+              prf: { results: { first: new Uint8Array(32).fill(0xb2).buffer } },
+            }),
+          };
+        },
+      },
+      document,
+      registry: {},
+      relay: { publishResult() { publications += 1; } },
+      rng: {
+        getRandomValues(bytes) { bytes.fill(0x5a); return bytes; },
+        observedWrite: () => true,
+      },
+      storage: {
+        getItem: (key) => storageMap.get(key) ?? null,
+        removeItem: (key) => storageMap.delete(key),
+        setItem: (key, value) => storageMap.set(key, String(value)),
+      },
+      wasm: {
+        async derivePasswordIdentity() {
+          return { handle: 'source-handle', identity: identity() };
+        },
+        destroySdnIdentity(handle) {
+          destroyAttempts.push(handle);
+          if (handle === 'verification-handle') throw new Error('persistent cleanup fault');
+        },
+        importRememberedIdentity() {
+          return { handle: 'verification-handle', identity: identity() };
+        },
+        sealRememberedIdentity() { return new Uint8Array(64).fill(0x7c); },
+        sha256() { return new Uint8Array(32).fill(0x66); },
+      },
+      window,
+    });
+    const controls = approvalControls('alice', 'correct horse battery staple');
+    controls.rememberControl = { checked: true, disabled: false };
+    controls.rememberStatus = { textContent: '' };
+
+    await expect(controller.unlockPassword(controls)).rejects.toMatchObject({
+      code: 'DESTRUCTION_FAILED',
+    });
+    await expect(controller.execute({})).rejects.toMatchObject({ code: 'STALE_CONTROLLER' });
+    expect(destroyAttempts).toContain('source-handle');
+    expect(destroyAttempts.filter((handle) => handle === 'verification-handle').length).toBeGreaterThan(1);
+    expect(publications).toBe(0);
+    expect(storageMap.has(ACTIVE_REMEMBERED_WALLET_KEY)).toBe(false);
+  });
+
   test('confirmation traps keyboard focus, rejects untrusted keys, and restores prior focus', async () => {
     const document = new FakeDocument();
     const prior = document.createElement('button');
@@ -810,6 +1273,351 @@ describe('WalletOriginController generation and handle ownership', () => {
     expect(validated.request.nonce).toBe(originalNonce);
     expect(validated.transaction.request.nonce).toBe(originalNonce);
   });
+
+  test.each(['resolve', 'reject'])(
+    'password B synchronously retires remembered setup A before its WebAuthn create can %s',
+    async (settlement) => {
+      const document = new FakeDocument();
+      const window = fakeWindow(document);
+      const creation = deferred();
+      const destroyed = [];
+      const deriveInputs = [];
+      let creationRequest = null;
+      let deriveCalls = 0;
+      const controller = new WalletOriginController({
+        credentials: {
+          create(request) {
+            creationRequest = request;
+            return creation.promise;
+          },
+          get() { throw new Error('stale setup must not request an assertion'); },
+        },
+        document,
+        registry: {},
+        relay: {},
+        rng: {
+          getRandomValues(bytes) { bytes.fill(0x5a); return bytes; },
+          observedWrite: () => true,
+        },
+        storage: memoryStorage(),
+        wasm: {
+          derivePasswordIdentity(input) {
+            deriveInputs.push(input);
+            deriveCalls += 1;
+            return {
+              handle: `password-handle-${deriveCalls}`,
+              identity: identity(String(deriveCalls)),
+            };
+          },
+          destroySdnIdentity(handle) { destroyed.push(handle); },
+          importRememberedIdentity() {
+            throw new Error('stale setup must not import');
+          },
+          sealRememberedIdentity() {
+            throw new Error('stale setup must not seal');
+          },
+          sha256() { return new Uint8Array(32).fill(0x66); },
+        },
+        window,
+      });
+      const a = approvalControls('alice_01', 'first remembered password');
+      a.rememberControl = { checked: true, defaultChecked: true, disabled: false };
+      a.rememberStatus = { textContent: '' };
+      const pendingA = controller.unlockPassword(a);
+      await until(() => creationRequest);
+
+      const b = approvalControls('bob_02', 'second current password');
+      const pendingB = controller.unlockPassword(b);
+
+      expect(creationRequest.signal.aborted).toBe(true);
+      expect([...deriveInputs[0].passwordUtf8]).toEqual(
+        Array(deriveInputs[0].passwordUtf8.length).fill(0),
+      );
+      expect(a.rememberStatus.textContent).toBe('');
+      await expect(pendingB).resolves.toEqual(identity('2'));
+
+      if (settlement === 'resolve') {
+        creation.resolve({
+          type: 'public-key',
+          rawId: new Uint8Array(32).fill(0xa1).buffer,
+          getClientExtensionResults: () => ({ prf: { enabled: true } }),
+        });
+      } else {
+        creation.reject(new Error('late platform rejection'));
+      }
+      await expect(pendingA).rejects.toMatchObject({ code: 'STALE_CONTROLLER' });
+      expect(a.rememberStatus.textContent).toBe('');
+      expect(controller.copyPublicIdentity()).toEqual(identity('2'));
+      expect(destroyed).toContain('password-handle-1');
+      expect(destroyed).not.toContain('password-handle-2');
+    },
+  );
+
+  test.each(['resolve', 'reject'])(
+    'password B synchronously retires remembered restore A before its WebAuthn assertion can %s',
+    async (settlement) => {
+      const document = new FakeDocument();
+      const window = fakeWindow(document);
+      const assertion = deferred();
+      const destroyed = [];
+      let assertionRequest = null;
+      const controller = new WalletOriginController({
+        credentials: {
+          create() { throw new Error('restore must not create a credential'); },
+          get(request) {
+            assertionRequest = request;
+            return assertion.promise;
+          },
+        },
+        document,
+        registry: {},
+        relay: {},
+        rng: {
+          getRandomValues(bytes) { bytes.fill(0x5a); return bytes; },
+          observedWrite: () => true,
+        },
+        storage: memoryStorage([[ACTIVE_REMEMBERED_WALLET_KEY, validRememberedRecord()]]),
+        wasm: {
+          derivePasswordIdentity() {
+            return { handle: 'current-password-handle', identity: identity('2') };
+          },
+          destroySdnIdentity(handle) { destroyed.push(handle); },
+          importRememberedIdentity() {
+            throw new Error('stale restore must not import');
+          },
+          sha256() { return new Uint8Array(32).fill(0x66); },
+        },
+        window,
+      });
+      const pendingA = controller.unlockRemembered();
+      await until(() => assertionRequest);
+
+      const pendingB = controller.unlockPassword(
+        approvalControls('bob_02', 'second current password'),
+      );
+
+      expect(assertionRequest.signal.aborted).toBe(true);
+      await expect(pendingB).resolves.toEqual(identity('2'));
+      if (settlement === 'resolve') {
+        assertion.resolve({
+          type: 'public-key',
+          rawId: new Uint8Array(32).fill(0xa1).buffer,
+          getClientExtensionResults: () => ({
+            prf: { results: { first: new Uint8Array(32).fill(0xb2).buffer } },
+          }),
+        });
+      } else {
+        assertion.reject(new Error('late platform rejection'));
+      }
+      await expect(pendingA).rejects.toMatchObject({ code: 'STALE_CONTROLLER' });
+      expect(controller.copyPublicIdentity()).toEqual(identity('2'));
+      expect(destroyed).not.toContain('current-password-handle');
+    },
+  );
+
+  test.each(['resolve', 'reject'])(
+    'password B synchronously wipes legacy derivation A and survives its late %s',
+    async (settlement) => {
+      const document = new FakeDocument();
+      const window = fakeWindow(document);
+      const legacyDerivation = deferred();
+      const destroyed = [];
+      let legacyInput = null;
+      const controller = new WalletOriginController({
+        document,
+        registry: {},
+        relay: {},
+        wasm: {
+          deriveLegacyPasswordIdentity(input) {
+            legacyInput = input;
+            return legacyDerivation.promise;
+          },
+          derivePasswordIdentity() {
+            return { handle: 'current-password-handle', identity: identity('2') };
+          },
+          destroySdnIdentity(handle) { destroyed.push(handle); },
+          sha256() { return new Uint8Array(32).fill(0x66); },
+        },
+        window,
+      });
+      const legacyControls = approvalControls('legacy-user', 'legacy password');
+      const pendingA = controller.unlockLegacy({
+        operation: 'sdn.auth.raw-challenge.v1',
+        passwordControl: legacyControls.passwordControl,
+        profile: 'password-fast-v1-legacy',
+        usernameControl: legacyControls.usernameControl,
+      });
+      await until(() => legacyInput);
+
+      const pendingB = controller.unlockPassword(
+        approvalControls('bob_02', 'second current password'),
+      );
+
+      expect([...legacyInput.usernameUtf8]).toEqual(
+        Array(legacyInput.usernameUtf8.length).fill(0),
+      );
+      expect([...legacyInput.passwordUtf8]).toEqual(
+        Array(legacyInput.passwordUtf8.length).fill(0),
+      );
+      await expect(pendingB).resolves.toEqual(identity('2'));
+      if (settlement === 'resolve') {
+        legacyDerivation.resolve({ handle: 'late-legacy-handle', identity: legacyIdentity() });
+      } else {
+        legacyDerivation.reject(new Error('late native rejection'));
+      }
+      await expect(pendingA).rejects.toMatchObject({ code: 'STALE_CONTROLLER' });
+      expect(controller.copyPublicIdentity()).toEqual(identity('2'));
+      expect(destroyed).not.toContain('current-password-handle');
+      if (settlement === 'resolve') expect(destroyed).toContain('late-legacy-handle');
+    },
+  );
+
+  test.each(['resolve', 'reject'])(
+    'remembered restore B synchronously wipes password derivation A and survives its late %s',
+    async (settlement) => {
+      const document = new FakeDocument();
+      const window = fakeWindow(document);
+      const passwordDerivation = deferred();
+      const destroyed = [];
+      let passwordInput = null;
+      const controller = new WalletOriginController({
+        credentials: {
+          create() { throw new Error('restore must not create a credential'); },
+          async get() {
+            return {
+              type: 'public-key',
+              rawId: new Uint8Array(32).fill(0xa1).buffer,
+              getClientExtensionResults: () => ({
+                prf: { results: { first: new Uint8Array(32).fill(0xb2).buffer } },
+              }),
+            };
+          },
+        },
+        document,
+        registry: {},
+        relay: {},
+        rng: {
+          getRandomValues(bytes) { bytes.fill(0x5a); return bytes; },
+          observedWrite: () => true,
+        },
+        storage: memoryStorage([[ACTIVE_REMEMBERED_WALLET_KEY, validRememberedRecord()]]),
+        wasm: {
+          derivePasswordIdentity(input) {
+            passwordInput = input;
+            return passwordDerivation.promise;
+          },
+          destroySdnIdentity(handle) { destroyed.push(handle); },
+          importRememberedIdentity() {
+            return { handle: 'current-remembered-handle', identity: identity('2') };
+          },
+          sha256() { return new Uint8Array(32).fill(0x66); },
+        },
+        window,
+      });
+      const pendingA = controller.unlockPassword(
+        approvalControls('alice_01', 'first password'),
+      );
+      await until(() => passwordInput);
+
+      const pendingB = controller.unlockRemembered();
+
+      expect([...passwordInput.usernameUtf8]).toEqual(
+        Array(passwordInput.usernameUtf8.length).fill(0),
+      );
+      expect([...passwordInput.passwordUtf8]).toEqual(
+        Array(passwordInput.passwordUtf8.length).fill(0),
+      );
+      await expect(pendingB).resolves.toEqual(identity('2'));
+      if (settlement === 'resolve') {
+        passwordDerivation.resolve({ handle: 'late-password-handle', identity: identity('1') });
+      } else {
+        passwordDerivation.reject(new Error('late native rejection'));
+      }
+      await expect(pendingA).rejects.toMatchObject({ code: 'STALE_CONTROLLER' });
+      expect(controller.copyPublicIdentity()).toEqual(identity('2'));
+      expect(destroyed).not.toContain('current-remembered-handle');
+      if (settlement === 'resolve') expect(destroyed).toContain('late-password-handle');
+    },
+  );
+
+  test.each(['resolve', 'reject'])(
+    'legacy B synchronously retires remembered setup A before its WebAuthn create can %s',
+    async (settlement) => {
+      const document = new FakeDocument();
+      const window = fakeWindow(document);
+      const creation = deferred();
+      const destroyed = [];
+      const deriveInputs = [];
+      let creationRequest = null;
+      const controller = new WalletOriginController({
+        credentials: {
+          create(request) {
+            creationRequest = request;
+            return creation.promise;
+          },
+          get() { throw new Error('stale setup must not request an assertion'); },
+        },
+        document,
+        registry: {},
+        relay: {},
+        rng: {
+          getRandomValues(bytes) { bytes.fill(0x5a); return bytes; },
+          observedWrite: () => true,
+        },
+        storage: memoryStorage(),
+        wasm: {
+          deriveLegacyPasswordIdentity() {
+            return { handle: 'current-legacy-handle', identity: legacyIdentity() };
+          },
+          derivePasswordIdentity(input) {
+            deriveInputs.push(input);
+            return { handle: 'remember-source-handle', identity: identity('1') };
+          },
+          destroySdnIdentity(handle) { destroyed.push(handle); },
+          importRememberedIdentity() {
+            throw new Error('stale setup must not import');
+          },
+          sealRememberedIdentity() {
+            throw new Error('stale setup must not seal');
+          },
+          sha256() { return new Uint8Array(32).fill(0x66); },
+        },
+        window,
+      });
+      const a = approvalControls('alice_01', 'first remembered password');
+      a.rememberControl = { checked: true, defaultChecked: true, disabled: false };
+      a.rememberStatus = { textContent: '' };
+      const pendingA = controller.unlockPassword(a);
+      await until(() => creationRequest);
+      const legacyControls = approvalControls('legacy-user', 'legacy password');
+
+      const pendingB = controller.unlockLegacy({
+        operation: 'sdn.auth.raw-challenge.v1',
+        passwordControl: legacyControls.passwordControl,
+        profile: 'password-fast-v1-legacy',
+        usernameControl: legacyControls.usernameControl,
+      });
+
+      expect(creationRequest.signal.aborted).toBe(true);
+      expect([...deriveInputs[0].passwordUtf8]).toEqual(
+        Array(deriveInputs[0].passwordUtf8.length).fill(0),
+      );
+      expect(a.rememberStatus.textContent).toBe('');
+      await expect(pendingB).resolves.toEqual(legacyIdentity());
+      if (settlement === 'resolve') {
+        creation.resolve({
+          type: 'public-key',
+          rawId: new Uint8Array(32).fill(0xa1).buffer,
+          getClientExtensionResults: () => ({ prf: { enabled: true } }),
+        });
+      } else {
+        creation.reject(new Error('late platform rejection'));
+      }
+      await expect(pendingA).rejects.toMatchObject({ code: 'STALE_CONTROLLER' });
+      expect(a.rememberStatus.textContent).toBe('');
+      expect(destroyed).not.toContain('current-legacy-handle');
+    },
+  );
 
   test('B unlock replaces A, tears controls down before await, and destroys stale A', async () => {
     const test = fixture();
@@ -1318,7 +2126,7 @@ function standaloneFixture(operation, { createRelay = null } = {}) {
 }
 standaloneFixture.clipboardWrites = [];
 
-function defaultRelayAccountFixture({ publish = null } = {}) {
+function defaultRelayAccountFixture({ clipboard = null, publish = null, storage = undefined } = {}) {
   const document = new FakeDocument();
   const window = fakeWindow(document);
   const value = publicTransaction('sdn.wallet.account.v1');
@@ -1338,7 +2146,7 @@ function defaultRelayAccountFixture({ publish = null } = {}) {
     sha256() { return digestBytes(value.requestSha256); },
   };
   const app = createWalletOriginApp({
-    clipboard: { async writeText() {} },
+    clipboard: clipboard ?? { async writeText() {} },
     document,
     async fetch(_url, options) {
       if (options.method === 'GET') return relayJsonResponse(value);
@@ -1348,6 +2156,7 @@ function defaultRelayAccountFixture({ publish = null } = {}) {
     },
     registry: { resolveRegistryBinding },
     rng: {},
+    storage,
     wasm,
     window,
   });
@@ -1370,7 +2179,7 @@ function submitCurrentLogin(test, username = 'alice', password = 'correct horse 
   const form = button.parentNode.parentNode;
   const inputs = [];
   const collect = (node) => {
-    if (node.tagName === 'input') inputs.push(node);
+    if (node.tagName === 'input' && node.type !== 'checkbox') inputs.push(node);
     node.children.forEach(collect);
   };
   collect(form);
@@ -1381,6 +2190,187 @@ function submitCurrentLogin(test, username = 'alice', password = 'correct horse 
   inputs[1].defaultValue = password;
   form.dispatch('submit', { isTrusted: true, preventDefault() {} });
 }
+
+test('normal prompt remains lifecycle-owned before submit and reaches unlock with exact nonempty controls', async () => {
+  const document = new FakeDocument();
+  const window = fakeWindow(document);
+  const transactionId = 'e'.repeat(64);
+  window.location.pathname = `/transaction/${transactionId}`;
+  let registered = null;
+  let unlocked = null;
+  const prepared = Object.freeze({
+    binding: Object.freeze({ clientDisplayName: 'Space Data Network' }),
+    transaction: Object.freeze({ operation: 'sdn.wallet.connect.v1' }),
+  });
+  const controller = {
+    canRestoreRememberedWallet: () => false,
+    async destroy() {},
+    async executePrepared() { return { ok: true }; },
+    isUiGenerationCurrent: () => true,
+    listQuarantinedWalletRecords: () => [],
+    async prepare() { return prepared; },
+    registerCredentialControls(controls) { registered = controls; },
+    supportsRememberedWallet: () => true,
+    async unlockPassword(controls) {
+      unlocked = {
+        password: controls.passwordControl.value,
+        passwordControl: controls.passwordControl,
+        username: controls.usernameControl.value,
+        usernameControl: controls.usernameControl,
+      };
+      return identity();
+    },
+  };
+  const app = createWalletOriginApp({ controller, document, window });
+  const started = app.start();
+  await until(() => document.findAction('login'));
+
+  expect(registered).toBeTruthy();
+  submitCurrentLogin({ document }, 'alice_01', 'nonempty prompt password');
+  await expect(started).resolves.toEqual({ ok: true });
+  expect(unlocked).toMatchObject({
+    password: 'nonempty prompt password',
+    username: 'alice_01',
+  });
+  expect(unlocked.usernameControl).toBe(registered.usernameControl);
+  expect(unlocked.passwordControl).toBe(registered.passwordControl);
+});
+
+test.each([
+  'Wallet remembered on this device.',
+  'Wallet was not remembered.',
+])('origin app keeps the current bounded Remember status visible through confirmation: %s', async (status) => {
+  const document = new FakeDocument();
+  const window = fakeWindow(document);
+  const transactionId = 'e'.repeat(64);
+  window.location.pathname = `/transaction/${transactionId}`;
+  const execution = deferred();
+  let executeStarted = false;
+  const prepared = Object.freeze({
+    binding: Object.freeze({ clientDisplayName: 'Space Data Network' }),
+    transaction: Object.freeze({ operation: 'sdn.wallet.connect.v1' }),
+  });
+  const controller = {
+    canRestoreRememberedWallet: () => false,
+    async destroy() {},
+    executePrepared() {
+      executeStarted = true;
+      return execution.promise;
+    },
+    isUiGenerationCurrent: () => true,
+    listQuarantinedWalletRecords: () => [],
+    async prepare() { return prepared; },
+    registerCredentialControls() {},
+    supportsRememberedWallet: () => true,
+    async unlockPassword(controls) {
+      controls.rememberStatus.textContent = status;
+      controls.usernameControl.value = '';
+      controls.passwordControl.value = '';
+      controls.usernameControl.disabled = true;
+      controls.passwordControl.disabled = true;
+      return identity();
+    },
+  };
+  const app = createWalletOriginApp({ controller, document, window });
+  const started = app.start();
+  await until(() => document.findAction('login'));
+  const remember = document.find((node) => node.dataset.walletRemember === 'prf-only');
+  remember.checked = true;
+  submitCurrentLogin({ document }, 'alice_01', 'nonempty prompt password');
+  await until(() => executeStarted);
+
+  expect(document.body.textContent).toContain(status);
+  expect(document.find((node) => node.dataset.walletRememberStatus === 'true')?.textContent)
+    .toBe(status);
+  const credentialInputs = document.findAll(
+    (node) => node.tagName === 'input' && node.type !== 'checkbox',
+  );
+  expect(credentialInputs.every((input) => input.value === '' && input.disabled)).toBe(true);
+
+  execution.resolve({ ok: true });
+  await expect(started).resolves.toEqual({ ok: true });
+});
+
+test.each([
+  ['password Remember', 'stop', 'resolve'],
+  ['password Remember', 'stop', 'reject'],
+  ['password Remember', 'pagehide', 'resolve'],
+  ['password Remember', 'pagehide', 'reject'],
+  ['remembered restore', 'stop', 'resolve'],
+  ['remembered restore', 'stop', 'reject'],
+  ['remembered restore', 'pagehide', 'resolve'],
+  ['remembered restore', 'pagehide', 'reject'],
+])(
+  'origin app suppresses late %s %s after %s',
+  async (flow, termination, settlement) => {
+    const document = new FakeDocument();
+    const window = fakeWindow(document);
+    const transactionId = 'e'.repeat(64);
+    window.location.pathname = `/transaction/${transactionId}`;
+    const unlock = deferred();
+    const calls = [];
+    const prepared = Object.freeze({
+      binding: Object.freeze({ clientDisplayName: 'Space Data Network' }),
+      transaction: Object.freeze({ operation: 'sdn.wallet.connect.v1' }),
+    });
+    const controller = {
+      canRestoreRememberedWallet: () => flow === 'remembered restore',
+      async destroy(reason) { calls.push(['destroy', reason]); },
+      async executePrepared(value) {
+        calls.push(['execute', value]);
+        return { published: true };
+      },
+      isUiGenerationCurrent: () => true,
+      listQuarantinedWalletRecords: () => [],
+      async prepare(value) {
+        calls.push(['prepare', value]);
+        return prepared;
+      },
+      supportsRememberedWallet: () => true,
+      unlockPassword(controls) {
+        calls.push(['unlock-password', controls.rememberControl?.checked]);
+        return unlock.promise;
+      },
+      unlockRemembered() {
+        calls.push(['unlock-remembered']);
+        return unlock.promise;
+      },
+    };
+    const app = createWalletOriginApp({ controller, document, window });
+    const started = app.start().then(
+      (value) => ({ resolved: value }),
+      (error) => ({ rejected: error }),
+    );
+    await until(() => document.findAction('login'));
+    if (flow === 'password Remember') {
+      const remember = document.find((node) => node.dataset.walletRemember === 'prf-only');
+      remember.checked = true;
+      submitCurrentLogin({ document });
+      await until(() => calls.some(([name]) => name === 'unlock-password'));
+      expect(calls.find(([name]) => name === 'unlock-password')[1]).toBe(true);
+    } else {
+      const restore = document.findAction('unlock-remembered');
+      restore.dispatch('click', { isTrusted: true });
+      await until(() => calls.some(([name]) => name === 'unlock-remembered'));
+    }
+
+    if (termination === 'stop') await app.stop('test-stop');
+    else window.dispatch('pagehide', { persisted: false });
+
+    expect(document.findAction('login')).toBeNull();
+    expect(document.findAction('unlock-remembered')).toBeNull();
+    expect(document.body.textContent).not.toContain('Sign in');
+
+    if (settlement === 'resolve') unlock.resolve(identity());
+    else unlock.reject(new Error('late WebAuthn failure'));
+    const outcome = await started;
+
+    expect(outcome.rejected).toBeTruthy();
+    expect(calls.filter(([name]) => name === 'execute')).toHaveLength(0);
+    expect(document.body.textContent).not.toContain('Wallet request stopped');
+    expect(document.body.textContent).not.toContain('Complete');
+  },
+);
 
 describe('standalone wallet-origin application', () => {
   test('does not render credentials for an invalid transaction', async () => {
@@ -1660,6 +2650,229 @@ describe('standalone wallet-origin application', () => {
     expect(test.posts[0].transactionId).toBe(test.transaction.transactionId);
   });
 
+  test('Account forget uses a separate trusted exact confirmation and preserves the live session', async () => {
+    const active = validRememberedRecord();
+    const pending = '{"crash":"left"}';
+    const legacyKey = 'wallet_storage_encrypted';
+    const storage = memoryStorage([
+      [ACTIVE_REMEMBERED_WALLET_KEY, active],
+      [PENDING_REMEMBERED_WALLET_KEY, pending],
+      [legacyKey, 'legacy-ciphertext'],
+    ]);
+    const test = defaultRelayAccountFixture({ storage });
+    const started = test.app.start();
+    await until(() => test.document.findAction('login'));
+    submitCurrentLogin(test);
+    const operationConfirm = await until(() => test.document.findAction('confirm'));
+    operationConfirm.dispatch('click', { isTrusted: true });
+    await started;
+
+    const launch = test.document.findAction('forget-stored-wallet');
+    expect(launch).toBeTruthy();
+    const confirmForget = test.document.findAction('confirm-forget-stored-wallet');
+    expect(confirmForget.parentNode.hidden).toBe(true);
+    launch.dispatch('click', { isTrusted: false });
+    expect(confirmForget.parentNode.hidden).toBe(true);
+    launch.dispatch('click', { isTrusted: true });
+
+    expect(confirmForget.parentNode.hidden).toBe(false);
+    const confirmation = test.document.find(
+      (node) => node.dataset.walletForgetConfirmation === 'exact-storage-key',
+    );
+    const status = test.document.find(
+      (node) => node.dataset.walletForgetStatus === 'true',
+    );
+    expect(confirmForget).toBeTruthy();
+    expect(confirmation).toBeTruthy();
+    confirmation.value = 'forget';
+    confirmForget.dispatch('click', { isTrusted: true });
+    await until(() => status.textContent.includes('Type the exact storage key'));
+    expect(storage.map.get(ACTIVE_REMEMBERED_WALLET_KEY)).toBe(active);
+
+    confirmation.value = ACTIVE_REMEMBERED_WALLET_KEY;
+    confirmForget.dispatch('click', { isTrusted: false });
+    expect(storage.map.get(ACTIVE_REMEMBERED_WALLET_KEY)).toBe(active);
+    confirmForget.dispatch('click', { isTrusted: true });
+    await until(() => !storage.map.has(ACTIVE_REMEMBERED_WALLET_KEY));
+
+    expect(storage.map.get(PENDING_REMEMBERED_WALLET_KEY)).toBe(pending);
+    expect(storage.map.get(legacyKey)).toBe('legacy-ciphertext');
+    expect(status.textContent).toBe('Stored wallet forgotten. This account remains signed in.');
+    expect(test.document.findAction('copy-approval')).toBeTruthy();
+    expect(test.document.findAction('logout')).toBeTruthy();
+    const removal = storage.operations.findLastIndex(
+      ([operation, key]) => operation === 'removeItem' && key === ACTIVE_REMEMBERED_WALLET_KEY,
+    );
+    expect(storage.operations.slice(removal, removal + 2)).toEqual([
+      ['removeItem', ACTIVE_REMEMBERED_WALLET_KEY],
+      ['getItem', ACTIVE_REMEMBERED_WALLET_KEY],
+    ]);
+    expect(test.posts).toEqual([]);
+    expect(test.replacements).toEqual([]);
+  });
+
+  test('Account logout never deletes a valid remembered wallet', async () => {
+    const active = validRememberedRecord();
+    const storage = memoryStorage([[ACTIVE_REMEMBERED_WALLET_KEY, active]]);
+    const test = defaultRelayAccountFixture({ storage });
+    const started = test.app.start();
+    await until(() => test.document.findAction('login'));
+    submitCurrentLogin(test);
+    const confirm = await until(() => test.document.findAction('confirm'));
+    confirm.dispatch('click', { isTrusted: true });
+    const logout = await until(() => test.document.findAction('logout'));
+    await started;
+
+    logout.dispatch('click', { isTrusted: true });
+    await until(() => test.replacements.length === 1);
+
+    expect(storage.map.get(ACTIVE_REMEMBERED_WALLET_KEY)).toBe(active);
+    expect(storage.operations.some(
+      ([operation, key]) => operation === 'removeItem' && key === ACTIVE_REMEMBERED_WALLET_KEY,
+    )).toBe(false);
+  });
+
+  test('wallet-origin exposes quarantine before login and in Account, then Return clears it without deletion', async () => {
+    const initialEntries = [
+      [ACTIVE_REMEMBERED_WALLET_KEY, '{"broken":true}'],
+      [PENDING_REMEMBERED_WALLET_KEY, '{"crash":"left"}'],
+      ...LEGACY_WALLET_QUARANTINE_KEYS.map((key) => [key, `legacy:${key}`]),
+    ];
+    const storage = memoryStorage(initialEntries);
+    const test = defaultRelayAccountFixture({ storage });
+    const started = test.app.start();
+    await until(() => test.document.findAction('login'));
+    expect(test.document.findAll(
+      (node) => node.dataset.walletQuarantineLabel === 'true',
+    ).map((node) => node.textContent)).toEqual(initialEntries.map(([key]) => key));
+
+    submitCurrentLogin(test);
+    const confirmOperation = await until(() => test.document.findAction('confirm'));
+    confirmOperation.dispatch('click', { isTrusted: true });
+    await started;
+
+    const accountLabels = test.document.findAll(
+      (node) => node.dataset.walletQuarantineLabel === 'true',
+    );
+    expect(accountLabels.map((node) => node.textContent)).toEqual(initialEntries.map(([key]) => key));
+    const launchDelete = test.document.find((node) => (
+      node.dataset.walletAction === 'delete-quarantined-wallet'
+      && node.dataset.walletQuarantineKey === ACTIVE_REMEMBERED_WALLET_KEY
+    ));
+    launchDelete.dispatch('click', { isTrusted: true });
+    const confirmation = test.document.find((node) => (
+      node.dataset.walletQuarantineConfirmation === ACTIVE_REMEMBERED_WALLET_KEY
+    ));
+    const status = test.document.find((node) => node.dataset.walletQuarantineStatus === 'true');
+    confirmation.value = ACTIVE_REMEMBERED_WALLET_KEY;
+    const returnToSite = test.document.findAction('return-to-site');
+    returnToSite.dispatch('click', { isTrusted: true });
+    await until(() => test.replacements.length === 1);
+
+    expect(confirmation.value).toBe('');
+    expect(status.textContent).toBe('');
+    expect([...storage.map.entries()]).toEqual(initialEntries);
+    expect(storage.operations.some(([operation]) => operation === 'removeItem')).toBe(false);
+  });
+
+  test('Account quarantine export/delete require trusted events and exact confirmation', async () => {
+    const storage = memoryStorage([
+      [ACTIVE_REMEMBERED_WALLET_KEY, '{"broken":true}'],
+      [PENDING_REMEMBERED_WALLET_KEY, '{"crash":"left"}'],
+    ]);
+    const writes = [];
+    const test = defaultRelayAccountFixture({
+      clipboard: { async writeText(value) { writes.push(value); } },
+      storage,
+    });
+    const started = test.app.start();
+    await until(() => test.document.findAction('login'));
+    submitCurrentLogin(test);
+    const operationConfirm = await until(() => test.document.findAction('confirm'));
+    operationConfirm.dispatch('click', { isTrusted: true });
+    await started;
+
+    const exportPending = test.document.find((node) => (
+      node.dataset.walletAction === 'export-quarantined-wallet'
+      && node.dataset.walletQuarantineKey === PENDING_REMEMBERED_WALLET_KEY
+    ));
+    exportPending.dispatch('click', { isTrusted: false });
+    await Promise.resolve();
+    expect(writes).toEqual([]);
+    exportPending.dispatch('click', { isTrusted: true });
+    await until(() => writes.length === 1);
+    expect(writes).toEqual(['{"crash":"left"}']);
+
+    const launchDelete = test.document.find((node) => (
+      node.dataset.walletAction === 'delete-quarantined-wallet'
+      && node.dataset.walletQuarantineKey === PENDING_REMEMBERED_WALLET_KEY
+    ));
+    const confirmation = test.document.find((node) => (
+      node.dataset.walletQuarantineConfirmation === PENDING_REMEMBERED_WALLET_KEY
+    ));
+    const confirmDelete = test.document.find((node) => (
+      node.dataset.walletAction === 'confirm-delete-quarantined-wallet'
+      && node.dataset.walletQuarantineKey === PENDING_REMEMBERED_WALLET_KEY
+    ));
+    launchDelete.dispatch('click', { isTrusted: true });
+    confirmation.value = PENDING_REMEMBERED_WALLET_KEY;
+    confirmDelete.dispatch('click', { isTrusted: false });
+    expect(storage.map.has(PENDING_REMEMBERED_WALLET_KEY)).toBe(true);
+    confirmation.value = 'wrong';
+    confirmDelete.dispatch('click', { isTrusted: true });
+    expect(storage.map.has(PENDING_REMEMBERED_WALLET_KEY)).toBe(true);
+    confirmation.value = PENDING_REMEMBERED_WALLET_KEY;
+    confirmDelete.dispatch('click', { isTrusted: true });
+    expect(storage.map.has(PENDING_REMEMBERED_WALLET_KEY)).toBe(false);
+    expect(storage.map.get(ACTIVE_REMEMBERED_WALLET_KEY)).toBe('{"broken":true}');
+    expect(test.document.findAction('logout')).toBeTruthy();
+  });
+
+  test.each(['Return', 'Logout', 'pagehide'])(
+    'Account %s clears quarantine confirmation and ignores late clipboard completion',
+    async (termination) => {
+      const storage = memoryStorage([[PENDING_REMEMBERED_WALLET_KEY, '{"crash":"left"}']]);
+      const write = deferred();
+      const test = defaultRelayAccountFixture({
+        clipboard: { writeText: () => write.promise },
+        storage,
+      });
+      const started = test.app.start();
+      await until(() => test.document.findAction('login'));
+      submitCurrentLogin(test);
+      const operationConfirm = await until(() => test.document.findAction('confirm'));
+      operationConfirm.dispatch('click', { isTrusted: true });
+      await started;
+      const exportPending = test.document.findAction('export-quarantined-wallet');
+      const launchDelete = test.document.findAction('delete-quarantined-wallet');
+      const confirmation = test.document.find((node) => (
+        node.dataset.walletQuarantineConfirmation === PENDING_REMEMBERED_WALLET_KEY
+      ));
+      const status = test.document.find((node) => node.dataset.walletQuarantineStatus === 'true');
+      exportPending.dispatch('click', { isTrusted: true });
+      launchDelete.dispatch('click', { isTrusted: true });
+      confirmation.value = PENDING_REMEMBERED_WALLET_KEY;
+
+      if (termination === 'Return') {
+        test.document.findAction('return-to-site').dispatch('click', { isTrusted: true });
+        await until(() => test.replacements.length === 1);
+      } else if (termination === 'Logout') {
+        test.document.findAction('logout').dispatch('click', { isTrusted: true });
+        await until(() => test.replacements.length === 1);
+      } else {
+        test.window.dispatch('pagehide', { persisted: false });
+      }
+      expect(confirmation.value).toBe('');
+      expect(status.textContent).toBe('');
+      write.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(status.textContent).toBe('');
+      expect(storage.map.get(PENDING_REMEMBERED_WALLET_KEY)).toBe('{"crash":"left"}');
+      expect(storage.operations.some(([operation]) => operation === 'removeItem')).toBe(false);
+    },
+  );
+
   test('a failed Account publication consumes the action and cannot POST or navigate again', async () => {
     const test = defaultRelayAccountFixture({
       async publish() { throw new Error('ambiguous relay failure'); },
@@ -1682,6 +2895,52 @@ describe('standalone wallet-origin application', () => {
     expect(test.posts).toHaveLength(1);
     expect(test.replacements).toEqual([]);
   });
+
+  test.each([
+    ['Return', 'pagehide'],
+    ['Return', 'stop'],
+    ['Logout', 'pagehide'],
+    ['Logout', 'stop'],
+  ])(
+    'Account %s pending publication cannot resurrect UI after %s and a late relay rejection',
+    async (action, termination) => {
+      const publication = deferred();
+      const test = defaultRelayAccountFixture({
+        publish: () => publication.promise,
+      });
+      const started = test.app.start();
+      await until(() => test.document.findAction('login'));
+      submitCurrentLogin(test);
+      const confirm = await until(() => test.document.findAction('confirm'));
+      confirm.dispatch('click', { isTrusted: true });
+      await started;
+      const actionControl = test.document.findAction(
+        action === 'Return' ? 'return-to-site' : 'logout',
+      );
+
+      actionControl.dispatch('click', { isTrusted: true });
+      await until(() => test.posts.length === 1);
+      expect(test.document.body.textContent).toContain(
+        action === 'Return' ? 'Returning to the requesting site.' : 'Logged out.',
+      );
+
+      if (termination === 'pagehide') {
+        test.window.dispatch('pagehide', { persisted: false });
+      } else {
+        await test.app.stop('pending-account-publication');
+      }
+      expect(test.document.body.textContent).toBe('');
+      expect(test.replacements).toEqual([]);
+
+      publication.reject(new Error('late ignored relay rejection'));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(test.document.body.textContent).toBe('');
+      expect(test.document.body.textContent).not.toContain('Wallet request stopped');
+      expect(test.posts).toHaveLength(1);
+      expect(test.replacements).toEqual([]);
+    },
+  );
 
   test.each(['pagehide', 'destroy'])(
     'default relay Account %s clears its permit without POST or navigation',
