@@ -134,6 +134,7 @@ set(HD_WALLET_HEADERS
   include/hd_wallet/utils.h
   include/hd_wallet/secure_memory.h
   include/hd_wallet/password_profile.h
+  include/hd_wallet/sdn_identity.h
   # BIP Standards
   include/hd_wallet/bip39.h
   include/hd_wallet/bip32.h
@@ -145,6 +146,7 @@ set(HD_WALLET_HEADERS
   include/hd_wallet/ecdsa.h
   include/hd_wallet/eddsa.h
   include/hd_wallet/ecdh.h
+  include/hd_wallet/libp2p.h
   include/hd_wallet/x509.h
   # Coins/Chains
   include/hd_wallet/coins/coin.h
@@ -178,6 +180,9 @@ set(HD_WALLET_SOURCES
   src/secure_memory.cpp
   src/error.cpp
   src/password_profile.cpp
+  src/sdn_identity.cpp
+  src/sdn_identity_secrets.cpp
+  src/canonical_json.cpp
   # BIP Standards
   src/bip39.cpp
   src/bip32.cpp
@@ -190,6 +195,7 @@ set(HD_WALLET_SOURCES
   src/ecdh.cpp
   src/ecies.cpp
   src/x509.cpp
+  src/libp2p.cpp
   # Coins
   src/coins/coin.cpp
   src/coins/bitcoin.cpp
@@ -235,6 +241,7 @@ if(NOT EMSCRIPTEN)
   if(HD_WALLET_BUILD_TESTS)
     target_compile_definitions(hd_wallet PRIVATE
       HD_WALLET_PASSWORD_PROFILE_TESTING=1
+      HD_WALLET_SDN_IDENTITY_TESTING=1
     )
   endif()
 
@@ -1194,6 +1201,12 @@ if(HD_WALLET_BUILD_TESTS AND NOT EMSCRIPTEN)
   )
 
   configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/sdn-remember-wallet-v2.json
+    ${CMAKE_BINARY_DIR}/test_data/sdn-remember-wallet-v2.json
+    COPYONLY
+  )
+
+  configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/release/protocol/asset-review-v1.json
     ${CMAKE_BINARY_DIR}/test_data/asset-review-v1.json
     COPYONLY
@@ -1250,8 +1263,41 @@ if(HD_WALLET_BUILD_TESTS AND NOT EMSCRIPTEN)
     TEST_VECTORS_PATH="${CMAKE_BINARY_DIR}/test_data"
   )
 
+  add_executable(test_sdn_identity
+    test/test_main.cpp
+    test/test_sdn_identity.cpp
+  )
+  target_link_libraries(test_sdn_identity PRIVATE hd_wallet)
+  target_include_directories(test_sdn_identity PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/test
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_compile_definitions(test_sdn_identity PRIVATE
+    HD_WALLET_PASSWORD_PROFILE_TESTING=1
+    HD_WALLET_SDN_IDENTITY_TESTING=1
+    TEST_VECTORS_PATH="${CMAKE_BINARY_DIR}/test_data"
+  )
+
+  add_executable(test_sdn_signing
+    test/test_main.cpp
+    test/test_sdn_signing.cpp
+  )
+  target_link_libraries(test_sdn_signing PRIVATE hd_wallet)
+  target_include_directories(test_sdn_signing PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/test
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_compile_definitions(test_sdn_signing PRIVATE
+    HD_WALLET_SDN_IDENTITY_TESTING=1
+    TEST_VECTORS_PATH="${CMAKE_BINARY_DIR}/test_data"
+  )
+
   add_test(NAME test_password_profile COMMAND test_password_profile)
   add_test(NAME test_sdn_vectors COMMAND test_sdn_vectors)
+  add_test(NAME test_sdn_identity COMMAND test_sdn_identity)
+  add_test(NAME test_sdn_signing COMMAND test_sdn_signing)
 
   message(STATUS "Tests enabled: hd_wallet_tests")
 endif()

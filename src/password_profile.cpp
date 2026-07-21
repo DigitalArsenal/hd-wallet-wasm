@@ -1,8 +1,5 @@
 #include "hd_wallet/password_profile.h"
-
-#if defined(HD_WALLET_PASSWORD_PROFILE_TESTING) && HD_WALLET_PASSWORD_PROFILE_TESTING
 #include "password_profile_internal.h"
-#endif
 
 #include <cryptopp/cryptlib.h>
 #include <cryptopp/hkdf.h>
@@ -17,6 +14,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
 
@@ -37,10 +35,34 @@ constexpr std::string_view kScryptSaltLabel =
     "sdn-hd-wallet/password-scrypt-v2";
 #endif
 
+#if defined(HD_WALLET_PASSWORD_PROFILE_TESTING) && HD_WALLET_PASSWORD_PROFILE_TESTING
+internal::TestingPasswordWipeObserver g_password_wipe_observer = nullptr;
+#endif
+
 #include "common_passwords_sdn_v1.inc"
 
 void wipeSeed(SecureVector<uint8_t>& seed) noexcept {
-    if (!seed.empty()) secureWipe(seed.data(), seed.size());
+    static_assert(std::is_nothrow_default_constructible_v<uint8_t>);
+    const size_t allocation = seed.capacity();
+    if (allocation == 0 || seed.data() == nullptr) return;
+    // This is a byte vector and allocation is its existing capacity, so resize
+    // performs only nonthrowing byte value-construction and cannot allocate.
+    // Construct the entire allocation before wiping it so libc++'s container
+    // annotations and the C++ object-lifetime rules both permit every write.
+    seed.resize(allocation);
+    secureWipe(seed.data(), seed.size() * sizeof(uint8_t));
+#if defined(HD_WALLET_PASSWORD_PROFILE_TESTING) && HD_WALLET_PASSWORD_PROFILE_TESTING
+    if (g_password_wipe_observer != nullptr) {
+        const auto* allocation_bytes =
+            reinterpret_cast<const volatile unsigned char*>(
+                static_cast<const void*>(seed.data()));
+        bool all_zero = true;
+        for (size_t i = 0; i < seed.size() * sizeof(uint8_t); ++i) {
+            all_zero &= allocation_bytes[i] == 0;
+        }
+        g_password_wipe_observer(allocation, all_zero);
+    }
+#endif
 }
 
 bool decodeStrictUtf8(std::span<const uint8_t> input,
@@ -164,36 +186,51 @@ void realLegacy(std::span<const uint8_t> username,
                    reinterpret_cast<const uint8_t*>(seedInfo.data()), seedInfo.size());
 }
 
-std::variant<PasswordSeed, PasswordError> derivePasswordSeedImpl(
+internal::PasswordDerivationFailure policyFailure(PasswordError error) {
+    return {error, internal::PasswordDerivationFailureKind::Policy};
+}
+
+internal::DetailedPasswordOutcome derivePasswordSeedImpl(
     std::span<const uint8_t> username,
     std::span<const uint8_t> password,
     Backend backend) {
     auto canonicalResult = canonicalize_username(username);
     if (std::holds_alternative<PasswordError>(canonicalResult)) {
-        return std::get<PasswordError>(canonicalResult);
+        const auto error = std::get<PasswordError>(canonicalResult);
+        return internal::PasswordDerivationFailure{
+            error,
+            error == PasswordError::KdfFailure
+                ? internal::PasswordDerivationFailureKind::OutOfMemory
+                : internal::PasswordDerivationFailureKind::Policy};
     }
 
     if (password.size() > kPasswordMaxBytes) {
-        return PasswordError::PasswordByteLength;
+        return policyFailure(PasswordError::PasswordByteLength);
     }
 
     try {
         SecureVector<uint32_t> scalars;
-        if (!decodeStrictUtf8(password, scalars)) return PasswordError::InvalidUtf8;
+        if (!decodeStrictUtf8(password, scalars)) {
+            return policyFailure(PasswordError::InvalidUtf8);
+        }
         if (std::any_of(scalars.begin(), scalars.end(), isForbiddenPasswordScalar)) {
-            return PasswordError::InvalidPasswordScalar;
+            return policyFailure(PasswordError::InvalidPasswordScalar);
         }
         if (scalars.size() < kPasswordMinScalars || scalars.size() > kPasswordMaxScalars) {
-            return PasswordError::PasswordLength;
+            return policyFailure(PasswordError::PasswordLength);
         }
         if (std::all_of(scalars.begin(), scalars.end(), isPasswordWhitespace)) {
-            return PasswordError::PasswordAllWhitespace;
+            return policyFailure(PasswordError::PasswordAllWhitespace);
         }
-        if (isCommonAsciiPassword(password)) return PasswordError::CommonPassword;
+        if (isCommonAsciiPassword(password)) {
+            return policyFailure(PasswordError::CommonPassword);
+        }
 
 #if defined(HD_WALLET_FIPS_MODE) && HD_WALLET_FIPS_MODE
         (void)backend;
-        return PasswordError::KdfFailure;
+        return internal::PasswordDerivationFailure{
+            PasswordError::KdfFailure,
+            internal::PasswordDerivationFailureKind::CryptoFailure};
 #else
         std::string canonical = std::move(std::get<std::string>(canonicalResult));
         SecureVector<uint8_t> salt(kScryptSaltLabel.begin(), kScryptSaltLabel.end());
@@ -204,10 +241,22 @@ std::variant<PasswordSeed, PasswordError> derivePasswordSeedImpl(
         return std::move(result);
 #endif
     } catch (const CryptoPP::Exception&) {
-        return PasswordError::KdfFailure;
+        return internal::PasswordDerivationFailure{
+            PasswordError::KdfFailure,
+            internal::PasswordDerivationFailureKind::CryptoFailure};
     } catch (const std::bad_alloc&) {
-        return PasswordError::KdfFailure;
+        return internal::PasswordDerivationFailure{
+            PasswordError::KdfFailure,
+            internal::PasswordDerivationFailureKind::OutOfMemory};
     }
+}
+
+std::variant<PasswordSeed, PasswordError> collapseDetailedPasswordOutcome(
+    internal::DetailedPasswordOutcome&& outcome) {
+    if (std::holds_alternative<PasswordSeed>(outcome)) {
+        return std::get<PasswordSeed>(std::move(outcome));
+    }
+    return std::get<internal::PasswordDerivationFailure>(outcome).password_error;
 }
 
 std::variant<PasswordSeed, PasswordError> deriveLegacyPasswordSeedImpl(
@@ -304,7 +353,8 @@ canonicalize_username(std::span<const uint8_t> rawUtf8) {
 std::variant<PasswordSeed, PasswordError> derive_password_seed(
     std::span<const uint8_t> usernameUtf8,
     std::span<const uint8_t> exactPasswordUtf8) {
-    return derivePasswordSeedImpl(usernameUtf8, exactPasswordUtf8, realScrypt);
+    return collapseDetailedPasswordOutcome(
+        derivePasswordSeedImpl(usernameUtf8, exactPasswordUtf8, realScrypt));
 }
 
 std::variant<PasswordSeed, PasswordError> derive_legacy_password_seed(
@@ -317,11 +367,17 @@ std::variant<PasswordSeed, PasswordError> derive_legacy_password_seed(
 #if defined(HD_WALLET_PASSWORD_PROFILE_TESTING) && HD_WALLET_PASSWORD_PROFILE_TESTING
 namespace internal {
 
+void testing_set_password_wipe_observer(
+    TestingPasswordWipeObserver observer) noexcept {
+    g_password_wipe_observer = observer;
+}
+
 std::variant<PasswordSeed, PasswordError> derive_password_seed(
     std::span<const uint8_t> usernameUtf8,
     std::span<const uint8_t> exactPasswordUtf8,
     ScryptBackend backend) {
-    return derivePasswordSeedImpl(usernameUtf8, exactPasswordUtf8, backend);
+    return collapseDetailedPasswordOutcome(
+        derivePasswordSeedImpl(usernameUtf8, exactPasswordUtf8, backend));
 }
 
 std::variant<PasswordSeed, PasswordError> derive_legacy_password_seed(
@@ -332,7 +388,24 @@ std::variant<PasswordSeed, PasswordError> derive_legacy_password_seed(
                                         exactLegacyPasswordUtf8, backend);
 }
 
+DetailedPasswordOutcome testing_derive_password_seed_detailed(
+    std::span<const uint8_t> usernameUtf8,
+    std::span<const uint8_t> exactPasswordUtf8,
+    ScryptBackend backend) {
+    return derivePasswordSeedImpl(usernameUtf8, exactPasswordUtf8, backend);
+}
+
 } // namespace internal
 #endif
+
+namespace internal {
+
+DetailedPasswordOutcome derive_password_seed_detailed(
+    std::span<const uint8_t> usernameUtf8,
+    std::span<const uint8_t> exactPasswordUtf8) {
+    return derivePasswordSeedImpl(usernameUtf8, exactPasswordUtf8, realScrypt);
+}
+
+} // namespace internal
 
 } // namespace hd_wallet::sdn
