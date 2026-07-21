@@ -30,6 +30,7 @@ import { getModalHTML } from './template.js';
 import WalletStorage, { StorageMethod } from './wallet-storage.js';
 import { safeCopyText } from './clipboard.js';
 import { normalizeTabHash } from './hash.js';
+import { withDerivedHandle, withDerivedPrivateKey } from './derived-key-scope.js';
 
 import {
   cryptoConfig,
@@ -535,12 +536,14 @@ function getCurrentWalletIdentity(wallet = getCurrentWallet()) {
   if (!state.hdRoot || !wallet) return { xpub: '', peerId: '', path: getWalletIdentityPath(wallet) };
   const path = getWalletIdentityPath(wallet);
   try {
-    const accountKey = deriveHDKey(path);
-    return {
-      xpub: accountKey?.toXpub?.() || '',
-      peerId: accountKey?.peerIdString?.() || '',
-      path,
-    };
+    return withDerivedHandle(
+      () => deriveHDKey(path),
+      (accountKey) => ({
+        xpub: accountKey?.toXpub?.() || '',
+        peerId: accountKey?.peerIdString?.() || '',
+        path,
+      }),
+    );
   } catch (e) {
     console.warn('Failed to derive wallet identity keys:', e);
     return { xpub: '', peerId: '', path };
@@ -552,21 +555,23 @@ function getCurrentWalletSigningAccounts(wallet = getCurrentWallet()) {
   return state.activeAccounts.filter(a => a.active && getAccountWalletId(a) === wallet.id && isSigningAccountForWallet(a, wallet));
 }
 
-function getCurrentWalletSignatureKey(wallet = getCurrentWallet()) {
-  if (!state.hdRoot || !wallet) return null;
+function withSelectedWalletSigningKey(operation, wallet = getCurrentWallet()) {
+  if (!state.hdRoot || !wallet) return undefined;
   const accountIndex = wallet.accountIndex;
+  const path = buildSigningPath(501, accountIndex, 0);
+  let operationStarted = false;
   try {
-    const path = buildSigningPath(501, accountIndex, 0);
-    const derived = deriveHDKey(path);
-    return {
-      privateKey: derived.privateKey(),
-      accountIndex,
-      index: 0,
-      path,
-    };
+    return withDerivedPrivateKey(
+      () => deriveHDKey(path),
+      (privateKey) => {
+        operationStarted = true;
+        return operation({ privateKey, accountIndex, index: 0, path });
+      },
+    );
   } catch (e) {
+    if (operationStarted) throw e;
     console.warn('Failed to derive selected wallet signature key:', e);
-    return null;
+    return undefined;
   }
 }
 
@@ -3494,16 +3499,19 @@ function getSignableBody(vcardText) {
 }
 
 function signVCard(vcardText) {
-  const signatureKey = getCurrentWalletSignatureKey();
-  if (!signatureKey?.privateKey) return vcardText;
-
   const body = getSignableBody(vcardText);
   const messageBytes = new TextEncoder().encode(body);
-  const signature = hdWallet().curves.ed25519.sign(messageBytes, signatureKey.privateKey);
-  const sigB64 = toBase64(signature);
+  const signed = withSelectedWalletSigningKey((signatureKey) => ({
+    signature: hdWallet().curves.ed25519.sign(messageBytes, signatureKey.privateKey),
+    accountIndex: signatureKey.accountIndex,
+    index: signatureKey.index,
+  }));
+  if (!signed) return vcardText;
+
+  const sigB64 = toBase64(signed.signature);
 
   // Encode signature + selected wallet derivation path.
-  const sigValue = `${sigB64}:501:${signatureKey.accountIndex}:${signatureKey.index}`;
+  const sigValue = `${sigB64}:501:${signed.accountIndex}:${signed.index}`;
 
   // Find highest itemN and key index
   let maxItem = 0;

@@ -21,8 +21,18 @@ describe('selected wallet vCard identity', () => {
   it('signs vCards with the selected wallet Solana signing key path', () => {
     const app = read('src/app.js');
 
-    expect(app).toContain('getCurrentWalletSignatureKey()');
+    expect(app).toContain('withSelectedWalletSigningKey(');
+    expect(app).toContain('withDerivedPrivateKey(');
     expect(app).toContain('signatureKey.accountIndex');
+    expect(app).not.toContain('function getCurrentWalletSignatureKey(');
     expect(app).not.toContain('const sigValue = `${sigB64}:501:0:0`;');
+  });
+
+  it('scopes selected wallet identity handles while copying public strings', () => {
+    const app = read('src/app.js');
+
+    expect(app).toContain('return withDerivedHandle(');
+    expect(app).toContain("xpub: accountKey?.toXpub?.() || ''");
+    expect(app).toContain("peerId: accountKey?.peerIdString?.() || ''");
   });
 });
