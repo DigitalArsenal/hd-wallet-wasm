@@ -14,7 +14,7 @@ const OUT_CSS = path.join(ROOT, 'styles', 'widget.css');
 const NAMESPACE = '#hd-wallet-ui-container';
 const KEYFRAMES_PREFIX = 'hdw-';
 const RTL_HOST = 'html[dir="rtl"]';
-const RTL_HOST_PATTERN = /^html\s*\[\s*dir\s*=\s*(?:"rtl"|'rtl'|rtl)\s*\](?=$|\s)/i;
+const RTL_HOST_PATTERN = /^html\s*\[\s*dir\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s\]]+))(?:\s+([is]))?\s*\](?=$|\s)/i;
 
 function escapeRegExp(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -37,7 +37,7 @@ function isInsideKeyframes(node) {
  * - `body:has(...)` -> keep `body` but scope the `:has()` and descendants to our container
  */
 export function prefixSelector(selector) {
-  const parts = postcss.list.comma(selector);
+  const parts = splitTopLevelComma(selector);
   const out = parts.map((part) => {
     const s = part.trim();
     if (!s) return s;
@@ -45,7 +45,7 @@ export function prefixSelector(selector) {
     if (s === ':root') return NAMESPACE;
     if (s === 'html' || s === 'body') return NAMESPACE;
 
-    const rtlHostMatch = s.match(RTL_HOST_PATTERN);
+    const rtlHostMatch = matchRtlHost(s);
     if (rtlHostMatch) {
       const tail = s.slice(rtlHostMatch[0].length).trim();
       if (!tail) return `${RTL_HOST} ${NAMESPACE}`;
@@ -60,9 +60,13 @@ export function prefixSelector(selector) {
       if (closeIndex === -1) return `${NAMESPACE} ${s}`;
 
       const inner = s.slice(openIndex + 1, closeIndex).trim();
-      const scopedInner = !inner
-        ? NAMESPACE
-        : (inner.startsWith(NAMESPACE) ? inner : `${NAMESPACE} ${inner}`);
+      const scopedInner = splitTopLevelComma(inner)
+        .map((branch) => {
+          const trimmed = branch.trim();
+          if (!trimmed) return NAMESPACE;
+          return trimmed.startsWith(NAMESPACE) ? trimmed : `${NAMESPACE} ${trimmed}`;
+        })
+        .join(', ');
       const scopedHas = `${s.slice(0, openIndex + 1)}${scopedInner})`;
 
       // If there are descendant selectors after body:has(...), prefix them too.
@@ -80,13 +84,34 @@ export function prefixSelector(selector) {
   return out.join(', ');
 }
 
-function findMatchingParen(value, openIndex) {
-  let depth = 0;
+function matchRtlHost(selector) {
+  const match = selector.match(RTL_HOST_PATTERN);
+  if (!match) return null;
+
+  const value = match[1] ?? match[2] ?? match[3] ?? '';
+  const modifier = String(match[4] || '').toLowerCase();
+  const matchesRtl = modifier === 's' ? value === 'rtl' : value.toLowerCase() === 'rtl';
+  return matchesRtl ? match : null;
+}
+
+function scanCss(value, onTopLevelComma, stopAtMatchingParen = false, openIndex = 0) {
+  let parenDepth = 0;
+  let bracketDepth = 0;
   let quote = null;
   let escaped = false;
+  let inComment = false;
 
   for (let index = openIndex; index < value.length; index += 1) {
     const char = value[index];
+    const next = value[index + 1];
+
+    if (inComment) {
+      if (char === '*' && next === '/') {
+        inComment = false;
+        index += 1;
+      }
+      continue;
+    }
     if (escaped) {
       escaped = false;
       continue;
@@ -99,19 +124,53 @@ function findMatchingParen(value, openIndex) {
       if (char === quote) quote = null;
       continue;
     }
+    if (char === '/' && next === '*') {
+      inComment = true;
+      index += 1;
+      continue;
+    }
     if (char === '"' || char === "'") {
       quote = char;
       continue;
     }
-    if (char === '(') {
-      depth += 1;
-    } else if (char === ')') {
-      depth -= 1;
-      if (depth === 0) return index;
+    if (char === '[') {
+      bracketDepth += 1;
+      continue;
     }
+    if (char === ']' && bracketDepth > 0) {
+      bracketDepth -= 1;
+      continue;
+    }
+    if (bracketDepth > 0) continue;
+
+    if (char === '(') {
+      parenDepth += 1;
+      continue;
+    }
+    if (char === ')') {
+      if (parenDepth > 0) parenDepth -= 1;
+      if (stopAtMatchingParen && parenDepth === 0) return index;
+      continue;
+    }
+    if (char === ',' && parenDepth === 0) onTopLevelComma?.(index);
   }
 
   return -1;
+}
+
+function splitTopLevelComma(value) {
+  const parts = [];
+  let start = 0;
+  scanCss(value, (index) => {
+    parts.push(value.slice(start, index));
+    start = index + 1;
+  });
+  parts.push(value.slice(start));
+  return parts;
+}
+
+function findMatchingParen(value, openIndex) {
+  return scanCss(value, null, true, openIndex);
 }
 
 export async function buildWidgetCss({ sourcePath = SOURCE_CSS, outputPath = OUT_CSS } = {}) {

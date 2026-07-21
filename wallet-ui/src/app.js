@@ -30,7 +30,12 @@ import { getModalHTML } from './template.js';
 import WalletStorage, { StorageMethod } from './wallet-storage.js';
 import { safeCopyText } from './clipboard.js';
 import { normalizeTabHash } from './hash.js';
-import { withDerivedHandle, withDerivedPrivateKey } from './derived-key-scope.js';
+import { withDerivedHandle } from './derived-key-scope.js';
+import {
+  createSignedVCardArtifacts,
+  updateVCardSignatureBadge,
+  withSelectedWalletSigningKey,
+} from './vcard-signing.js';
 
 import {
   cryptoConfig,
@@ -553,26 +558,6 @@ function getCurrentWalletIdentity(wallet = getCurrentWallet()) {
 function getCurrentWalletSigningAccounts(wallet = getCurrentWallet()) {
   if (!wallet) return [];
   return state.activeAccounts.filter(a => a.active && getAccountWalletId(a) === wallet.id && isSigningAccountForWallet(a, wallet));
-}
-
-function withSelectedWalletSigningKey(operation, wallet = getCurrentWallet()) {
-  if (!state.hdRoot || !wallet) return undefined;
-  const accountIndex = wallet.accountIndex;
-  const path = buildSigningPath(501, accountIndex, 0);
-  let operationStarted = false;
-  try {
-    return withDerivedPrivateKey(
-      () => deriveHDKey(path),
-      (privateKey) => {
-        operationStarted = true;
-        return operation({ privateKey, accountIndex, index: 0, path });
-      },
-    );
-  } catch (e) {
-    if (operationStarted) throw e;
-    console.warn('Failed to derive selected wallet signature key:', e);
-    return undefined;
-  }
 }
 
 function updatePathDisplay() {
@@ -3501,11 +3486,19 @@ function getSignableBody(vcardText) {
 function signVCard(vcardText) {
   const body = getSignableBody(vcardText);
   const messageBytes = new TextEncoder().encode(body);
-  const signed = withSelectedWalletSigningKey((signatureKey) => ({
-    signature: hdWallet().curves.ed25519.sign(messageBytes, signatureKey.privateKey),
-    accountIndex: signatureKey.accountIndex,
-    index: signatureKey.index,
-  }));
+  const signed = withSelectedWalletSigningKey(
+    {
+      hdRoot: state.hdRoot,
+      wallet: getCurrentWallet(),
+      buildSigningPath,
+      deriveHDKey,
+    },
+    (signatureKey) => ({
+      signature: hdWallet().curves.ed25519.sign(messageBytes, signatureKey.privateKey),
+      accountIndex: signatureKey.accountIndex,
+      index: signatureKey.index,
+    }),
+  );
   if (!signed) return vcardText;
 
   const sigB64 = toBase64(signed.signature);
@@ -5035,11 +5028,8 @@ function setupMainAppHandlers() {
       return;
     }
 
-    const vcard = signVCard(generateVCard(info));
-    const vcardForQR = signVCard(generateVCard(info, { skipPhoto: true }));
-    state._exportedVCard = vcard;
-
     try {
+      const { vcard, vcardForQR } = createSignedVCardArtifacts(info, { generateVCard, signVCard });
       const qrCanvas = $('qr-code');
       if (qrCanvas) {
         await QRCode.toCanvas(qrCanvas, vcardForQR, {
@@ -5048,6 +5038,7 @@ function setupMainAppHandlers() {
           color: { dark: '#1e293b', light: '#ffffff' },
         });
       }
+      state._exportedVCard = vcard;
       const formView = $('vcard-form-view');
       const resultView = $('vcard-result-view');
       if (formView) formView.style.display = 'none';
@@ -5055,9 +5046,7 @@ function setupMainAppHandlers() {
 
       // Show/hide signature badge
       const sigBadge = $('vcard-sig-badge');
-      if (sigBadge) {
-        sigBadge.style.display = state.wallet?.ed25519?.privateKey ? 'flex' : 'none';
-      }
+      updateVCardSignatureBadge(sigBadge, vcard);
 
       // Populate raw view (strip PHOTO base64 data)
       const rawView = $('vcard-raw-view');
@@ -5072,7 +5061,7 @@ function setupMainAppHandlers() {
       document.querySelector('.qr-container')?.style.setProperty('display', '');
       if (rawView) rawView.style.display = 'none';
     } catch (err) {
-      alert('Error generating QR code: ' + err.message);
+      alert('Error generating vCard: ' + err.message);
     }
   });
 

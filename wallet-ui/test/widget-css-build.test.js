@@ -48,6 +48,12 @@ describe('widget CSS namespace build', () => {
       .toBe('html[dir="rtl"] #hd-wallet-ui-container .balance-value');
     expect(prefixSelector('html[dir="rtl"] #hd-wallet-ui-container code'))
       .toBe('html[dir="rtl"] #hd-wallet-ui-container code');
+    expect(prefixSelector('html[dir="rtl" i] .lang-switcher'))
+      .toBe('html[dir="rtl"] #hd-wallet-ui-container .lang-switcher');
+    expect(prefixSelector("html[dir='rtl' s] code"))
+      .toBe('html[dir="rtl"] #hd-wallet-ui-container code');
+    expect(prefixSelector("HTML [ DIR = 'RTL' s ] code"))
+      .toBe("#hd-wallet-ui-container HTML [ DIR = 'RTL' s ] code");
   });
 
   it('balances nested functional selectors when scoping body:has()', async () => {
@@ -59,5 +65,11 @@ describe('widget CSS namespace build', () => {
       .toBe('body:has(#hd-wallet-ui-container [data-label=")"] .modal) #hd-wallet-ui-container .nav-bar');
     expect(prefixSelector('body:has(#hd-wallet-ui-container .modal:not(.closed)) #hd-wallet-ui-container .nav-bar'))
       .toBe('body:has(#hd-wallet-ui-container .modal:not(.closed)) #hd-wallet-ui-container .nav-bar');
+    expect(prefixSelector('body:has(.modal, .dialog) .nav-bar'))
+      .toBe('body:has(#hd-wallet-ui-container .modal, #hd-wallet-ui-container .dialog) #hd-wallet-ui-container .nav-bar');
+    expect(prefixSelector('body:has(.modal /* ) */ .dialog, [data-label="a,b"]) .nav-bar'))
+      .toBe('body:has(#hd-wallet-ui-container .modal /* ) */ .dialog, #hd-wallet-ui-container [data-label="a,b"]) #hd-wallet-ui-container .nav-bar');
+    expect(prefixSelector('body:has(.modal\\)name, [data-label=")"], .dialog:not(.closed)) .nav-bar'))
+      .toBe('body:has(#hd-wallet-ui-container .modal\\)name, #hd-wallet-ui-container [data-label=")"], #hd-wallet-ui-container .dialog:not(.closed)) #hd-wallet-ui-container .nav-bar');
   });
 });
