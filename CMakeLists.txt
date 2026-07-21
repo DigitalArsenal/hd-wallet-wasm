@@ -1163,14 +1163,12 @@ endif()
 if(HD_WALLET_BUILD_TESTS AND NOT EMSCRIPTEN)
   enable_testing()
 
-  # Fetch test vectors
-  FetchContent_Declare(
-    test_vectors
-    URL https://raw.githubusercontent.com/trezor/python-mnemonic/master/vectors.json
-    DOWNLOAD_NO_EXTRACT TRUE
-    DOWNLOAD_DIR ${CMAKE_BINARY_DIR}/test_data
+  # Copy the committed, integrity-checked test vectors into the build tree.
+  configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/trezor-bip39-vectors.json
+    ${CMAKE_BINARY_DIR}/test_data/vectors.json
+    COPYONLY
   )
-  FetchContent_MakeAvailable(test_vectors)
 
   add_executable(hd_wallet_tests
     test/test_main.cpp
