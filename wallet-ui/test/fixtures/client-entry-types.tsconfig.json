@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "paths": {
+      "hd-wallet-ui/client": ["../../client/index.d.ts"],
+      "hd-wallet-ui/client/asset-review": ["../../client/asset-review.d.ts"],
+      "hd-wallet-ui/client/callback": ["../../client/callback.d.ts"],
+      "hd-wallet-ui/client/sdn": ["../../client/sdn.d.ts"]
+    },
+    "skipLibCheck": false,
+    "strict": true,
+    "target": "ES2022",
+    "verbatimModuleSyntax": true
+  },
+  "files": ["client-entry-types.ts"]
+}

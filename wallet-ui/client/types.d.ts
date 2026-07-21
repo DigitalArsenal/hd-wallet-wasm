@@ -7,6 +7,28 @@ export type WalletRelayOperation =
   | 'sdn.asset-review.decision.v1';
 
 export type WalletClientStatus = 'dormant' | 'opening' | 'connected' | 'error';
+export type WalletClientId =
+  | 'orbpro-pages-v1'
+  | 'sdn-asset-models-pages-v1'
+  | 'sdn-asset-review-v1'
+  | 'sdn-flatbuffers-pages-v1'
+  | 'sdn-flatsql-pages-v1'
+  | 'sdn-landing-web-v1'
+  | 'sdn-module-sdk-pages-v1'
+  | 'sdn-node-console-v1'
+  | 'sdn-standards-web-v1'
+  | 'spaceaware-web-v1';
+export type WalletClientErrorCode =
+  | 'CALLBACK_ERROR'
+  | 'CRYPTO_UNAVAILABLE'
+  | 'DESTROYED'
+  | 'DISCONNECTED'
+  | 'EXPIRED'
+  | 'INVALID_CLIENT'
+  | 'INVALID_REQUEST'
+  | 'RELAY_ERROR'
+  | 'REPLACED'
+  | 'WALLET_NOT_COMPLETED';
 export type SdnIdentityScheme = 'sdn-bip32-slip10-purpose-v1';
 export type SdnSeedProfile = 'password-scrypt-v2';
 export type Sha256KeyId = `sha256:${string}`;
@@ -41,9 +63,32 @@ export interface WalletPublicIdentity {
 }
 
 export interface WalletClientError {
-  readonly code: string;
+  readonly code: WalletClientErrorCode;
   readonly message: string;
 }
+
+export interface CreateWalletClientOptions {
+  readonly clientId: WalletClientId;
+}
+
+export type WalletClientErrorMessages =
+  Readonly<Record<WalletClientErrorCode, string>>;
+
+export interface WalletCallbackLocation {
+  readonly hash: string;
+  readonly pathname: string;
+  readonly search: string;
+}
+
+export interface WalletCallbackStorage {
+  setItem(key: string, value: string): void;
+}
+
+export interface WalletCallbackHistory {
+  replaceState(data: unknown, unused: string, url: string): void;
+}
+
+export type WalletCallbackClose = () => void;
 
 export interface WalletClientSnapshot {
   readonly status: WalletClientStatus;
