@@ -6,6 +6,87 @@ import path from 'node:path';
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const expectedVersion = '2.0.22';
 const expectedWorkspaces = ['wasm', 'wallet-ui', 'wallet-ui/relay'];
+const expectedRelayPackage = {
+  name: '@sdn/wallet-relay',
+  version: expectedVersion,
+  private: true,
+  type: 'module',
+  scripts: {
+    build: 'tsc -p tsconfig.json',
+    test: 'node --test test/*.test.mjs',
+  },
+  dependencies: {
+    'better-sqlite3': '12.2.0',
+  },
+  devDependencies: {
+    '@types/node': '24.1.0',
+    typescript: '5.9.2',
+  },
+  engines: {
+    node: '>=24.0.0 <25',
+  },
+};
+const expectedWorkspaceLockMetadata = {
+  '': {
+    name: 'hd-wallet-wasm-workspace',
+    version: expectedVersion,
+    license: 'Apache-2.0',
+    workspaces: expectedWorkspaces,
+    devDependencies: {
+      flatbuffers: '^25.9.23',
+      husky: '^9.1.7',
+    },
+    engines: {
+      node: '>=24.0.0 <25',
+      npm: '11.16.0',
+    },
+  },
+  wasm: {
+    name: 'hd-wallet-wasm',
+    version: expectedVersion,
+    license: 'Apache-2.0',
+    dependencies: {
+      flatbuffers: '^25.2.10',
+    },
+    devDependencies: {
+      '@types/node': '^20.0.0',
+    },
+    engines: {
+      node: '>=18.0.0',
+    },
+  },
+  'wallet-ui': {
+    name: 'hd-wallet-ui',
+    version: expectedVersion,
+    license: 'Apache-2.0',
+    dependencies: {
+      '@noble/curves': '^1.9.7',
+      '@noble/hashes': '^1.7.2',
+      '@peculiar/x509': '^1.14.3',
+      '@scure/base': '^1.2.4',
+      '@scure/bip32': '^2.0.1',
+      bip39: '^3.1.0',
+      buffer: '^6.0.3',
+      flatbuffers: '^25.9.23',
+      'flatc-wasm': '^26.1.32',
+      'hd-wallet-wasm': expectedVersion,
+      qrcode: '^1.5.3',
+      'spacedatastandards.org': '^1.93.3',
+      'vcard-cryptoperson': '^1.1.11',
+    },
+    devDependencies: {
+      vite: '^5.0.0',
+      vitest: '^4.0.18',
+    },
+  },
+  'wallet-ui/relay': {
+    name: expectedRelayPackage.name,
+    version: expectedRelayPackage.version,
+    dependencies: expectedRelayPackage.dependencies,
+    devDependencies: expectedRelayPackage.devDependencies,
+    engines: expectedRelayPackage.engines,
+  },
+};
 
 function parseJson(relativePath) {
   const absolutePath = path.join(repositoryRoot, relativePath);
@@ -38,7 +119,7 @@ assert.equal(
 assert.deepEqual(rootPackage.workspaces, expectedWorkspaces);
 assert.equal(rootPackage.packageManager, 'npm@11.16.0');
 assert.deepEqual(rootPackage.engines, { node: '>=24.0.0 <25', npm: '11.16.0' });
-assert.deepEqual(relayPackage.engines, { node: '>=24.0.0 <25' });
+assert.deepEqual(relayPackage, expectedRelayPackage);
 
 function readCmakeVersionComponent(component) {
   const match = cmakeLists.match(
@@ -63,6 +144,13 @@ for (const nestedLock of [
 assert.equal(rootLock.lockfileVersion, 3);
 assert.equal(rootLock.name, 'hd-wallet-wasm-workspace');
 assert.equal(rootLock.version, expectedVersion);
+for (const [workspacePath, expectedMetadata] of Object.entries(expectedWorkspaceLockMetadata)) {
+  assert.deepEqual(
+    rootLock.packages?.[workspacePath],
+    expectedMetadata,
+    `root lock workspace metadata must match exactly: ${workspacePath || '<root>'}`,
+  );
+}
 assert.equal(rootLock.packages?.['']?.name, 'hd-wallet-wasm-workspace');
 assert.equal(rootLock.packages?.['']?.version, expectedVersion);
 assert.deepEqual(rootLock.packages?.['']?.workspaces, expectedWorkspaces);
