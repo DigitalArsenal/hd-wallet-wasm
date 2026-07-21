@@ -1,0 +1,66 @@
+{
+  "origin": "https://spacedatanetwork.org",
+  "registration": {
+    "clientId": "sdn-landing-web-v1",
+    "codeChallenge": "KPlDz_s5_TfmJIOULW1xN9xQeIvZ3e0Wj3nQKHXecd8",
+    "codeChallengeMethod": "S256",
+    "operation": "sdn.wallet.account.v1",
+    "request": {},
+    "schemaVersion": 1,
+    "state": "2222222222222222222222222222222222222222222222222222222222222222",
+    "transactionId": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "registrationResponse": {
+    "expiresAt": "2026-07-21T00:05:00.000Z",
+    "schemaVersion": 1,
+    "transactionId": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "transactionResponse": {
+    "callbackUri": "https://spacedatanetwork.org/wallet-callback.html",
+    "clientDisplayName": "Space Data Network",
+    "clientId": "sdn-landing-web-v1",
+    "expiresAt": "2026-07-21T00:05:00.000Z",
+    "operation": "sdn.wallet.account.v1",
+    "registryVersion": "e1ce6fe903c9700484a8a87d96581c8cad97063dabf63030b4518a31a3bdaa93",
+    "request": {},
+    "requestOrigin": "https://spacedatanetwork.org",
+    "requestSha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "resultToken": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo",
+    "schemaVersion": 1,
+    "state": "2222222222222222222222222222222222222222222222222222222222222222",
+    "transactionId": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "resultSubmission": {
+    "result": {
+      "connectionExpiresAt": null,
+      "event": "disconnected",
+      "identity": null,
+      "schemaVersion": 1
+    },
+    "resultToken": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo",
+    "schemaVersion": 1,
+    "transactionId": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "resultResponse": {
+    "redirectUri": "https://spacedatanetwork.org/wallet-callback.html#code=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&state=2222222222222222222222222222222222222222222222222222222222222222",
+    "schemaVersion": 1,
+    "transactionId": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "redeemSubmission": {
+    "code": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "codeVerifier": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM",
+    "schemaVersion": 1,
+    "state": "2222222222222222222222222222222222222222222222222222222222222222",
+    "transactionId": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "redeemResponse": {
+    "result": {
+      "connectionExpiresAt": null,
+      "event": "disconnected",
+      "identity": null,
+      "schemaVersion": 1
+    },
+    "schemaVersion": 1,
+    "transactionId": "1111111111111111111111111111111111111111111111111111111111111111"
+  }
+}
