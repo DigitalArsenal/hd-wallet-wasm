@@ -1,7 +1,8 @@
 /**
- * Trust UI Components
+ * Trust UI components.
  *
- * UI components for displaying and interacting with blockchain trust graph
+ * Caller values are rendered as text. vCard photos are ignored here because
+ * the wallet-origin byte validator owns all local image handling.
  */
 
 import {
@@ -10,687 +11,640 @@ import {
   scanBitcoinTrustTransactions,
   scanSolanaTrustTransactions,
   scanEthereumTrustTransactions,
-  buildTrustGraph,
-  calculateTrustScore,
-  analyzeTrustRelationships,
 } from './blockchain-trust.js';
+import { readTextFileForSession } from './legacy-media-session.js';
 
-// =============================================================================
-// Helpers
-// =============================================================================
+const RULE_CONDITION_TYPES = Object.freeze([
+  Object.freeze({ value: 'mutual_tx_count', label: 'Mutual Transaction Count' }),
+  Object.freeze({ value: 'last_interaction_days', label: 'Days Since Last Interaction' }),
+  Object.freeze({ value: 'address_blocklist', label: 'Address Blocklist' }),
+  Object.freeze({ value: 'bidirectional_trust', label: 'Bidirectional Trust' }),
+]);
+const SEVERITY_OPTIONS = Object.freeze(['info', 'warn', 'block']);
+const TRUST_LEVEL_CONFIG = Object.freeze([
+  Object.freeze({ value: TrustLevel.NEVER, name: 'Never Trust', desc: 'Block this address from all interactions' }),
+  Object.freeze({ value: TrustLevel.UNKNOWN, name: 'Unknown', desc: 'No opinion on this address yet' }),
+  Object.freeze({ value: TrustLevel.MARGINAL, name: 'Marginal', desc: 'Somewhat trusted, proceed with caution' }),
+  Object.freeze({ value: TrustLevel.FULL, name: 'Full Trust', desc: 'Highly trusted, verified relationship' }),
+  Object.freeze({ value: TrustLevel.ULTIMATE, name: 'Ultimate', desc: 'Your own address or absolute trust' }),
+]);
+const activeModalClosers = new Set();
+let modalSequence = 0;
 
-const CLOSE_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+function node(tag, className, text) {
+  const element = document.createElement(tag);
+  if (className) element.className = className;
+  if (text !== undefined) element.textContent = String(text);
+  return element;
+}
+
+function button(id, className, label) {
+  const element = node('button', className, label);
+  element.type = 'button';
+  if (id) element.id = id;
+  return element;
+}
+
+function labeledValue(label, value, className = 'trust-detail-address') {
+  const container = node('div', className);
+  container.append(node('label', null, label), node('code', null, value));
+  return container;
+}
+
+function isSessionCurrent(isCurrent) {
+  try { return isCurrent() === true; } catch { return false; }
+}
+
+function staleSessionError() {
+  const error = new Error('Wallet session ended');
+  error.code = 'STALE_SESSION';
+  return error;
+}
+
+function focusableElements(modal) {
+  return [...modal.querySelectorAll([
+    'button:not([disabled])',
+    '[href]',
+    'input:not([disabled])',
+    'select:not([disabled])',
+    'textarea:not([disabled])',
+    '[tabindex]:not([tabindex="-1"])',
+  ].join(', '))].filter((element) => !element.hidden
+    && element.getAttribute?.('aria-hidden') !== 'true'
+    && element.tabIndex !== -1);
+}
+
+function modalFrame(title, { isCurrent = () => true } = {}) {
+  const previouslyFocused = document.activeElement;
+  const modal = node('div', 'modal trust-modal');
+  const headingId = `trust-modal-title-${++modalSequence}`;
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.setAttribute('aria-labelledby', headingId);
+  modal.setAttribute('tabindex', '-1');
+  const glass = node('div', 'modal-glass');
+  const header = node('div', 'modal-header');
+  const close = button(null, 'modal-close', '×');
+  close.setAttribute('aria-label', 'Close');
+  const heading = node('h3', null, title);
+  heading.id = headingId;
+  header.append(heading, close);
+  const body = node('div', 'modal-body');
+  glass.append(header, body);
+  modal.append(glass);
+  let active = true;
+  let cleanup = () => {};
+  const isActive = () => active && isSessionCurrent(isCurrent);
+  const closeNow = () => {
+    if (!active) return;
+    active = false;
+    activeModalClosers.delete(closeNow);
+    modal.removeEventListener('keydown', onKeydown);
+    try { cleanup(); } catch { /* sensitive fields are cleared independently below */ }
+    modal.classList.remove('active');
+    if (previouslyFocused?.isConnected !== false) {
+      try { previouslyFocused?.focus?.(); } catch { /* focus restoration is best effort */ }
+    }
+    setTimeout(() => modal.remove(), 200);
+  };
+  const onKeydown = (event) => {
+    if (event?.isTrusted !== true || !isActive()) return;
+    if (event.key === 'Escape') {
+      event.preventDefault?.();
+      closeNow();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const focusable = focusableElements(modal);
+    if (focusable.length === 0) {
+      event.preventDefault?.();
+      modal.focus?.();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const focused = document.activeElement;
+    if (event.shiftKey && (focused === first || !modal.contains(focused))) {
+      event.preventDefault?.();
+      last.focus?.();
+    } else if (!event.shiftKey && (focused === last || !modal.contains(focused))) {
+      event.preventDefault?.();
+      first.focus?.();
+    }
+  };
+  modal.addEventListener('keydown', onKeydown);
+  const activate = (initialFocus = close) => {
+    if (!isActive()) {
+      closeNow();
+      return;
+    }
+    document.body.appendChild(modal);
+    activeModalClosers.add(closeNow);
+    requestAnimationFrame(() => {
+      if (!isActive()) {
+        closeNow();
+        return;
+      }
+      modal.classList.add('active');
+      try { initialFocus?.focus?.(); } catch { /* initial focus is best effort */ }
+    });
+  };
+  return {
+    activate,
+    body,
+    close,
+    closeNow,
+    isActive,
+    modal,
+    setCleanup(callback) { cleanup = typeof callback === 'function' ? callback : () => {}; },
+  };
+}
+
+export function closeActiveTrustModals() {
+  for (const close of [...activeModalClosers]) close();
+}
+
+function safeChain(value) {
+  return ['btc', 'eth', 'sol'].includes(value) ? value : 'unknown';
+}
+
+function safeExplorerUrl(chain, transactionHash) {
+  if (typeof transactionHash !== 'string' || !/^[A-Za-z0-9]+$/u.test(transactionHash)
+      || transactionHash.length > 128) return null;
+  const origins = {
+    btc: 'https://blockstream.info/tx/',
+    eth: 'https://etherscan.io/tx/',
+    sol: 'https://solscan.io/tx/',
+  };
+  return origins[chain] ? origins[chain] + transactionHash : null;
+}
+
+function detectChainFromAddress(address) {
+  if (typeof address !== 'string') return null;
+  const value = address.trim();
+  if (/^(?:1|3)[a-km-zA-HJ-NP-Z1-9]{25,34}$/u.test(value)
+      || /^bc1[a-z0-9]{25,90}$/u.test(value)) return 'btc';
+  if (/^0x[0-9a-fA-F]{40}$/u.test(value)) return 'eth';
+  if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/u.test(value)) return 'sol';
+  return null;
+}
+
+function parseVCFForTrust(vcfText) {
+  if (typeof vcfText !== 'string' || vcfText.length > 256 * 1024) {
+    throw new Error('Invalid vCard');
+  }
+  const result = { name: null, email: null, org: null, keys: [], addresses: [] };
+  const lines = vcfText.replace(/\r?\n /gu, '').split(/\r?\n/gu);
+  for (const line of lines) {
+    const colon = line.indexOf(':');
+    if (colon < 0) continue;
+    const property = line.slice(0, colon).toUpperCase();
+    const value = line.slice(colon + 1);
+    if (property === 'FN') result.name = value;
+    else if (property.startsWith('EMAIL')) result.email = value;
+    else if (property.startsWith('ORG')) result.org = value.replace(/;/gu, ', ');
+    else if (property.startsWith('KEY') || property.startsWith('X-CRYPTO')
+        || property.startsWith('X-KEY')) {
+      result.keys.push(value);
+      const chain = detectChainFromAddress(value);
+      if (chain) result.addresses.push({ address: value, chain });
+    }
+    // Photo, URI, data markup, and provider paths are never retained here.
+  }
+  return result;
+}
 
 export function truncatePubkey(pubkey, prefixLen = 12, suffixLen = 8) {
   if (!pubkey) return '';
   if (pubkey.length <= prefixLen + suffixLen + 3) return pubkey;
-  return `${pubkey.slice(0, prefixLen)}...${pubkey.slice(-suffixLen)}`;
+  return pubkey.slice(0, prefixLen) + '...' + pubkey.slice(-suffixLen);
 }
 
 export function truncateTxHash(txHash, prefixLen = 10, suffixLen = 6) {
   if (!txHash) return '';
   if (txHash.length <= prefixLen + suffixLen + 3) return txHash;
-  return `${txHash.slice(0, prefixLen)}...${txHash.slice(-suffixLen)}`;
+  return txHash.slice(0, prefixLen) + '...' + txHash.slice(-suffixLen);
 }
-
-function explorerTxUrl(chain, txHash) {
-  switch (chain) {
-    case 'btc':
-      return `https://blockstream.info/tx/${txHash}`;
-    case 'eth':
-      return `https://etherscan.io/tx/${txHash}`;
-    case 'sol':
-      return `https://solscan.io/tx/${txHash}`;
-    default:
-      return `https://blockstream.info/tx/${txHash}`;
-  }
-}
-
-function chainBadge(chain) {
-  const labels = { btc: 'BTC', eth: 'ETH', sol: 'SOL' };
-  const label = labels[chain] || chain?.toUpperCase() || '???';
-  return `<span class="chain-badge chain-${chain || 'unknown'}">${label}</span>`;
-}
-
-function trustLevelBadge(level) {
-  const name = TrustLevelNames[level] || 'Unknown';
-  const cls = name.toLowerCase().replace(/\s+/g, '-');
-  return `<span class="trust-level-badge trust-level-${cls}">${name}</span>`;
-}
-
-function directionIndicator(direction) {
-  switch (direction) {
-    case 'outbound':
-      return '<span class="trust-direction" title="Outbound">&rarr;</span>';
-    case 'inbound':
-      return '<span class="trust-direction" title="Inbound">&larr;</span>';
-    case 'mutual':
-      return '<span class="trust-direction" title="Mutual">&harr;</span>';
-    default:
-      return '<span class="trust-direction">--</span>';
-  }
-}
-
-function closeModal(modal) {
-  modal.classList.remove('active');
-  setTimeout(() => modal.remove(), 200);
-}
-
-// =============================================================================
-// 1. renderTrustList
-// =============================================================================
 
 export function renderTrustList(container, relationships, ownAddresses) {
-  container.innerHTML = '';
-
-  if (!relationships || relationships.length === 0) {
-    container.innerHTML = '<div class="trust-empty">No trust relationships found.</div>';
+  container.replaceChildren();
+  if (!Array.isArray(relationships) || relationships.length === 0) {
+    container.append(node('div', 'trust-empty', 'No trust relationships found.'));
     return;
   }
-
-  const list = document.createElement('div');
-  list.className = 'trust-list';
-
-  for (const rel of relationships) {
-    const row = document.createElement('div');
-    row.className = 'trust-row';
-
-    const ownSet = new Set(
-      Array.isArray(ownAddresses)
-        ? ownAddresses
-        : Object.values(ownAddresses || {}).flat()
+  const list = node('div', 'trust-list');
+  const ownSet = new Set(
+    Array.isArray(ownAddresses) ? ownAddresses : Object.values(ownAddresses || {}).flat(),
+  );
+  for (const relationship of relationships) {
+    const outbound = ownSet.has(relationship.from);
+    const inbound = ownSet.has(relationship.to);
+    const direction = outbound && inbound
+      ? 'mutual' : outbound ? 'outbound' : inbound ? 'inbound' : 'outbound';
+    const displayAddress = direction === 'inbound' ? relationship.from : relationship.to;
+    const chain = safeChain(relationship.chain || relationship.network);
+    const row = node('div', 'trust-row');
+    const header = node('div', 'trust-row-header');
+    const address = node('span', 'trust-row-address', truncatePubkey(displayAddress));
+    address.title = String(displayAddress || '');
+    header.append(
+      address,
+      node('span', 'chain-badge chain-' + chain, chain === 'unknown' ? '???' : chain.toUpperCase()),
+      node('span', 'trust-level-badge', TrustLevelNames[relationship.level] || 'Unknown'),
+      node('span', 'trust-direction', direction === 'outbound' ? '→' : direction === 'inbound' ? '←' : '↔'),
+      node('span', 'trust-row-expand', '⌄'),
     );
-
-    const isOutbound = ownSet.has(rel.from);
-    const isInbound = ownSet.has(rel.to);
-    const direction = isOutbound && isInbound ? 'mutual'
-      : isOutbound ? 'outbound'
-      : isInbound ? 'inbound'
-      : 'outbound';
-
-    const displayAddress = direction === 'inbound' ? rel.from : rel.to;
-    const chain = rel.chain || rel.network || 'btc';
-
-    // Header
-    const header = document.createElement('div');
-    header.className = 'trust-row-header';
-    header.innerHTML = `
-      <span class="trust-row-address" title="${displayAddress}">${truncatePubkey(displayAddress)}</span>
-      ${chainBadge(chain)}
-      ${trustLevelBadge(rel.level)}
-      ${directionIndicator(direction)}
-      <span class="trust-row-expand">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="6 9 12 15 18 9"/>
-        </svg>
-      </span>
-    `;
-
-    // Detail
-    const detail = document.createElement('div');
-    detail.className = 'trust-row-detail';
-
-    const txs = rel.transactions || (rel.txHash ? [rel] : []);
-    const txRows = txs.map(tx => {
-      const ts = tx.timestamp ? new Date(tx.timestamp).toLocaleString() : '--';
-      const hash = tx.txHash || tx.hash || '';
-      const txChain = tx.chain || tx.network || chain;
-      const url = explorerTxUrl(txChain, hash);
-      return `
-        <div class="trust-tx-row">
-          <span class="trust-tx-time">${ts}</span>
-          <a class="trust-tx-link" href="${url}" target="_blank" rel="noopener">${truncateTxHash(hash)}</a>
-        </div>
-      `;
-    }).join('');
-
-    const revokeBtn = direction !== 'inbound'
-      ? `<button class="glass-btn glass-btn-sm trust-revoke-btn" data-address="${displayAddress}">Revoke</button>`
-      : '';
-
-    detail.innerHTML = `
-      <div class="trust-detail-address">
-        <label>Full Address</label>
-        <code>${displayAddress}</code>
-      </div>
-      <div class="trust-detail-txs">
-        <label>Transactions</label>
-        ${txRows || '<span class="trust-no-txs">No transactions recorded</span>'}
-      </div>
-      ${revokeBtn ? `<div class="trust-detail-actions">${revokeBtn}</div>` : ''}
-    `;
-
-    // Toggle expand
-    header.addEventListener('click', () => {
-      const wasExpanded = row.classList.contains('expanded');
-      // Collapse all others
-      list.querySelectorAll('.trust-row.expanded').forEach(r => r.classList.remove('expanded'));
-      if (!wasExpanded) row.classList.add('expanded');
-    });
-
-    row.appendChild(header);
-    row.appendChild(detail);
-    list.appendChild(row);
-  }
-
-  container.appendChild(list);
-}
-
-// =============================================================================
-// 2. showEstablishTrustModal
-// =============================================================================
-
-// Address format detection
-function detectChainFromAddress(address) {
-  if (!address) return null;
-  const a = address.trim();
-  // Bitcoin: starts with 1, 3, or bc1
-  if (/^(1|3)[a-km-zA-HJ-NP-Z1-9]{25,34}$/.test(a)) return 'btc';
-  if (/^bc1[a-z0-9]{25,90}$/.test(a)) return 'btc';
-  // Ethereum: 0x + 40 hex chars
-  if (/^0x[0-9a-fA-F]{40}$/.test(a)) return 'eth';
-  // Solana: base58, 32-44 chars, no 0/O/I/l
-  if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a)) return 'sol';
-  return null;
-}
-
-// Simple VCF parser for trust modal
-function parseVCFForTrust(vcfText) {
-  const lines = vcfText.replace(/\r?\n /g, '').split(/\r?\n/);
-  const result = { name: null, email: null, org: null, photo: null, keys: [], addresses: [] };
-
-  for (const line of lines) {
-    const colonIdx = line.indexOf(':');
-    if (colonIdx === -1) continue;
-    const prop = line.substring(0, colonIdx).toUpperCase();
-    const value = line.substring(colonIdx + 1);
-
-    if (prop === 'FN') {
-      result.name = value;
-    } else if (prop.startsWith('EMAIL')) {
-      result.email = value;
-    } else if (prop.startsWith('ORG')) {
-      result.org = value.replace(/;/g, ', ');
-    } else if (prop.startsWith('PHOTO')) {
-      if (prop.includes('VALUE=URI') || value.startsWith('data:') || value.startsWith('http')) {
-        result.photo = value;
-      } else if (prop.includes('ENCODING=B') || prop.includes('ENCODING=b')) {
-        const typeMatch = prop.match(/TYPE=(\w+)/i);
-        const imgType = typeMatch ? typeMatch[1].toLowerCase() : 'jpeg';
-        result.photo = `data:image/${imgType};base64,${value}`;
+    const detail = node('div', 'trust-row-detail');
+    detail.append(labeledValue('Full Address', displayAddress));
+    const transactionSection = node('div', 'trust-detail-txs');
+    transactionSection.append(node('label', null, 'Transactions'));
+    const transactions = relationship.transactions || (relationship.txHash ? [relationship] : []);
+    if (transactions.length === 0) {
+      transactionSection.append(node('span', 'trust-no-txs', 'No transactions recorded'));
+    } else {
+      for (const transaction of transactions) {
+        const transactionRow = node('div', 'trust-tx-row');
+        const timestamp = transaction.timestamp ? new Date(transaction.timestamp).toLocaleString() : '--';
+        const hash = transaction.txHash || transaction.hash || '';
+        const transactionChain = safeChain(transaction.chain || transaction.network || chain);
+        const url = safeExplorerUrl(transactionChain, hash);
+        transactionRow.append(node('span', 'trust-tx-time', timestamp));
+        if (url) {
+          const link = node('a', 'trust-tx-link', truncateTxHash(hash));
+          link.href = url;
+          link.target = '_blank';
+          link.rel = 'noopener';
+          transactionRow.append(link);
+        } else {
+          transactionRow.append(node('code', 'trust-tx-link', truncateTxHash(hash)));
+        }
+        transactionSection.append(transactionRow);
       }
-    } else if (prop.startsWith('KEY') || prop.startsWith('X-CRYPTO') || prop.startsWith('X-KEY')) {
-      result.keys.push(value);
-      const chain = detectChainFromAddress(value);
-      if (chain) result.addresses.push({ address: value, chain });
     }
+    detail.append(transactionSection);
+    if (direction !== 'inbound') {
+      const actions = node('div', 'trust-detail-actions');
+      const revoke = button(null, 'glass-btn glass-btn-sm trust-revoke-btn', 'Revoke');
+      revoke.dataset.address = String(displayAddress || '');
+      actions.append(revoke);
+      detail.append(actions);
+    }
+    header.addEventListener('click', () => {
+      const expanded = row.classList.contains('expanded');
+      list.querySelectorAll('.trust-row.expanded').forEach((candidate) => {
+        candidate.classList.remove('expanded');
+      });
+      if (!expanded) row.classList.add('expanded');
+    });
+    row.append(header, detail);
+    list.append(row);
   }
-
-  // Also scan NOTE or other fields for addresses
-  return result;
+  container.append(list);
 }
 
-const TRUST_LEVEL_CONFIG = [
-  { value: TrustLevel.NEVER, name: 'Never Trust', desc: 'Block this address from all interactions', color: '#ef4444', border: 'rgba(239, 68, 68, 0.4)' },
-  { value: TrustLevel.UNKNOWN, name: 'Unknown', desc: 'No opinion on this address yet', color: '#9ca3af', border: 'rgba(107, 114, 128, 0.4)' },
-  { value: TrustLevel.MARGINAL, name: 'Marginal', desc: 'Somewhat trusted, proceed with caution', color: '#fbbf24', border: 'rgba(245, 158, 11, 0.4)' },
-  { value: TrustLevel.FULL, name: 'Full Trust', desc: 'Highly trusted, verified relationship', color: '#6ee7b7', border: 'rgba(16, 185, 129, 0.4)' },
-  { value: TrustLevel.ULTIMATE, name: 'Ultimate', desc: 'Your own address or absolute trust', color: '#a78bfa', border: 'rgba(139, 92, 246, 0.4)' },
-];
-
-export function showEstablishTrustModal(onConfirm) {
+export function showEstablishTrustModal(onConfirm, { isCurrent = () => true } = {}) {
   let vcfData = null;
-
-  const modal = document.createElement('div');
-  modal.className = 'modal trust-modal establish-trust-modal';
-
-  const levelOptionsHtml = TRUST_LEVEL_CONFIG.map((lvl, i) => `
-    <label class="trust-level-option" style="--level-color: ${lvl.color}; --level-border: ${lvl.border}">
-      <input type="radio" name="trust-level" value="${lvl.value}" ${i === 2 ? 'checked' : ''}>
-      <span class="trust-level-indicator" style="background: ${lvl.color}"></span>
-      <span class="trust-level-label">
-        <span class="trust-level-name">${lvl.name}</span>
-        <span class="trust-level-desc">${lvl.desc}</span>
-      </span>
-    </label>
-  `).join('');
-
-  modal.innerHTML = `
-    <div class="modal-glass">
-      <div class="modal-header">
-        <h3>Establish Trust</h3>
-        <button class="modal-close" type="button" aria-label="Close">${CLOSE_ICON}</button>
-      </div>
-      <div class="modal-body">
-
-        <div class="trust-input-section">
-          <label class="trust-section-label">Recipient</label>
-          <div class="trust-input-tabs">
-            <button class="trust-input-tab active" data-tab="address">Paste Address</button>
-            <button class="trust-input-tab" data-tab="vcf">Import vCard</button>
-          </div>
-
-          <div class="trust-tab-panel" id="trust-address-panel">
-            <input type="text" id="trust-recipient" class="trust-address-input invalid" placeholder="BTC, ETH, or SOL address" autocomplete="off" spellcheck="false" />
-            <div class="trust-address-status" id="trust-address-status">
-              <span id="trust-address-status-text"></span>
-            </div>
-          </div>
-
-          <div class="trust-tab-panel" id="trust-vcf-panel" style="display:none">
-            <label class="trust-vcf-dropzone" id="trust-vcf-dropzone">
-              <input type="file" id="trust-vcf-input" accept=".vcf,.vcard" style="display:none" />
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/>
-              </svg>
-              <span>Drop .vcf file or click to browse</span>
-            </label>
-            <div class="trust-vcf-summary" id="trust-vcf-summary" style="display:none"></div>
-          </div>
-        </div>
-
-        <div class="trust-input-section">
-          <label class="trust-section-label">Trust Level</label>
-          <div class="trust-level-options">
-            ${levelOptionsHtml}
-          </div>
-        </div>
-
-        <div class="trust-modal-actions">
-          <button class="glass-btn" id="trust-cancel">Cancel</button>
-          <button class="glass-btn primary" id="trust-confirm">Publish Transaction</button>
-        </div>
-      </div>
-    </div>
-  `;
-
-  document.body.appendChild(modal);
-  requestAnimationFrame(() => modal.classList.add('active'));
-
-  const closeBtn = modal.querySelector('.modal-close');
-  const cancelBtn = modal.querySelector('#trust-cancel');
-  const confirmBtn = modal.querySelector('#trust-confirm');
-  const recipientInput = modal.querySelector('#trust-recipient');
-  const addressStatus = modal.querySelector('#trust-address-status');
-  const addressStatusText = modal.querySelector('#trust-address-status-text');
-  const vcfInput = modal.querySelector('#trust-vcf-input');
-  const vcfSummary = modal.querySelector('#trust-vcf-summary');
-  const vcfDropzone = modal.querySelector('#trust-vcf-dropzone');
-  const addressPanel = modal.querySelector('#trust-address-panel');
-  const vcfPanel = modal.querySelector('#trust-vcf-panel');
-
   let detectedNetwork = null;
-  const fees = { btc: '~0.0001 BTC', sol: '~0.000005 SOL', eth: '~0.001 ETH' };
-  const chainNames = { btc: 'Bitcoin', eth: 'Ethereum', sol: 'Solana' };
+  let vcfReader = null;
+  const frame = modalFrame('Establish Trust', { isCurrent });
+  const {
+    activate, body, close, closeNow, isActive, modal, setCleanup,
+  } = frame;
+  modal.classList.add('establish-trust-modal');
+  const recipientSection = node('div', 'trust-input-section');
+  recipientSection.append(node('label', 'trust-section-label', 'Recipient'));
+  const tabs = node('div', 'trust-input-tabs');
+  const addressTab = button(null, 'trust-input-tab active', 'Paste Address');
+  addressTab.dataset.tab = 'address';
+  const vcfTab = button(null, 'trust-input-tab', 'Import vCard');
+  vcfTab.dataset.tab = 'vcf';
+  tabs.append(addressTab, vcfTab);
+  const addressPanel = node('div', 'trust-tab-panel');
+  const recipient = node('input', 'trust-address-input invalid');
+  recipient.id = 'trust-recipient';
+  recipient.type = 'text';
+  recipient.autocomplete = 'off';
+  recipient.placeholder = 'BTC, ETH, or SOL address';
+  const status = node('div', 'trust-address-status');
+  addressPanel.append(recipient, status);
+  const vcfPanel = node('div', 'trust-tab-panel');
+  vcfPanel.hidden = true;
+  const vcfInput = node('input');
+  vcfInput.type = 'file';
+  vcfInput.accept = '.vcf,.vcard';
+  const vcfSummary = node('div', 'trust-vcf-summary');
+  vcfPanel.append(vcfInput, vcfSummary);
+  recipientSection.append(tabs, addressPanel, vcfPanel);
 
-  const close = () => closeModal(modal);
-  closeBtn.addEventListener('click', close);
-  cancelBtn.addEventListener('click', close);
-
-  // Tab switching
-  modal.querySelectorAll('.trust-input-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      modal.querySelectorAll('.trust-input-tab').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      const isVcf = tab.dataset.tab === 'vcf';
-      addressPanel.style.display = isVcf ? 'none' : '';
-      vcfPanel.style.display = isVcf ? '' : 'none';
-    });
+  const levelSection = node('div', 'trust-input-section');
+  levelSection.append(node('label', 'trust-section-label', 'Trust Level'));
+  const levelOptions = node('div', 'trust-level-options');
+  TRUST_LEVEL_CONFIG.forEach((level, index) => {
+    const label = node('label', 'trust-level-option');
+    const input = node('input');
+    input.type = 'radio';
+    input.name = 'trust-level';
+    input.value = String(level.value);
+    input.checked = index === 2;
+    label.append(
+      input,
+      node('span', 'trust-level-name', level.name),
+      node('span', 'trust-level-desc', level.desc),
+    );
+    levelOptions.append(label);
   });
+  levelSection.append(levelOptions);
+  const actions = node('div', 'trust-modal-actions');
+  const cancel = button('trust-cancel', 'glass-btn', 'Cancel');
+  const confirm = button('trust-confirm', 'glass-btn primary', 'Publish Transaction');
+  actions.append(cancel, confirm);
+  body.append(recipientSection, levelSection, actions);
 
-  // Address auto-detect chain with validation
-  recipientInput.addEventListener('input', () => {
-    const val = recipientInput.value.trim();
-    if (!val) {
-      recipientInput.classList.add('invalid');
-      recipientInput.classList.remove('valid');
-      addressStatus.className = 'trust-address-status';
-      addressStatusText.textContent = '';
+  const showTab = (vcf) => {
+    if (!isActive()) return;
+    addressTab.classList.toggle('active', !vcf);
+    vcfTab.classList.toggle('active', vcf);
+    addressPanel.hidden = vcf;
+    vcfPanel.hidden = !vcf;
+  };
+  addressTab.addEventListener('click', () => showTab(false));
+  vcfTab.addEventListener('click', () => showTab(true));
+  recipient.addEventListener('input', () => {
+    if (!isActive()) return;
+    detectedNetwork = detectChainFromAddress(recipient.value);
+    recipient.classList.toggle('valid', Boolean(detectedNetwork));
+    recipient.classList.toggle('invalid', !detectedNetwork);
+    status.textContent = detectedNetwork
+      ? detectedNetwork.toUpperCase() + ' address'
+      : 'Unrecognized address format';
+  });
+  vcfInput.addEventListener('change', () => {
+    if (!isActive()) return;
+    const file = vcfInput.files && vcfInput.files[0];
+    if (!file) return;
+    if (vcfReader) {
+      try { vcfReader.abort?.(); } catch { /* stale reader callback is also session-guarded */ }
+      vcfReader.onload = null;
+      vcfReader.onerror = null;
+      vcfReader = null;
+    }
+    if (!Number.isSafeInteger(file.size) || file.size < 0 || file.size > 256 * 1024) {
+      vcfData = null;
       detectedNetwork = null;
+      vcfSummary.textContent = 'The vCard could not be read.';
+      vcfInput.value = '';
       return;
     }
-    const chain = detectChainFromAddress(val);
-    if (chain) {
-      detectedNetwork = chain;
-      recipientInput.classList.remove('invalid');
-      recipientInput.classList.add('valid');
-      addressStatus.className = 'trust-address-status detected';
-      addressStatusText.textContent = `${chainNames[chain]} (${fees[chain]})`;
-    } else {
-      detectedNetwork = null;
-      recipientInput.classList.add('invalid');
-      recipientInput.classList.remove('valid');
-      addressStatus.className = 'trust-address-status invalid';
-      addressStatusText.textContent = 'Unrecognized address format';
-    }
-  });
-
-  // VCF file handling
-  function handleVCFFile(file) {
-    if (!file) return;
     const reader = new FileReader();
-    reader.onload = (e) => {
-      vcfData = parseVCFForTrust(e.target.result);
-      vcfDropzone.style.display = 'none';
-      vcfSummary.style.display = 'block';
-
-      let html = '<div class="trust-vcf-card">';
-      if (vcfData.photo) {
-        html += `<img class="trust-vcf-photo" src="${vcfData.photo}" alt="" />`;
-      }
-      html += '<div class="trust-vcf-info">';
-      if (vcfData.name) html += `<div class="trust-vcf-name">${vcfData.name}</div>`;
-      if (vcfData.org) html += `<div class="trust-vcf-org">${vcfData.org}</div>`;
-      if (vcfData.email) html += `<div class="trust-vcf-email">${vcfData.email}</div>`;
-      html += '</div></div>';
-
-      if (vcfData.addresses.length > 0) {
-        html += '<label class="trust-section-label" style="margin-top:12px">Select Address</label>';
-        html += '<div class="trust-vcf-addresses">';
-        vcfData.addresses.forEach((a, i) => {
-          const labels = { btc: 'Bitcoin', eth: 'Ethereum', sol: 'Solana' };
-          html += `
-            <label class="trust-vcf-addr-option">
-              <input type="radio" name="vcf-address" value="${i}" ${i === 0 ? 'checked' : ''} />
-              <span class="chain-badge chain-${a.chain}">${a.chain.toUpperCase()}</span>
-              <code>${truncatePubkey(a.address)}</code>
-            </label>`;
+    vcfReader = reader;
+    reader.onload = () => {
+      if (!isActive() || vcfReader !== reader) return;
+      try {
+        vcfData = parseVCFForTrust(reader.result);
+        vcfSummary.replaceChildren();
+        if (vcfData.name) vcfSummary.append(node('div', 'trust-vcf-name', vcfData.name));
+        if (vcfData.org) vcfSummary.append(node('div', 'trust-vcf-org', vcfData.org));
+        if (vcfData.email) vcfSummary.append(node('div', 'trust-vcf-email', vcfData.email));
+        vcfData.addresses.forEach((entry, index) => {
+          const label = node('label', 'trust-vcf-addr-option');
+          const radio = node('input');
+          radio.type = 'radio';
+          radio.name = 'vcf-address';
+          radio.value = String(index);
+          radio.checked = index === 0;
+          label.append(
+            radio,
+            node('span', 'chain-badge chain-' + entry.chain, entry.chain.toUpperCase()),
+            node('code', null, entry.address),
+          );
+          vcfSummary.append(label);
         });
-        html += '</div>';
-      } else if (vcfData.keys.length > 0) {
-        html += `<div class="trust-vcf-note">Found ${vcfData.keys.length} key(s) but no recognized blockchain addresses.</div>`;
-      } else {
-        html += '<div class="trust-vcf-note">No blockchain addresses found in this vCard.</div>';
-      }
-
-      html += `<button class="glass-btn glass-btn-sm trust-vcf-clear" id="trust-vcf-clear">Remove</button>`;
-      vcfSummary.innerHTML = html;
-
-      // Set detected network from first address
-      if (vcfData.addresses.length > 0) {
-        detectedNetwork = vcfData.addresses[0].chain;
-      }
-
-      // Handle address radio changes
-      vcfSummary.querySelectorAll('input[name="vcf-address"]').forEach(radio => {
-        radio.addEventListener('change', () => {
-          const addr = vcfData.addresses[parseInt(radio.value, 10)];
-          if (addr) detectedNetwork = addr.chain;
-        });
-      });
-
-      modal.querySelector('#trust-vcf-clear')?.addEventListener('click', () => {
+        detectedNetwork = vcfData.addresses[0] ? vcfData.addresses[0].chain : null;
+      } catch {
         vcfData = null;
-        vcfSummary.style.display = 'none';
-        vcfDropzone.style.display = '';
-        vcfInput.value = '';
-      });
+        detectedNetwork = null;
+        vcfSummary.textContent = 'The vCard could not be read.';
+      }
+    };
+    reader.onerror = () => {
+      if (!isActive() || vcfReader !== reader) return;
+      vcfData = null;
+      detectedNetwork = null;
+      vcfSummary.textContent = 'The vCard could not be read.';
     };
     reader.readAsText(file);
-  }
-
-  vcfInput.addEventListener('change', (e) => handleVCFFile(e.target.files[0]));
-
-  vcfDropzone.addEventListener('dragover', (e) => { e.preventDefault(); vcfDropzone.classList.add('dragover'); });
-  vcfDropzone.addEventListener('dragleave', () => vcfDropzone.classList.remove('dragover'));
-  vcfDropzone.addEventListener('drop', (e) => {
-    e.preventDefault();
-    vcfDropzone.classList.remove('dragover');
-    handleVCFFile(e.dataTransfer.files[0]);
   });
-
-  // Confirm
-  confirmBtn.addEventListener('click', () => {
-    let recipientAddress;
-    let network = detectedNetwork;
-    const isVcfTab = modal.querySelector('.trust-input-tab.active')?.dataset.tab === 'vcf';
-
-    if (isVcfTab && vcfData && vcfData.addresses.length > 0) {
-      const selectedRadio = vcfSummary.querySelector('input[name="vcf-address"]:checked');
-      const idx = selectedRadio ? parseInt(selectedRadio.value, 10) : 0;
-      recipientAddress = vcfData.addresses[idx].address;
-      network = vcfData.addresses[idx].chain;
-    } else {
-      recipientAddress = recipientInput.value.trim();
+  setCleanup(() => {
+    vcfData = null;
+    detectedNetwork = null;
+    if (vcfReader) {
+      try { vcfReader.abort?.(); } catch { /* late callback still observes inactive state */ }
+      vcfReader.onload = null;
+      vcfReader.onerror = null;
+      vcfReader = null;
     }
-
+    recipient.value = '';
+    status.textContent = '';
+    vcfInput.value = '';
+    vcfSummary.replaceChildren();
+  });
+  close.addEventListener('click', closeNow);
+  cancel.addEventListener('click', closeNow);
+  confirm.addEventListener('click', () => {
+    if (!isActive()) return;
+    const vcfActive = vcfTab.classList.contains('active');
+    let recipientAddress = recipient.value.trim();
+    let network = detectedNetwork;
+    if (vcfActive && vcfData && vcfData.addresses.length) {
+      const selected = vcfSummary.querySelector('input[name="vcf-address"]:checked');
+      const entry = vcfData.addresses[Number.parseInt(selected ? selected.value : '0', 10)];
+      recipientAddress = entry ? entry.address : '';
+      network = entry ? entry.chain : null;
+    }
     if (!recipientAddress || !network) {
-      recipientInput.focus();
+      recipient.focus();
       return;
     }
-    const level = parseInt(modal.querySelector('input[name="trust-level"]:checked').value, 10);
-
-    onConfirm({ level, network, recipientAddress });
-    close();
+    const selectedLevel = modal.querySelector('input[name="trust-level"]:checked');
+    onConfirm({
+      level: Number.parseInt(
+        selectedLevel ? selectedLevel.value : String(TrustLevel.MARGINAL),
+        10,
+      ),
+      network,
+      recipientAddress,
+    });
+    closeNow();
   });
+  activate(recipient);
+  return Object.freeze({ close: closeNow });
 }
 
-// =============================================================================
-// 3. showRevokeTrustModal
-// =============================================================================
-
-export function showRevokeTrustModal(originalTxHash, onConfirm) {
-  const modal = document.createElement('div');
-  modal.className = 'modal trust-modal';
-  modal.innerHTML = `
-    <div class="modal-glass">
-      <div class="modal-header">
-        <h3>Revoke Trust</h3>
-        <button class="modal-close" type="button" aria-label="Close">${CLOSE_ICON}</button>
-      </div>
-      <div class="modal-body">
-        <div class="trust-warning">
-          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
-            <line x1="12" y1="9" x2="12" y2="13"/>
-            <line x1="12" y1="17" x2="12.01" y2="17"/>
-          </svg>
-          <p>This will publish a revocation transaction on-chain. The original trust relationship will be marked as revoked and will no longer contribute to trust scores.</p>
-          <p><strong>This action is permanent and cannot be undone.</strong></p>
-        </div>
-
-        <div class="trust-tx-hash">
-          <label>Original Transaction</label>
-          <code>${truncateTxHash(originalTxHash)}</code>
-        </div>
-
-        <div class="trust-actions">
-          <button class="glass-btn" id="revoke-cancel">Cancel</button>
-          <button class="glass-btn danger" id="revoke-confirm">Publish Revocation</button>
-        </div>
-      </div>
-    </div>
-  `;
-
-  document.body.appendChild(modal);
-  requestAnimationFrame(() => modal.classList.add('active'));
-
-  const closeBtn = modal.querySelector('.modal-close');
-  const cancelBtn = modal.querySelector('#revoke-cancel');
-  const confirmBtn = modal.querySelector('#revoke-confirm');
-
-  const close = () => closeModal(modal);
-
-  closeBtn.addEventListener('click', close);
-  cancelBtn.addEventListener('click', close);
-
-  confirmBtn.addEventListener('click', () => {
+export function showRevokeTrustModal(
+  originalTxHash,
+  onConfirm,
+  { isCurrent = () => true } = {},
+) {
+  const frame = modalFrame('Revoke Trust', { isCurrent });
+  const {
+    activate, body, close, closeNow, isActive, modal,
+  } = frame;
+  const warning = node('div', 'trust-warning');
+  warning.append(
+    node('p', null, 'This publishes a permanent trust revocation transaction.'),
+    node('p', null, 'This action cannot be undone.'),
+  );
+  const actions = node('div', 'trust-actions');
+  const cancel = button('revoke-cancel', 'glass-btn', 'Cancel');
+  const confirm = button('revoke-confirm', 'glass-btn danger', 'Publish Revocation');
+  actions.append(cancel, confirm);
+  body.append(
+    warning,
+    labeledValue('Original Transaction', truncateTxHash(originalTxHash), 'trust-tx-hash'),
+    actions,
+  );
+  close.addEventListener('click', closeNow);
+  cancel.addEventListener('click', closeNow);
+  confirm.addEventListener('click', () => {
+    if (!isActive()) return;
     onConfirm({ originalTxHash });
-    close();
+    closeNow();
   });
+  activate(cancel);
+  return Object.freeze({ close: closeNow });
 }
 
-// =============================================================================
-// 4. showRulesModal
-// =============================================================================
-
-const RULE_CONDITION_TYPES = [
-  { value: 'mutual_tx_count', label: 'Mutual Transaction Count' },
-  { value: 'last_interaction_days', label: 'Days Since Last Interaction' },
-  { value: 'address_blocklist', label: 'Address Blocklist' },
-  { value: 'bidirectional_trust', label: 'Bidirectional Trust' },
-];
-
-const SEVERITY_OPTIONS = ['info', 'warn', 'block'];
-
-function buildRuleRow(rule, index) {
-  const conditionOptions = RULE_CONDITION_TYPES.map(ct =>
-    `<option value="${ct.value}" ${rule.type === ct.value ? 'selected' : ''}>${ct.label}</option>`
-  ).join('');
-
-  const levelOptions = Object.entries(TrustLevelNames).map(([val, name]) =>
-    `<option value="${val}" ${String(rule.resultLevel) === String(val) ? 'selected' : ''}>${name}</option>`
-  ).join('');
-
-  const severityOptions = SEVERITY_OPTIONS.map(s =>
-    `<option value="${s}" ${rule.severity === s ? 'selected' : ''}>${s}</option>`
-  ).join('');
-
-  return `
-    <div class="rule-row" data-index="${index}">
-      <div class="rule-fields">
-        <div class="rule-field">
-          <label>Condition</label>
-          <select class="glass-select rule-type">${conditionOptions}</select>
-        </div>
-        <div class="rule-field">
-          <label>Threshold</label>
-          <input type="number" class="glass-input rule-threshold" value="${rule.params?.threshold ?? 0}" min="0" />
-        </div>
-        <div class="rule-field">
-          <label>Result Level</label>
-          <select class="glass-select rule-result-level">${levelOptions}</select>
-        </div>
-        <div class="rule-field">
-          <label>Severity</label>
-          <select class="glass-select rule-severity">${severityOptions}</select>
-        </div>
-        <div class="rule-field rule-field-actions">
-          <button class="glass-btn glass-btn-sm rule-delete-btn" data-index="${index}" title="Delete rule" aria-label="Delete rule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-        </div>
-      </div>
-    </div>
-  `;
+function selectControl(className, values, selectedValue) {
+  const select = node('select', 'glass-select ' + className);
+  for (const entry of values) {
+    const option = node('option', null, entry[1]);
+    option.value = String(entry[0]);
+    option.selected = String(entry[0]) === String(selectedValue);
+    select.append(option);
+  }
+  return select;
 }
 
-export function showRulesModal(rules, onSave) {
-  let currentRules = (rules || []).map((r, i) => ({
-    id: r.id || `rule-${i}`,
-    type: r.type || 'mutual_tx_count',
-    params: { threshold: r.params?.threshold ?? 0 },
-    resultLevel: r.resultLevel ?? TrustLevel.MARGINAL,
-    severity: r.severity || 'info',
-    description: r.description || '',
+function ruleRow(rule, index) {
+  const row = node('div', 'rule-row');
+  row.dataset.index = String(index);
+  const fields = node('div', 'rule-fields');
+  const addField = (label, control) => {
+    const wrapper = node('div', 'rule-field');
+    wrapper.append(node('label', null, label), control);
+    fields.append(wrapper);
+  };
+  addField(
+    'Condition',
+    selectControl(
+      'rule-type',
+      RULE_CONDITION_TYPES.map((entry) => [entry.value, entry.label]),
+      rule.type,
+    ),
+  );
+  const threshold = node('input', 'glass-input rule-threshold');
+  threshold.type = 'number';
+  threshold.min = '0';
+  threshold.value = String(rule.params.threshold);
+  addField('Threshold', threshold);
+  addField('Result Level', selectControl('rule-result-level', Object.entries(TrustLevelNames), rule.resultLevel));
+  addField(
+    'Severity',
+    selectControl('rule-severity', SEVERITY_OPTIONS.map((value) => [value, value]), rule.severity),
+  );
+  const remove = button(null, 'glass-btn glass-btn-sm rule-delete-btn', 'Delete');
+  remove.dataset.index = String(index);
+  fields.append(remove);
+  row.append(fields);
+  return row;
+}
+
+export function showRulesModal(rules, onSave, { isCurrent = () => true } = {}) {
+  let currentRules = (rules || []).map((rule, index) => ({
+    id: rule.id || 'rule-' + index,
+    type: rule.type || 'mutual_tx_count',
+    params: { threshold: rule.params && rule.params.threshold !== undefined ? rule.params.threshold : 0 },
+    resultLevel: rule.resultLevel !== undefined ? rule.resultLevel : TrustLevel.MARGINAL,
+    severity: rule.severity || 'info',
+    description: rule.description || '',
   }));
-
-  const modal = document.createElement('div');
-  modal.className = 'modal trust-modal rules-modal';
-
-  function renderRules() {
-    const rulesHtml = currentRules.map((r, i) => buildRuleRow(r, i)).join('');
-    modal.innerHTML = `
-      <div class="modal-glass">
-        <div class="modal-header">
-          <h3>Trust Rules</h3>
-          <button class="modal-close" type="button" aria-label="Close">${CLOSE_ICON}</button>
-        </div>
-        <div class="modal-body">
-          <div class="rules-list">
-            ${rulesHtml || '<div class="rules-empty">No rules defined. Add a rule below.</div>'}
-          </div>
-          <div class="rules-toolbar">
-            <button class="glass-btn glass-btn-sm" id="rules-add">+ Add Rule</button>
-          </div>
-          <div class="trust-actions">
-            <button class="glass-btn" id="rules-cancel">Cancel</button>
-            <button class="glass-btn primary" id="rules-save">Save Rules</button>
-          </div>
-        </div>
-      </div>
-    `;
-    bindRulesEvents();
-  }
-
-  function readRulesFromDom() {
-    const rows = modal.querySelectorAll('.rule-row');
-    rows.forEach((row, i) => {
-      if (currentRules[i]) {
-        currentRules[i].type = row.querySelector('.rule-type').value;
-        currentRules[i].params.threshold = parseInt(row.querySelector('.rule-threshold').value, 10) || 0;
-        currentRules[i].resultLevel = parseInt(row.querySelector('.rule-result-level').value, 10);
-        currentRules[i].severity = row.querySelector('.rule-severity').value;
-      }
+  const frame = modalFrame('Trust Rules', { isCurrent });
+  const {
+    activate, body, close, closeNow, isActive, modal, setCleanup,
+  } = frame;
+  modal.classList.add('rules-modal');
+  const list = node('div', 'rules-list');
+  const toolbar = node('div', 'rules-toolbar');
+  const add = button('rules-add', 'glass-btn glass-btn-sm', '+ Add Rule');
+  toolbar.append(add);
+  const actions = node('div', 'trust-actions');
+  const cancel = button('rules-cancel', 'glass-btn', 'Cancel');
+  const save = button('rules-save', 'glass-btn primary', 'Save Rules');
+  actions.append(cancel, save);
+  body.append(list, toolbar, actions);
+  const read = () => {
+    list.querySelectorAll('.rule-row').forEach((row, index) => {
+      if (!currentRules[index]) return;
+      currentRules[index].type = row.querySelector('.rule-type').value;
+      currentRules[index].params.threshold = Number.parseInt(
+        row.querySelector('.rule-threshold').value,
+        10,
+      ) || 0;
+      currentRules[index].resultLevel = Number.parseInt(
+        row.querySelector('.rule-result-level').value,
+        10,
+      );
+      currentRules[index].severity = row.querySelector('.rule-severity').value;
     });
-  }
-
-  function bindRulesEvents() {
-    const close = () => closeModal(modal);
-
-    modal.querySelector('.modal-close').addEventListener('click', close);
-    modal.querySelector('#rules-cancel').addEventListener('click', close);
-
-    modal.querySelector('#rules-add').addEventListener('click', () => {
-      readRulesFromDom();
-      currentRules.push({
-        id: `rule-${Date.now()}`,
-        type: 'mutual_tx_count',
-        params: { threshold: 0 },
-        resultLevel: TrustLevel.MARGINAL,
-        severity: 'info',
-        description: '',
-      });
-      renderRules();
-    });
-
-    modal.querySelectorAll('.rule-delete-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        readRulesFromDom();
-        const idx = parseInt(btn.getAttribute('data-index'), 10);
-        currentRules.splice(idx, 1);
-        renderRules();
+  };
+  const render = () => {
+    list.replaceChildren();
+    if (currentRules.length === 0) {
+      list.append(node('div', 'rules-empty', 'No rules defined. Add a rule below.'));
+    }
+    currentRules.forEach((rule, index) => list.append(ruleRow(rule, index)));
+    list.querySelectorAll('.rule-delete-btn').forEach((remove) => {
+      remove.addEventListener('click', () => {
+        read();
+        currentRules.splice(Number.parseInt(remove.dataset.index, 10), 1);
+        render();
       });
     });
-
-    modal.querySelector('#rules-save').addEventListener('click', () => {
-      readRulesFromDom();
-      onSave(currentRules);
-      close();
+  };
+  setCleanup(() => { currentRules = []; });
+  close.addEventListener('click', closeNow);
+  cancel.addEventListener('click', closeNow);
+  add.addEventListener('click', () => {
+    if (!isActive()) return;
+    read();
+    currentRules.push({
+      id: 'rule-' + Date.now(),
+      type: 'mutual_tx_count',
+      params: { threshold: 0 },
+      resultLevel: TrustLevel.MARGINAL,
+      severity: 'info',
+      description: '',
     });
-  }
-
-  document.body.appendChild(modal);
-  renderRules();
-  requestAnimationFrame(() => modal.classList.add('active'));
+    render();
+  });
+  save.addEventListener('click', () => {
+    if (!isActive()) return;
+    read();
+    onSave(currentRules);
+    closeNow();
+  });
+  render();
+  activate(add);
+  return Object.freeze({ close: closeNow });
 }
-
-// =============================================================================
-// 5. scanAllTrustTransactions
-// =============================================================================
 
 export async function scanAllTrustTransactions(addresses) {
-  const allTxs = [];
-
-  if (addresses.btc) {
-    const btcTxs = await scanBitcoinTrustTransactions(addresses.btc);
-    allTxs.push(...btcTxs);
-  }
-
-  if (addresses.sol) {
-    const solTxs = await scanSolanaTrustTransactions(addresses.sol);
-    allTxs.push(...solTxs);
-  }
-
-  if (addresses.eth) {
-    const ethTxs = await scanEthereumTrustTransactions(addresses.eth);
-    allTxs.push(...ethTxs);
-  }
-
-  return allTxs;
+  const transactions = [];
+  if (addresses.btc) transactions.push(...await scanBitcoinTrustTransactions(addresses.btc));
+  if (addresses.sol) transactions.push(...await scanSolanaTrustTransactions(addresses.sol));
+  if (addresses.eth) transactions.push(...await scanEthereumTrustTransactions(addresses.eth));
+  return transactions;
 }
-
-// =============================================================================
-// 6. exportTrustData
-// =============================================================================
 
 export function exportTrustData(trustTransactions, xpub) {
   const payload = {
@@ -703,45 +657,39 @@ export function exportTrustData(trustTransactions, xpub) {
     },
     transactions: trustTransactions || [],
   };
-
-  const json = JSON.stringify(payload, null, 2);
-  const blob = new Blob([json], { type: 'application/json' });
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
-
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `trust-export-${Date.now()}.trust.json`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  try {
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'trust-export-' + Date.now() + '.trust.json';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
-// =============================================================================
-// 7. importTrustData
-// =============================================================================
-
-export function importTrustData(file) {
-  return new Promise((resolve, reject) => {
-    if (!file) {
-      reject(new Error('No file provided'));
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const data = JSON.parse(e.target.result);
-        if (!data.transactions || !Array.isArray(data.transactions)) {
-          reject(new Error('Invalid trust data: missing transactions array'));
-          return;
-        }
-        resolve(data.transactions);
-      } catch (err) {
-        reject(new Error(`Failed to parse trust data: ${err.message}`));
-      }
-    };
-    reader.onerror = () => reject(new Error('Failed to read file'));
-    reader.readAsText(file);
+export async function importTrustData(file, {
+  isCurrent = () => true,
+  signal = null,
+} = {}) {
+  if (!isSessionCurrent(isCurrent)) throw staleSessionError();
+  const text = await readTextFileForSession(file, {
+    isCurrent: () => isSessionCurrent(isCurrent),
+    maximumBytes: 2 * 1024 * 1024,
+    sessionGeneration: true,
+    signal,
   });
+  if (!isSessionCurrent(isCurrent)) throw staleSessionError();
+  try {
+    const data = JSON.parse(text);
+    if (!Array.isArray(data.transactions)) throw new Error('missing transactions array');
+    if (!isSessionCurrent(isCurrent)) throw staleSessionError();
+    return data.transactions;
+  } catch (error) {
+    if (error?.code === 'STALE_SESSION') throw error;
+    throw new Error('Failed to parse trust data: ' + error.message);
+  }
 }
