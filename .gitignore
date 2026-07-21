@@ -10,7 +10,9 @@ cmake-build-*/
 .cache/
 
 # Claude Code
-.claude/
+/.claude/*
+!/.claude/SKILLS.md
+!/.claude/Agents.md
 
 # IDE
 .vscode/
