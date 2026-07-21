@@ -12,6 +12,11 @@ const sdsPackageRoot = dirname(require.resolve('spacedatastandards.org/package.j
 export default defineConfig({
   root: '.',
   base: './',
+  test: {
+    // Relay fixtures use Node's built-in test runner and have their own
+    // package command. Keep the UI Vitest suite scoped to UI-owned tests.
+    include: ['test/**/*.test.{js,mjs}'],
+  },
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
