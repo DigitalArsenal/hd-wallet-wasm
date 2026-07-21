@@ -78,6 +78,21 @@ test('parses test commands from package manifests', (t) => {
   );
 });
 
+test('scans hosted workflow helpers for live test-data acquisition', (t) => {
+  const root = makeRepository(t);
+  write(
+    root,
+    '.github/workflows/test.yml',
+    'jobs:\n  test:\n    steps:\n      - run: command curl https://fixtures.invalid/vectors.json\n',
+  );
+
+  assert(
+    scanRepository(root).some((failure) =>
+      failure.startsWith('.github/workflows/test.yml:'),
+    ),
+  );
+});
+
 test('does not execute-match its own checks or fixture source metadata', (t) => {
   const root = makeRepository(t);
   write(root, 'scripts/test-no-live-test-fetches.mjs', 'raw.githubusercontent.com curl wget\n');

@@ -27,6 +27,16 @@ pass() { echo -e "${GREEN}PASS${NC}: $1"; PASSED=$((PASSED + 1)); }
 fail() { echo -e "${RED}FAIL${NC}: $1"; FAILED=$((FAILED + 1)); }
 skip() { echo -e "${YELLOW}SKIP${NC}: $1"; SKIPPED=$((SKIPPED + 1)); }
 
+run_offline_contracts() {
+  step "Offline Contract Gates"
+  if (cd "$ROOT" && npm run test:offline-contracts 2>&1); then
+    pass "offline contract gates"
+  else
+    fail "offline contract gates"
+    return 1
+  fi
+}
+
 # ─── Native Build & Test ────────────────────────────────────────────────────
 run_native() {
   step "Native CMake Configure"
@@ -119,7 +129,12 @@ run_npm() {
   fi
 
   step "NPM: Install dependencies"
-  (cd "$ROOT/wasm" && npm install --ignore-scripts 2>&1) || true
+  if (cd "$ROOT/wasm" && npm install --ignore-scripts 2>&1); then
+    pass "npm dependencies"
+  else
+    fail "npm dependencies"
+    return
+  fi
 
   step "NPM: Run tests"
   if (cd "$ROOT/wasm" && npm test 2>&1); then
@@ -137,6 +152,12 @@ run_npm() {
 }
 
 # ─── Dispatch ────────────────────────────────────────────────────────────────
+# Contract gates are artifact-independent and must pass before any build mode starts.
+if ! run_offline_contracts; then
+  echo -e "\n${RED}CI FAILED${NC}"
+  exit 1
+fi
+
 case "$MODE" in
   all)
     run_native

@@ -2,7 +2,7 @@
  * HD Wallet WASM - BIP-39 Tests
  */
 
-import init, { Language } from '../src/index.mjs';
+import init, { ErrorCode, Language } from '../src/index.mjs';
 import { test, testAsync, skip, assert, assertEqual, bytesToHex, hexToBytes } from './test_all.mjs';
 
 // Initialize WASM module. Failure is fatal because this suite requires it.
@@ -145,5 +145,9 @@ try {
     assert(wallet.mnemonic.validate(mnemonic, Language.JAPANESE), 'Japanese mnemonic should be valid');
   });
 } catch (error) {
-  skip(japaneseTestName, `Japanese wordlist not compiled (${error.message})`);
+  if (error?.name === 'HDWalletError' && error.code === ErrorCode.NOT_SUPPORTED) {
+    skip(japaneseTestName, `Japanese wordlist not compiled (${error.message})`);
+  } else {
+    throw error;
+  }
 }

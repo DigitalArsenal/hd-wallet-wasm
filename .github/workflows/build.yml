@@ -7,9 +7,26 @@ on:
     branches: [main]
 
 jobs:
+  contracts:
+    name: Offline Contract Gates
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Run offline contract gates
+        run: npm run test:offline-contracts
+
   # Native build and tests
   native:
     name: Native Build & Test
+    needs: contracts
     runs-on: ubuntu-latest
 
     steps:
@@ -42,6 +59,7 @@ jobs:
   # WASM build with Emscripten
   wasm:
     name: WASM Build
+    needs: contracts
     runs-on: ubuntu-latest
 
     steps:
@@ -136,6 +154,7 @@ jobs:
   # Build matrix for multiple configurations
   matrix:
     name: Build Matrix
+    needs: contracts
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

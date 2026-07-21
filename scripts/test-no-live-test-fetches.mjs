@@ -17,7 +17,7 @@ const ignoredDirectories = new Set([
   'node_modules',
   'target',
 ]);
-const inspectedRoots = ['scripts', 'test', 'wasm/test', 'wallet-ui/test'];
+const inspectedRoots = ['.github/workflows', 'scripts', 'test', 'wasm/test', 'wallet-ui/test'];
 const inspectedExtensions = new Set([
   '.bash', '.c', '.cc', '.cmake', '.cpp', '.cxx', '.dart', '.go', '.h', '.hh',
   '.hpp', '.htm', '.html', '.java', '.js', '.jsx', '.kts', '.kt', '.mjs', '.cjs',
@@ -27,11 +27,11 @@ const acquisitionPatterns = [
   ['raw GitHub test data URL', /raw\.githubusercontent\.com/],
   [
     'curl invocation',
-    /(?:^|[;&|()]|\bthen\b|\bdo\b)\s*(?:command\s+|env(?:\s+[A-Za-z_]\w*=\S+)*\s+|sudo\s+)?curl\b/m,
+    /(?:^|[;&|()]|\bthen\b|\bdo\b|\brun:)\s*(?:command\s+|env(?:\s+[A-Za-z_]\w*=\S+)*\s+|sudo\s+)?curl\b/m,
   ],
   [
     'wget invocation',
-    /(?:^|[;&|()]|\bthen\b|\bdo\b)\s*(?:command\s+|env(?:\s+[A-Za-z_]\w*=\S+)*\s+|sudo\s+)?wget\b/m,
+    /(?:^|[;&|()]|\bthen\b|\bdo\b|\brun:)\s*(?:command\s+|env(?:\s+[A-Za-z_]\w*=\S+)*\s+|sudo\s+)?wget\b/m,
   ],
   ['JavaScript fetch from a network URL', /\bfetch\s*\(\s*['"`]https?:\/\//],
   ['Node HTTP request', /\bhttps?\s*\.\s*(?:get|request)\s*\([^)]*['"`]https?:\/\//s],
