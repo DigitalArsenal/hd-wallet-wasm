@@ -313,9 +313,17 @@ test('loads the exact public IIFE and two presenters without activating the wall
     publicStyle: Object.fromEntries([...document.querySelector('[data-public-client-style]').attributes]
       .map(({ name, value }) => [name, value])),
   }));
+  const { version } = JSON.parse(
+    await readFile(`${walletUiDirectory}package.json`, 'utf8'),
+  );
+  const escapedVersion = version.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  const immutablePublicAssetUrl = new RegExp(
+    `^https://static\\.spacedatanetwork\\.org/assets/hd-wallet-ui/${escapedVersion}/[a-z-]+\\.[0-9a-f]{64}\\.(?:css|js)$`,
+    'u',
+  );
   for (const [kind, resource] of Object.entries(resources)) {
     const url = resource.src ?? resource.href;
-    expect(url, kind).toMatch(/^https:\/\/static\.spacedatanetwork\.org\/assets\/hd-wallet-ui\/2\.0\.22\/[a-z-]+\.[0-9a-f]{64}\.(?:css|js)$/u);
+    expect(url, kind).toMatch(immutablePublicAssetUrl);
     expect(resource.integrity, `${kind} SRI`).toMatch(/^sha384-[A-Za-z0-9+/]+={0,2}$/u);
     expect(resource.crossorigin, `${kind} crossorigin`).toBe('anonymous');
     const response = await context.request.get(url);

@@ -125,7 +125,7 @@ describe('packed export contracts', () => {
     expect(manifest.module).toBe('./dist/compat/index.js');
     expect(manifest.types).toBe('./dist/compat/index.d.ts');
     expect(manifest.exports).toEqual(UI_EXPORTS);
-    expect(manifest.dependencies).toEqual({ 'hd-wallet-wasm': '2.0.23' });
+    expect(manifest.dependencies).toEqual({ 'hd-wallet-wasm': '2.0.24' });
     expect(manifest.sideEffects).toEqual(['./dist/client/style.css']);
     expect(manifest.scripts.prepack).toBeUndefined();
     expect(manifest.files).toEqual([
@@ -323,6 +323,9 @@ describe('release bundle isolation', () => {
   });
 
   test('wallet-origin host has exactly one content-addressed JS, CSS, and split WASM', async () => {
+    const manifest = JSON.parse(
+      await readFile(join(walletUiDirectory, 'package.json'), 'utf8'),
+    );
     const hostDirectory = join(distDirectory, 'wallet-origin-host');
     const files = await walk(hostDirectory);
     const assets = files.filter((path) => path.startsWith('assets/')).sort();
@@ -354,7 +357,10 @@ describe('release bundle isolation', () => {
     expect(html).not.toMatch(/<(?:script|img|link)[^>]+(?:src|href)=["']https?:/iu);
     expect(html).not.toMatch(/<link[^>]+rel=["'](?:preload|prefetch)["']/iu);
     expect(`${html}\n${css}`).not.toMatch(/(?:url\s*\(|@import\s+)["']?https?:/iu);
-    expect(css).toMatch(/--sdn-wallet-origin-style-ready:\s*"2\.0\.22"/u);
+    expect(css).toMatch(new RegExp(
+      `--sdn-wallet-origin-style-ready:\\s*"${escapeRegExp(manifest.version)}"`,
+      'u',
+    ));
     expect(css).toMatch(/max-width:\s*320px/u);
     expect(css).toMatch(/prefers-reduced-motion:\s*reduce/u);
     for (const path of assets.filter((path) => !path.endsWith('.wasm'))) {

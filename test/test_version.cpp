@@ -9,20 +9,23 @@ int32_t hd_get_version_minor();
 int32_t hd_get_version_patch();
 }
 
-TEST_CASE(VersionContract, VersionMacrosAre_2_0_23) {
+TEST_CASE(VersionContract, VersionMacrosMatchRelease) {
     ASSERT_EQ(2, HD_WALLET_VERSION_MAJOR);
     ASSERT_EQ(0, HD_WALLET_VERSION_MINOR);
-    ASSERT_EQ(23, HD_WALLET_VERSION_PATCH);
-    ASSERT_STR_EQ("2.0.23", HD_WALLET_VERSION_STRING);
+    ASSERT_EQ(24, HD_WALLET_VERSION_PATCH);
+    ASSERT_STR_EQ("2.0.24", HD_WALLET_VERSION_STRING);
 }
 
-TEST_CASE(VersionContract, RuntimeVersionStringIs_2_0_23) {
-    ASSERT_STR_EQ("2.0.23", hd_get_version_string());
+TEST_CASE(VersionContract, RuntimeVersionStringMatchesRelease) {
+    ASSERT_STR_EQ("2.0.24", hd_get_version_string());
 }
 
-TEST_CASE(VersionContract, RuntimeVersionIntegerIs_20023) {
+TEST_CASE(VersionContract, RuntimeVersionIntegerMatchesRelease) {
     const int runtimeVersion = hd_get_version_major() * 10000 +
                                hd_get_version_minor() * 100 +
                                hd_get_version_patch();
-    ASSERT_EQ(20023, runtimeVersion);
+    const int expectedVersion = HD_WALLET_VERSION_MAJOR * 10000 +
+                                HD_WALLET_VERSION_MINOR * 100 +
+                                HD_WALLET_VERSION_PATCH;
+    ASSERT_EQ(expectedVersion, runtimeVersion);
 }

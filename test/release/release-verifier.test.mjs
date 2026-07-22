@@ -106,7 +106,7 @@ function samplePackage(name, tarballSha512, provenanceSha256) {
     name,
     provenanceSha256,
     tarballSha512,
-    version: '2.0.23',
+    version: '2.0.24',
   };
 }
 
@@ -127,11 +127,11 @@ function sampleRecordInput() {
       sourceRelease: '2026.1',
     },
     registryReleaseSha256: SHA_E,
-    registryTag: 'sdn-candidate-2.0.23',
-    sourceTag: 'v2.0.23',
+    registryTag: 'sdn-candidate-2.0.24',
+    sourceTag: 'v2.0.24',
     uiPackage: samplePackage('hd-wallet-ui', SHA512_B, SHA_F),
-    uiDependencyVersion: '2.0.23',
-    version: '2.0.23',
+    uiDependencyVersion: '2.0.24',
+    version: '2.0.24',
     walletAssetsManifestSha256: SHA_B,
   };
 }
@@ -144,7 +144,7 @@ test('canonicalJson is deterministic RFC 8785-compatible JSON plus no whitespace
 
 test('release CLI modes are strict and mutually exclusive', () => {
   assert.deepEqual(parseArguments([
-    '--version', '2.0.23', '--source-ref', 'HEAD', '--skip-tag',
+    '--version', '2.0.24', '--source-ref', 'HEAD', '--skip-tag',
   ]), {
     emitArtifacts: null,
     evidenceRecord: null,
@@ -156,18 +156,18 @@ test('release CLI modes are strict and mutually exclusive', () => {
     skipTag: true,
     sourceRef: 'HEAD',
     tag: null,
-    version: '2.0.23',
+    version: '2.0.24',
     workflowArtifactAttestation: null,
     workflowArtifacts: null,
   });
   assert.throws(
-    () => parseArguments(['--version', '2.0.23', '--tag', 'v2.0.23', '--skip-tag']),
+    () => parseArguments(['--version', '2.0.24', '--tag', 'v2.0.24', '--skip-tag']),
     /mutually exclusive/u,
   );
-  assert.throws(() => parseArguments(['--version', '2.0.23', '--tag', 'v2.0.24']), /tag/u);
-  assert.throws(() => parseArguments(['--version', '2.0.23', '--surprise']), /unknown/u);
+  assert.throws(() => parseArguments(['--version', '2.0.24', '--tag', 'v2.0.25']), /tag/u);
+  assert.throws(() => parseArguments(['--version', '2.0.24', '--surprise']), /unknown/u);
   assert.throws(
-    () => parseArguments(['--version', '2.0.23', '--workflow-artifacts', '/tmp/a']),
+    () => parseArguments(['--version', '2.0.24', '--workflow-artifacts', '/tmp/a']),
     /expected-run-id/u,
   );
 });
@@ -226,40 +226,40 @@ test('the signed-tag provenance trust policy is canonical and fully frozen', asy
 
 test('all source and packed versions must be the reviewed pair', () => {
   const contract = {
-    cmakeVersion: '2.0.23',
+    cmakeVersion: '2.0.24',
     corePackage: {
       dependencies: { flatbuffers: '25.9.23' },
       name: 'hd-wallet-wasm',
-      version: '2.0.23',
+      version: '2.0.24',
     },
     lockCoreFlatbuffers: '25.9.23',
-    lockCoreVersion: '2.0.23',
-    lockRootVersion: '2.0.23',
-    lockUiVersion: '2.0.23',
+    lockCoreVersion: '2.0.24',
+    lockRootVersion: '2.0.24',
+    lockUiVersion: '2.0.24',
     packedCorePackage: {
       dependencies: { flatbuffers: '25.9.23' },
       name: 'hd-wallet-wasm',
-      version: '2.0.23',
+      version: '2.0.24',
     },
     packedUiPackage: {
-      dependencies: { 'hd-wallet-wasm': '2.0.23' },
+      dependencies: { 'hd-wallet-wasm': '2.0.24' },
       name: 'hd-wallet-ui',
-      version: '2.0.23',
+      version: '2.0.24',
     },
-    relayPackage: { name: '@sdn/wallet-relay', version: '2.0.23' },
-    rootPackage: { version: '2.0.23' },
+    relayPackage: { name: '@sdn/wallet-relay', version: '2.0.24' },
+    rootPackage: { version: '2.0.24' },
     uiPackage: {
-      dependencies: { 'hd-wallet-wasm': '2.0.23' },
+      dependencies: { 'hd-wallet-wasm': '2.0.24' },
       name: 'hd-wallet-ui',
-      version: '2.0.23',
+      version: '2.0.24',
     },
   };
-  assert.equal(validateVersionContract(contract, '2.0.23'), true);
+  assert.equal(validateVersionContract(contract, '2.0.24'), true);
   assert.throws(
     () => validateVersionContract({
       ...contract,
-      packedUiPackage: { ...contract.packedUiPackage, dependencies: { 'hd-wallet-wasm': '^2.0.23' } },
-    }, '2.0.23'),
+      packedUiPackage: { ...contract.packedUiPackage, dependencies: { 'hd-wallet-wasm': '^2.0.24' } },
+    }, '2.0.24'),
     /dependency/u,
   );
   assert.throws(
@@ -269,11 +269,11 @@ test('all source and packed versions must be the reviewed pair', () => {
         ...contract.packedCorePackage,
         dependencies: { flatbuffers: '^25.9.23' },
       },
-    }, '2.0.23'),
+    }, '2.0.24'),
     /flatbuffers dependency/u,
   );
   assert.throws(
-    () => validateVersionContract({ ...contract, cmakeVersion: '2.0.21' }, '2.0.23'),
+    () => validateVersionContract({ ...contract, cmakeVersion: '2.0.21' }, '2.0.24'),
     /version/u,
   );
 });
@@ -322,7 +322,7 @@ test('release record has only the immutable post-publication fields', () => {
     ['provenance trust policy', (value) => { value.provenanceTrustPolicySha256 = 'BAD'; }],
     ['gitHead', (value) => { value.corePackage.gitHead = 'f'.repeat(40); }],
     ['version', (value) => { value.uiPackage.version = '2.0.21'; }],
-    ['dependency', (value) => { value.uiDependencyVersion = '^2.0.23'; }],
+    ['dependency', (value) => { value.uiDependencyVersion = '^2.0.24'; }],
   ]) {
     const input = structuredClone(sampleRecordInput());
     mutate(input);
@@ -336,26 +336,26 @@ test('release record has only the immutable post-publication fields', () => {
 
 test('workflow artifact layout is an exact three-directory allowlist', () => {
   const entries = [
-    'npm-tarballs/hd-wallet-ui-2.0.23.tgz',
-    'npm-tarballs/hd-wallet-wasm-2.0.23.tgz',
-    'origin-service/sdn-wallet-origin-2.0.23-node24-linux-x64.tar.gz',
-    'origin-service/sdn-wallet-origin-2.0.23-node24-linux-x64.tar.gz.sha256',
+    'npm-tarballs/hd-wallet-ui-2.0.24.tgz',
+    'npm-tarballs/hd-wallet-wasm-2.0.24.tgz',
+    'origin-service/sdn-wallet-origin-2.0.24-node24-linux-x64.tar.gz',
+    'origin-service/sdn-wallet-origin-2.0.24-node24-linux-x64.tar.gz.sha256',
     'wallet-release-report/provenance-trust.v1.json',
     'wallet-release-report/release-report.v1.json',
     'wallet-release-report/release/wallet-assets.v1.json',
-    'wallet-release-report/release/static/assets/hd-wallet-ui/2.0.23/client.js',
+    'wallet-release-report/release/static/assets/hd-wallet-ui/2.0.24/client.js',
   ];
-  assert.equal(validateWorkflowArtifactEntries(entries, '2.0.23'), true);
+  assert.equal(validateWorkflowArtifactEntries(entries, '2.0.24'), true);
   assert.throws(
-    () => validateWorkflowArtifactEntries([...entries, 'surprise/file'], '2.0.23'),
+    () => validateWorkflowArtifactEntries([...entries, 'surprise/file'], '2.0.24'),
     /unexpected artifact/u,
   );
   assert.throws(
-    () => validateWorkflowArtifactEntries([...entries, 'npm-tarballs/nested/evil.tgz'], '2.0.23'),
+    () => validateWorkflowArtifactEntries([...entries, 'npm-tarballs/nested/evil.tgz'], '2.0.24'),
     /nested/u,
   );
   assert.throws(
-    () => validateWorkflowArtifactEntries(entries.filter((path) => !path.includes('hd-wallet-ui')), '2.0.23'),
+    () => validateWorkflowArtifactEntries(entries.filter((path) => !path.includes('hd-wallet-ui')), '2.0.24'),
     /missing/u,
   );
 });
@@ -363,9 +363,9 @@ test('workflow artifact layout is an exact three-directory allowlist', () => {
 test('workflow artifact report binds run, tag, commit, platform, toolchain, and hashes', () => {
   const report = {
     artifacts: {
-      coreTarball: { path: 'npm-tarballs/hd-wallet-wasm-2.0.23.tgz', sha256: SHA_A, sha512: SHA512_A },
-      originService: { path: 'origin-service/sdn-wallet-origin-2.0.23-node24-linux-x64.tar.gz', sha256: SHA_B, sha512: SHA512_B },
-      uiTarball: { path: 'npm-tarballs/hd-wallet-ui-2.0.23.tgz', sha256: SHA_C, sha512: SHA512_B },
+      coreTarball: { path: 'npm-tarballs/hd-wallet-wasm-2.0.24.tgz', sha256: SHA_A, sha512: SHA512_A },
+      originService: { path: 'origin-service/sdn-wallet-origin-2.0.24-node24-linux-x64.tar.gz', sha256: SHA_B, sha512: SHA512_B },
+      uiTarball: { path: 'npm-tarballs/hd-wallet-ui-2.0.24.tgz', sha256: SHA_C, sha512: SHA512_B },
     },
     commit: COMMIT,
     correlationId: '0123456789abcdef0123456789abcdef',
@@ -375,9 +375,9 @@ test('workflow artifact report binds run, tag, commit, platform, toolchain, and 
     runAttempt: '2',
     runId: '12345',
     schemaVersion: 1,
-    sourceTag: 'v2.0.23',
+    sourceTag: 'v2.0.24',
     toolchain: EXPECTED_TOOLCHAIN,
-    version: '2.0.23',
+    version: '2.0.24',
     workflow: '.github/workflows/npm-publish.yml',
   };
   assert.equal(validateWorkflowArtifactReport(report, {
@@ -385,8 +385,8 @@ test('workflow artifact report binds run, tag, commit, platform, toolchain, and 
     correlationId: report.correlationId,
     runAttempt: '2',
     runId: '12345',
-    sourceTag: 'v2.0.23',
-    version: '2.0.23',
+    sourceTag: 'v2.0.24',
+    version: '2.0.24',
     provenanceTrustPolicySha256: SHA_C,
   }), true);
   assert.throws(
@@ -395,8 +395,8 @@ test('workflow artifact report binds run, tag, commit, platform, toolchain, and 
       correlationId: report.correlationId,
       runAttempt: '2',
       runId: '12345',
-      sourceTag: 'v2.0.23',
-      version: '2.0.23',
+      sourceTag: 'v2.0.24',
+      version: '2.0.24',
     }),
     /run ID/u,
   );
@@ -406,8 +406,8 @@ test('workflow artifact report binds run, tag, commit, platform, toolchain, and 
       correlationId: report.correlationId,
       runAttempt: '2',
       runId: '12345',
-      sourceTag: 'v2.0.23',
-      version: '2.0.23',
+      sourceTag: 'v2.0.24',
+      version: '2.0.24',
     }),
     /platform/u,
   );
@@ -537,7 +537,7 @@ test('release-critical workflows are dispatch-safe and fully pinned', async () =
   );
   assert.throws(
     () => validatePublishWorkflow(publishYaml.replace(
-      '${{ runner.temp }}/sdn-wallet-artifacts/origin-service/sdn-wallet-origin-2.0.23-node24-linux-x64.tar.gz',
+      '${{ runner.temp }}/sdn-wallet-artifacts/origin-service/sdn-wallet-origin-2.0.24-node24-linux-x64.tar.gz',
       '${{ runner.temp }}/sdn-wallet-artifacts/origin-service/*.tar.gz',
     )),
     /attestation subjects/u,
