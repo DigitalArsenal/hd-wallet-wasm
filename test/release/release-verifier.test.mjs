@@ -431,6 +431,20 @@ test('OpenSSL acquisition is digest-bound and extracted from a fresh safe tree',
     () => validateOpenSslBuildScript(script.replaceAll('reject_unsafe_archive', 'trust_archive')),
     /archive safety/u,
   );
+  assert.throws(
+    () => validateOpenSslBuildScript(script.replace(
+      "OPENSSL_INSTALL_PREFIX='/hd-wallet-build/openssl-3.0.9'",
+      "OPENSSL_INSTALL_PREFIX='${STAGED_DIST}'",
+    )),
+    /deterministic prefix/u,
+  );
+  assert.throws(
+    () => validateOpenSslBuildScript(script.replaceAll(
+      'reject_ephemeral_paths',
+      'permit_ephemeral_paths',
+    )),
+    /ephemeral path/u,
+  );
 });
 
 test('local CI has one full fail-closed path and no skip modes', async () => {
@@ -441,6 +455,10 @@ test('local CI has one full fail-closed path and no skip modes', async () => {
   assert.throws(
     () => validateCiLocalScript(script.replace('npm run test:browser', ': # browser omitted')),
     /test:browser/u,
+  );
+  assert.throws(
+    () => validateCiLocalScript(script.replace('npm run build:docs', ': # docs omitted')),
+    /build:docs/u,
   );
   assert.throws(
     () => validateCiLocalScript(`${script}\nskip optional\n`),

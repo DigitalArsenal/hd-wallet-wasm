@@ -9,6 +9,8 @@ readonly DIST_DIR="${SCRIPT_DIR}/dist"
 readonly OPENSSL_VERSION='3.0.9'
 readonly OPENSSL_SHA256='eb1ab04781474360f77c318ab89d8c5a03abc38e63d65a603cabbf1b00a1dc90'
 readonly OPENSSL_URL="https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz"
+readonly OPENSSL_INSTALL_PREFIX='/hd-wallet-build/openssl-3.0.9'
+readonly OPENSSL_OPENSSLDIR="${OPENSSL_INSTALL_PREFIX}/ssl"
 readonly EMSDK_DIR="${SCRIPT_DIR}/../build-wasm/_deps/emsdk-src"
 readonly EMSCRIPTEN_DIR="${EMSDK_DIR}/upstream/emscripten"
 
@@ -135,8 +137,8 @@ configure_and_build() {
   mkdir -p "${STAGED_DIST}"
   cd "${SOURCE_DIR}"
   ./Configure linux-generic32 \
-    --prefix="${STAGED_DIST}" \
-    --openssldir="${STAGED_DIST}/ssl" \
+    --prefix="${OPENSSL_INSTALL_PREFIX}" \
+    --openssldir="${OPENSSL_OPENSSLDIR}" \
     no-asm \
     no-threads \
     no-shared \
@@ -149,6 +151,19 @@ configure_and_build() {
     no-ui-console \
     enable-fips
   emmake make -j"${jobs}" build_libs
+}
+
+reject_ephemeral_paths() {
+  local archive
+  for archive in "${SOURCE_DIR}/libcrypto.a" "${SOURCE_DIR}/providers/fips.a"; do
+    [[ -f "${archive}" ]] || continue
+    if LC_ALL=C grep -aF -- "${TEMP_ROOT}" "${archive}" >/dev/null \
+        || LC_ALL=C grep -aF -- 'hd-wallet-openssl.' "${archive}" >/dev/null; then
+      die "OpenSSL output embeds an ephemeral build path: ${archive}"
+    fi
+  done
+  LC_ALL=C grep -aF -- "${OPENSSL_INSTALL_PREFIX}" "${SOURCE_DIR}/libcrypto.a" >/dev/null \
+    || die 'OpenSSL output does not contain the deterministic install prefix'
 }
 
 stage_output() {
@@ -175,6 +190,7 @@ main() {
   readonly STAGED_DIST
   prepare_verified_source
   configure_and_build
+  reject_ephemeral_paths
   stage_output
   log "verified OpenSSL ${OPENSSL_VERSION} WebAssembly output installed at ${DIST_DIR}"
 }

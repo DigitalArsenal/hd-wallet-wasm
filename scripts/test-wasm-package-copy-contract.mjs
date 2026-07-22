@@ -57,7 +57,9 @@ assert.doesNotMatch(localCi, /\b(?:quick|native|wasm|npm)\)\s*$/mu);
 assert.doesNotMatch(localCi, /cp\s+[^\n]*build[^\n]*wasm\/dist/u);
 assert.match(packageJson.scripts?.['build:release'] ?? '', /npm run build:openssl-fips/u);
 assert.match(packageJson.scripts?.['build:release'] ?? '', /npm run configure:wasm/u);
+assert.match(packageJson.scripts?.['build:release'] ?? '', /npm run verify:build-paths/u);
 assert.match(packageJson.scripts?.['build:release'] ?? '', /npm run build:wallet-assets/u);
+assert.equal(packageJson.scripts?.['verify:build-paths'], 'node scripts/verify-build-paths.mjs');
 assert.equal(
   uiPackageJson.scripts?.test,
   'vitest run --no-file-parallelism',

@@ -19,7 +19,7 @@
     "build:docs": "npm --workspace hd-wallet-ui run build:docs",
     "build:openssl-fips": "./openssl-fips/build.sh",
     "configure:wasm": "emcmake cmake -B build-wasm -S . -DCMAKE_BUILD_TYPE=Release -DHD_WALLET_BUILD_WASM=ON -DHD_WALLET_USE_OPENSSL=ON",
-    "build:release": "npm run build:openssl-fips && npm run configure:wasm && npm --workspace hd-wallet-wasm run build && npm --workspace hd-wallet-ui run build:release && npm --workspace @sdn/wallet-relay run build && npm run build:wallet-assets",
+    "build:release": "npm run build:openssl-fips && npm run configure:wasm && npm --workspace hd-wallet-wasm run build && npm run verify:build-paths && npm --workspace hd-wallet-ui run build:release && npm --workspace @sdn/wallet-relay run build && npm run build:wallet-assets",
     "build:wallet-assets": "node scripts/build-wallet-assets.mjs --version 2.0.26",
     "test": "npm run test:offline-contracts && npm run test:release && npm run test:native && npm run test:wasm && npm run test:wallet-ui && npm run test:relay",
     "test:offline-contracts": "node scripts/verify-fixtures.mjs && node --test scripts/test-no-live-test-fetches.test.mjs && node scripts/test-no-live-test-fetches.mjs && node scripts/test-wasm-package-copy-contract.mjs && node scripts/test-wasm-tests-fail-closed.mjs && node scripts/test-capability-skip-contract.mjs && node scripts/test-offline-contract-wiring.mjs",
@@ -27,11 +27,12 @@
     "test:wasm": "npm --workspace hd-wallet-wasm test",
     "test:wallet-ui": "npm --workspace hd-wallet-ui test",
     "test:relay": "npm --workspace @sdn/wallet-relay test",
-    "test:release": "node --test test/release/wallet-assets.test.mjs test/release/release-verifier.test.mjs test/release/origin-service-release.test.mjs test/release/better-sqlite3-prebuild.test.mjs test/release/npm-tarball-githead.test.mjs test/release/provenance-evidence.test.mjs test/release/provenance-inputs.test.mjs test/release/workflow-artifact-attestation.test.mjs",
+    "test:release": "node --test test/release/wallet-assets.test.mjs test/release/release-verifier.test.mjs test/release/build-paths.test.mjs test/release/origin-service-release.test.mjs test/release/better-sqlite3-prebuild.test.mjs test/release/npm-tarball-githead.test.mjs test/release/provenance-evidence.test.mjs test/release/provenance-inputs.test.mjs test/release/workflow-artifact-attestation.test.mjs",
     "test:browser": "npm --workspace hd-wallet-ui run test:browser",
     "test:sdn-plugin": "npm --workspace hd-wallet-wasm run test:sdn-plugin",
     "test:packed": "node scripts/test-packed-consumers.mjs",
     "verify:release": "node scripts/verify-release.mjs",
+    "verify:build-paths": "node scripts/verify-build-paths.mjs",
     "verify:wallet-assets": "node scripts/verify-wallet-assets.mjs --version 2.0.26"
   },
   "devDependencies": {

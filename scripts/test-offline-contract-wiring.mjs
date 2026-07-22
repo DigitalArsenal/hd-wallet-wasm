@@ -30,7 +30,8 @@ assert(
 const install = localCi.indexOf('npm ci');
 const contracts = localCi.indexOf('npm run test:offline-contracts');
 const build = localCi.indexOf('npm run build:release');
-assert(install !== -1 && install < contracts && contracts < build);
+const docs = localCi.indexOf('npm run build:docs');
+assert(install !== -1 && install < contracts && contracts < build && build < docs);
 assert.match(localCi, /set -euo pipefail/u);
 assert.doesNotMatch(localCi.replaceAll('--skip-tag', ''), /\bskip(?:ped)?\b|\bquick\b|\bMODE\b/iu);
 assert.doesNotMatch(localCi, /npm install[^\n]*\|\|\s*true/u);

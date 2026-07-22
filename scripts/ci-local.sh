@@ -14,6 +14,7 @@ npm ci --ignore-scripts
 node scripts/acquire-better-sqlite3-prebuild.mjs
 npm run test:offline-contracts
 npm run build:release
+npm run build:docs
 npm run test:release
 npm run test:native
 npm run test:wasm

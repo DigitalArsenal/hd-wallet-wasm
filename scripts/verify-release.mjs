@@ -467,6 +467,16 @@ export function validateOpenSslBuildScript(script) {
   if (!script.includes(
     "OPENSSL_SHA256='eb1ab04781474360f77c318ab89d8c5a03abc38e63d65a603cabbf1b00a1dc90'",
   )) fail('OpenSSL SHA-256 is not frozen');
+  if (!script.includes("OPENSSL_INSTALL_PREFIX='/hd-wallet-build/openssl-3.0.9'")
+      || !script.includes('--prefix="${OPENSSL_INSTALL_PREFIX}"')
+      || !script.includes('--openssldir="${OPENSSL_OPENSSLDIR}"')) {
+    fail('OpenSSL build does not use the deterministic prefix');
+  }
+  if (!script.includes('reject_ephemeral_paths')
+      || !script.includes("grep -aF -- 'hd-wallet-openssl.'")
+      || !script.includes('grep -aF -- "${TEMP_ROOT}"')) {
+    fail('OpenSSL ephemeral path rejection is incomplete');
+  }
   for (const text of [
     'mktemp -d',
     'mktemp',
@@ -481,6 +491,9 @@ export function validateOpenSslBuildScript(script) {
     '--no-same-permissions',
     'rm -rf -- "${BUILD_DIR}" "${DIST_DIR}"',
   ]) if (!script.includes(text)) fail(`OpenSSL archive safety contract is missing ${text}`);
+  if (!script.includes('reject_ephemeral_paths\n  stage_output')) {
+    fail('OpenSSL ephemeral path rejection must run before staging');
+  }
   if (/already downloaded|cache-hit|reuse/u.test(script)) {
     fail('OpenSSL build script may not reuse an unverified directory');
   }
@@ -499,6 +512,7 @@ export function validateCiLocalScript(script) {
     'node scripts/acquire-better-sqlite3-prebuild.mjs',
     'npm run test:offline-contracts',
     'npm run build:release',
+    'npm run build:docs',
     'npm run test:release',
     'npm run test:native',
     'npm run test:wasm',
