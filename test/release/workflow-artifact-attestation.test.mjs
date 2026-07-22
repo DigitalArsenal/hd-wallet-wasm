@@ -233,10 +233,11 @@ test('verifies both immutable snapshots with exact gh identity flags before retu
       '--deny-self-hosted-runners',
       '--repo', REPOSITORY,
       '--signer-digest', COMMIT,
-      '--signer-workflow', `${REPOSITORY}/${WORKFLOW}`,
       '--source-digest', COMMIT,
       '--source-ref', REF,
     ]) assert.ok(call.includes(required), `missing exact gh argument: ${required}`);
+    assert.equal(call.includes('--signer-workflow'), false,
+      'gh rejects --signer-workflow when exact --cert-identity is present');
     assert.equal(basename(call[call.indexOf('--bundle') + 1]), 'workflow-artifacts.sigstore.json');
     assert.equal(basename(call[call.indexOf('--custom-trusted-root') + 1]),
       'public-good-trusted-root.json');

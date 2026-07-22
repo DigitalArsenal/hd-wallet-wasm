@@ -320,7 +320,6 @@ function ghArguments({ artifactPath, bundlePath, sourceCommit, sourceTag, truste
     '--predicate-type', SLSA_PREDICATE,
     '--repo', REPOSITORY,
     '--signer-digest', sourceCommit,
-    '--signer-workflow', `${REPOSITORY}/${WORKFLOW}`,
     '--source-digest', sourceCommit,
     '--source-ref', ref,
   ];
