@@ -12,6 +12,9 @@ const publishCi = readFileSync(
 );
 const cmake = readFileSync(path.join(repositoryRoot, 'CMakeLists.txt'), 'utf8');
 const packageJson = JSON.parse(readFileSync(path.join(repositoryRoot, 'package.json'), 'utf8'));
+const uiPackageJson = JSON.parse(
+  readFileSync(path.join(repositoryRoot, 'wallet-ui/package.json'), 'utf8'),
+);
 
 const cryptoppSource = Object.freeze({
   commit: '843d74c7c97f9e19a615b8ff3c0ca06599ca501b',
@@ -55,6 +58,11 @@ assert.doesNotMatch(localCi, /cp\s+[^\n]*build[^\n]*wasm\/dist/u);
 assert.match(packageJson.scripts?.['build:release'] ?? '', /npm run build:openssl-fips/u);
 assert.match(packageJson.scripts?.['build:release'] ?? '', /npm run configure:wasm/u);
 assert.match(packageJson.scripts?.['build:release'] ?? '', /npm run build:wallet-assets/u);
+assert.equal(
+  uiPackageJson.scripts?.test,
+  'vitest run --no-file-parallelism',
+  'UI test files must not race while rebuilding the shared dist directory',
+);
 assert.match(
   packageJson.scripts?.['configure:wasm'] ?? '',
   /emcmake cmake -B build-wasm[\s\S]*-DHD_WALLET_USE_OPENSSL=ON/u,
@@ -145,7 +153,7 @@ assert.match(
 );
 for (const packageName of ['hd-wallet-wasm', 'hd-wallet-ui']) {
   assert.ok(
-    publishCi.includes(`$artifact_root/npm-tarballs/${packageName}-2.0.22.tgz`),
+    publishCi.includes(`$artifact_root/npm-tarballs/${packageName}-2.0.23.tgz`),
     `publish workflow must consume the exact ${packageName} tarball`,
   );
 }

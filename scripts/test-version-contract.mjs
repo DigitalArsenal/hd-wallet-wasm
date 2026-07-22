@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const expectedVersion = '2.0.22';
+const expectedVersion = '2.0.23';
 const [expectedVersionMajor, expectedVersionMinor, expectedVersionPatch] = expectedVersion
   .split('.')
   .map(Number);
@@ -56,7 +56,7 @@ const expectedWorkspaceLockMetadata = {
     version: expectedVersion,
     license: 'Apache-2.0',
     dependencies: {
-      flatbuffers: '^25.2.10',
+      flatbuffers: '25.9.23',
     },
     devDependencies: {
       '@types/node': '^20.0.0',
@@ -130,6 +130,11 @@ assert.equal(
   'UI must depend on the exact workspace version of hd-wallet-wasm',
 );
 assert.deepEqual(uiPackage.dependencies, { 'hd-wallet-wasm': expectedVersion });
+assert.equal(
+  uiPackage.scripts?.test,
+  'vitest run --no-file-parallelism',
+  'UI tests that rebuild shared dist output must run files serially',
+);
 assert.equal(uiPackage.devDependencies?.['@playwright/test'], '1.61.1');
 assert.equal(rootPackage.devDependencies?.esbuild, '0.21.5');
 assert.equal(rootPackage.devDependencies?.typescript, '5.9.2');

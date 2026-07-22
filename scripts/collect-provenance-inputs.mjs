@@ -33,7 +33,7 @@ import {
 } from './verify-provenance-evidence.mjs';
 
 const PACKAGE_NAMES = Object.freeze(['hd-wallet-ui', 'hd-wallet-wasm']);
-const RELEASE_VERSION = '2.0.22';
+const RELEASE_VERSION = '2.0.23';
 const NPM_VERSION = '11.16.0';
 const NPM_REGISTRY = 'https://registry.npmjs.org/';
 const TUF_BOOTSTRAP_ROOT_VERSION = 14;
