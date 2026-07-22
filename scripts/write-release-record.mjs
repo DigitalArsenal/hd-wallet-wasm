@@ -234,7 +234,7 @@ function parseCli(arguments_) {
     '--workflow-artifact-attestation',
   ]) if (!values.has(required)) throw new Error(`missing required argument: ${required}`);
   const sourceTag = values.get('--source-tag');
-  if (sourceTag !== 'v2.0.24') throw new Error('source tag must be v2.0.24');
+  if (sourceTag !== 'v2.0.25') throw new Error('source tag must be v2.0.25');
   const correlation = values.get('--expected-correlation');
   if (!/^[0-9a-f]{32}$/u.test(correlation)) throw new Error('expected correlation is invalid');
   const runId = values.get('--expected-run-id');
@@ -359,7 +359,7 @@ async function main() {
     expectedRunAttempt: runAttempt,
     expectedRunId: options.runId,
     tag: options.sourceTag,
-    version: '2.0.24',
+    version: '2.0.25',
     workflowArtifactAttestation: options.workflowArtifactAttestation,
   }, commit);
   if (report.provenanceTrustPolicySha256 !== trustPolicySha256) {
@@ -384,14 +384,14 @@ async function main() {
   }
 
   const registryRecords = {
-    'hd-wallet-ui': npmView('hd-wallet-ui', '2.0.24'),
-    'hd-wallet-wasm': npmView('hd-wallet-wasm', '2.0.24'),
+    'hd-wallet-ui': npmView('hd-wallet-ui', '2.0.25'),
+    'hd-wallet-wasm': npmView('hd-wallet-wasm', '2.0.25'),
   };
   const packageInput = (name, artifactName) => {
     const registry = registryRecords[name];
     const packageEvidence = evidence.packages.find((entry) => entry.name === name);
     const artifact = report.artifacts?.[artifactName];
-    if (!packageEvidence || !artifact || registry.version !== '2.0.24'
+    if (!packageEvidence || !artifact || registry.version !== '2.0.25'
         || registry.gitHead !== commit || registry.dist?.integrity !== packageEvidence.integrity
         || artifact.sha512 !== packageEvidence.tarball?.sha512) {
       throw new Error(`registry/artifact/provenance mismatch for ${name}`);
@@ -446,7 +446,7 @@ async function main() {
     sourceTag: options.sourceTag,
     uiDependencyVersion: report.packages?.ui?.dependency?.['hd-wallet-wasm'],
     uiPackage: packageInput('hd-wallet-ui', 'uiTarball'),
-    version: '2.0.24',
+    version: '2.0.25',
     walletAssetsManifestSha256: shaHex(walletAssetsBytes, 'sha256'),
   });
   const bytes = `${canonicalJson(record)}\n`;

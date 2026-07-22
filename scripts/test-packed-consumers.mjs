@@ -18,7 +18,9 @@ const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryDirectory = resolve(scriptDirectory, '..');
 const coreDirectory = join(repositoryDirectory, 'wasm');
 const uiDirectory = join(repositoryDirectory, 'wallet-ui');
+const flatbuffersDirectory = join(repositoryDirectory, 'node_modules', 'flatbuffers');
 const npmExecutable = process.env.npm_execpath;
+let isolatedNpmCacheDirectory;
 
 const npmVersion = typeof npmExecutable === 'string'
   ? JSON.parse(await readFile(resolve(dirname(npmExecutable), '..', 'package.json'), 'utf8')).version
@@ -95,6 +97,9 @@ function runNpm(arguments_, options = {}) {
       npm_config_fund: 'false',
       npm_config_offline: 'true',
       npm_config_update_notifier: 'false',
+      ...(isolatedNpmCacheDirectory
+        ? { npm_config_cache: isolatedNpmCacheDirectory }
+        : {}),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
     ...options,
@@ -143,9 +148,11 @@ const temporaryDirectory = await mkdtemp(join(tmpdir(), 'hd-wallet-packed-consum
 try {
   const packDirectory = join(temporaryDirectory, 'packs');
   const projectDirectory = join(temporaryDirectory, 'project');
+  isolatedNpmCacheDirectory = join(temporaryDirectory, 'npm-cache');
   await Promise.all([
     mkdir(packDirectory, { recursive: true }),
     mkdir(projectDirectory, { recursive: true }),
+    mkdir(isolatedNpmCacheDirectory, { recursive: true }),
   ]);
 
   const uiDistFiles = (await walk(join(uiDirectory, 'dist')))
@@ -165,8 +172,15 @@ try {
   const expectedUiFiles = [...UI_FIXED_FILES, ...uiHostAssets].sort();
   const corePack = pack(coreDirectory, packDirectory);
   const uiPack = pack(uiDirectory, packDirectory);
+  const flatbuffersPack = pack(flatbuffersDirectory, packDirectory);
   assertPackageInventory(corePack.files, CORE_FILES, 'core');
   assertPackageInventory(uiPack.files, expectedUiFiles, 'UI');
+  const [sourceCoreManifest, sourceFlatbuffersManifest] = await Promise.all([
+    readFile(join(coreDirectory, 'package.json'), 'utf8').then(JSON.parse),
+    readFile(join(flatbuffersDirectory, 'package.json'), 'utf8').then(JSON.parse),
+  ]);
+  assert.equal(sourceFlatbuffersManifest.name, 'flatbuffers');
+  assert.equal(sourceFlatbuffersManifest.version, sourceCoreManifest.dependencies.flatbuffers);
 
   await writeFile(join(projectDirectory, 'package.json'), JSON.stringify({
     name: 'sdn-wallet-packed-consumer',
@@ -180,6 +194,7 @@ try {
     '--no-fund',
     '--offline',
     '--omit=dev',
+    flatbuffersPack.tarball,
     corePack.tarball,
     uiPack.tarball,
   ], { cwd: projectDirectory });
@@ -202,7 +217,7 @@ try {
   const uiManifest = JSON.parse(await readFile(join(installedUi, 'package.json'), 'utf8'));
   assert.equal(JSON.stringify(coreManifest).includes('workspace:'), false);
   assert.equal(JSON.stringify(uiManifest).includes('workspace:'), false);
-  assert.deepEqual(uiManifest.dependencies, { 'hd-wallet-wasm': '2.0.24' });
+  assert.deepEqual(uiManifest.dependencies, { 'hd-wallet-wasm': '2.0.25' });
   assert.equal(uiManifest.scripts?.prepack, undefined);
 
   const [coreReadme, uiReadme] = await Promise.all([

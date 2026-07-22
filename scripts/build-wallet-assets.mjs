@@ -18,7 +18,7 @@ import vm from 'node:vm';
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const defaultRepositoryDirectory = resolve(scriptDirectory, '..');
-const RELEASE_VERSION = '2.0.24';
+const RELEASE_VERSION = '2.0.25';
 const STATIC_URL_PREFIX = `https://static.spacedatanetwork.org/assets/hd-wallet-ui/${RELEASE_VERSION}/`;
 const CALLBACK_IDENTITY = 'sdn.wallet.callback.v1';
 const SHA256 = /^[0-9a-f]{64}$/u;
