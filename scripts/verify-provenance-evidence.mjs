@@ -11,7 +11,7 @@ import { pathToFileURL } from 'node:url';
 import { TextDecoder } from 'node:util';
 
 const SCHEMA_VERSION = 1;
-const RELEASE_VERSION = '2.0.26';
+const RELEASE_VERSION = '2.0.27';
 const PACKAGE_NAMES = Object.freeze(['hd-wallet-ui', 'hd-wallet-wasm']);
 const NPM_REGISTRY = 'https://registry.npmjs.org/';
 const EXPECTED_REPOSITORY = 'https://github.com/DigitalArsenal/hd-wallet-wasm';
@@ -19,7 +19,7 @@ const EXPECTED_REPOSITORY_ID = '1142529413';
 const EXPECTED_REPOSITORY_OWNER_ID = '29587475';
 const EXPECTED_OIDC_ISSUER = 'https://token.actions.githubusercontent.com';
 const EXPECTED_WORKFLOW = 'npm-publish.yml';
-const EXPECTED_SOURCE_TAG = 'v2.0.26';
+const EXPECTED_SOURCE_TAG = 'v2.0.27';
 const PROVENANCE_PREDICATE = 'https://slsa.dev/provenance/v1';
 const PUBLISH_PREDICATE = 'https://github.com/npm/attestation/tree/main/specs/publish/v0.1';
 const STATEMENT_TYPE = 'https://in-toto.io/Statement/v1';
@@ -1690,7 +1690,14 @@ function requireAuditRow(value, name) {
 function selectAttestations(value, name) {
   const attestations = requireArray(value, `${name} attestation bundles`);
   attestations.forEach((entry, index) => {
-    requireExactKeys(entry, ['bundle', 'predicateType'], `${name} attestation bundle ${index}`);
+    requireExactKeys(
+      entry,
+      ['bundle', 'predicateType', 'signedAccessSignatureUrl'],
+      `${name} attestation bundle ${index}`,
+    );
+    if (entry.signedAccessSignatureUrl !== '') {
+      fail(`${name} attestation bundle ${index} signed access signature URL must be empty`);
+    }
     requireRecord(entry.bundle, `${name} attestation bundle ${index}.bundle`);
   });
   const predicates = attestations.map(({ predicateType }) => predicateType).sort();

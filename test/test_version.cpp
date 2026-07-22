@@ -13,11 +13,11 @@ TEST_CASE(VersionContract, VersionMacrosMatchRelease) {
     ASSERT_EQ(2, HD_WALLET_VERSION_MAJOR);
     ASSERT_EQ(0, HD_WALLET_VERSION_MINOR);
     ASSERT_EQ(26, HD_WALLET_VERSION_PATCH);
-    ASSERT_STR_EQ("2.0.26", HD_WALLET_VERSION_STRING);
+    ASSERT_STR_EQ("2.0.27", HD_WALLET_VERSION_STRING);
 }
 
 TEST_CASE(VersionContract, RuntimeVersionStringMatchesRelease) {
-    ASSERT_STR_EQ("2.0.26", hd_get_version_string());
+    ASSERT_STR_EQ("2.0.27", hd_get_version_string());
 }
 
 TEST_CASE(VersionContract, RuntimeVersionIntegerMatchesRelease) {

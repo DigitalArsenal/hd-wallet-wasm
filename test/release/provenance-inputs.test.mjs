@@ -105,9 +105,9 @@ function signLogEntry(entry) {
 function buildPublishBundle({ integratedTime, name, sha512 }) {
   const statement = {
     _type: 'https://in-toto.io/Statement/v0.1',
-    predicate: { name, registry: 'https://registry.npmjs.org', version: '2.0.26' },
+    predicate: { name, registry: 'https://registry.npmjs.org', version: '2.0.27' },
     predicateType: PUBLISH_PREDICATE,
-    subject: [{ digest: { sha512 }, name: `pkg:npm/${name}@2.0.26` }],
+    subject: [{ digest: { sha512 }, name: `pkg:npm/${name}@2.0.27` }],
   };
   const payloadType = 'application/vnd.in-toto+json';
   const payload = Buffer.from(canonicalizeJson(statement), 'utf8');
@@ -169,6 +169,7 @@ function prepareSyntheticAudit(audit, distRecords) {
     const provenance = row.attestationBundles.find(
       ({ predicateType }) => predicateType === 'https://slsa.dev/provenance/v1',
     );
+    provenance.signedAccessSignatureUrl = '';
     signLogEntry(provenance.bundle.verificationMaterial.tlogEntries[0]);
     const integratedTime = Number(
       provenance.bundle.verificationMaterial.tlogEntries[0].integratedTime,
@@ -179,6 +180,7 @@ function prepareSyntheticAudit(audit, distRecords) {
     row.attestationBundles.push({
       bundle: buildPublishBundle({ integratedTime: integratedTime + 1, name: row.name, sha512 }),
       predicateType: PUBLISH_PREDICATE,
+      signedAccessSignatureUrl: '',
     });
   }
   return audit;
@@ -415,8 +417,8 @@ function syntheticTrustPolicy() {
       repository: 'https://github.com/DigitalArsenal/hd-wallet-wasm',
       repositoryId: '1142529413',
       repositoryOwnerId: '29587475',
-      sourceTag: 'v2.0.26',
-      version: '2.0.26',
+      sourceTag: 'v2.0.27',
+      version: '2.0.27',
       workflow: '.github/workflows/npm-publish.yml',
     },
     schemaVersion: 1,
