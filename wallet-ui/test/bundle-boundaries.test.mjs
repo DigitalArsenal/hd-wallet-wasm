@@ -125,7 +125,7 @@ describe('packed export contracts', () => {
     expect(manifest.module).toBe('./dist/compat/index.js');
     expect(manifest.types).toBe('./dist/compat/index.d.ts');
     expect(manifest.exports).toEqual(UI_EXPORTS);
-    expect(manifest.dependencies).toEqual({ 'hd-wallet-wasm': '2.0.25' });
+    expect(manifest.dependencies).toEqual({ 'hd-wallet-wasm': '2.0.26' });
     expect(manifest.sideEffects).toEqual(['./dist/client/style.css']);
     expect(manifest.scripts.prepack).toBeUndefined();
     expect(manifest.files).toEqual([

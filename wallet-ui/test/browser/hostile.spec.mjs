@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test';
 
+import { assertIntentionalDestroyAbortFailures } from './destroy-abort-policy.mjs';
+
 const FIXTURE_CONTROL_ORIGIN = 'http://127.0.0.1:18776';
 const CONSUMER_ORIGIN = 'https://spacedatanetwork.org';
 const WALLET_ORIGIN = 'https://wallet.spacedatanetwork.org';
@@ -416,7 +418,7 @@ test('keeps wallet credential controls outside a hostile consumer page', async (
   });
   expect(walletOwnership.origin).toBe(WALLET_ORIGIN);
   expect(walletOwnership.hostileOverlayPresent).toBe(false);
-  expect(walletOwnership.sentinel).toBe('"2.0.25"');
+  expect(walletOwnership.sentinel).toBe('"2.0.26"');
   expect(walletOwnership.stylesheets).toHaveLength(1);
   expect(walletOwnership.stylesheets[0]).toMatch(
     /^https:\/\/wallet\.spacedatanetwork\.org\/assets\/wallet-origin\.[0-9a-f]{64}\.css$/u,
@@ -540,11 +542,11 @@ test('keeps wallet credential controls outside a hostile consumer page', async (
   }
 
   expect(normalizedRequests(fixture, registrationBody.transactionId)).toEqual([
-    'consumer|spacedatanetwork.org|GET|/assets/hd-wallet-ui/2.0.25/consumer-instrumentation.<sha256>.js',
-    'consumer|spacedatanetwork.org|GET|/assets/hd-wallet-ui/2.0.25/consumer-presenter.<sha256>.js',
+    'consumer|spacedatanetwork.org|GET|/assets/hd-wallet-ui/2.0.26/consumer-instrumentation.<sha256>.js',
+    'consumer|spacedatanetwork.org|GET|/assets/hd-wallet-ui/2.0.26/consumer-presenter.<sha256>.js',
     'consumer|spacedatanetwork.org|GET|/harness',
-    'consumer|static.spacedatanetwork.org|GET|/assets/hd-wallet-ui/2.0.25/sdn-wallet-public-client.<sha256>.css',
-    'consumer|static.spacedatanetwork.org|GET|/assets/hd-wallet-ui/2.0.25/sdn-wallet-public-client.<sha256>.js',
+    'consumer|static.spacedatanetwork.org|GET|/assets/hd-wallet-ui/2.0.26/sdn-wallet-public-client.<sha256>.css',
+    'consumer|static.spacedatanetwork.org|GET|/assets/hd-wallet-ui/2.0.26/sdn-wallet-public-client.<sha256>.js',
     'wallet|wallet.spacedatanetwork.org|GET|/assets/wallet-origin.<sha256>.css',
     'wallet|wallet.spacedatanetwork.org|GET|/assets/wallet-origin.<sha256>.js',
     'wallet|wallet.spacedatanetwork.org|GET|/assets/wallet-origin.<sha256>.wasm',
@@ -557,13 +559,14 @@ test('keeps wallet credential controls outside a hostile consumer page', async (
   ]);
   expect(fixture.transactions).toEqual([]);
   expect(diagnostics.pageErrors).toEqual([]);
-  // The public client deliberately aborts the empty 204 response body after it
-  // has observed the cancellation status; the fixture ledger above proves the
-  // server received the exact request and removed the transaction.
-  expect(diagnostics.requestFailures).toEqual([{
-    error: 'net::ERR_ABORTED',
-    url: `${WALLET_ORIGIN}/relay/v1/transactions/${registrationBody.transactionId}/cancel`,
-  }]);
+  // Chromium reports the deliberately aborted empty cancellation body on every
+  // platform and, on Linux, also reports the in-flight poll aborted by destroy().
+  // The exact fixture ledger above proves both requests stayed on their frozen
+  // routes and that cancellation removed the transaction.
+  assertIntentionalDestroyAbortFailures(diagnostics.requestFailures, {
+    cancelUrl: `${WALLET_ORIGIN}/relay/v1/transactions/${registrationBody.transactionId}/cancel`,
+    pollUrl: `${WALLET_ORIGIN}/relay/v1/transactions/${registrationBody.transactionId}`,
+  });
   expect(diagnostics.failedResponses.every(({ status, url }) => (
     status === 404 && url === `${WALLET_ORIGIN}/favicon.ico`
   ))).toBe(true);

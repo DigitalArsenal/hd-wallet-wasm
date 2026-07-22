@@ -21,6 +21,6 @@ npm run test:wallet-ui
 npm run test:relay
 npm run test:browser
 npm run test:packed
-npm run verify:release -- --version 2.0.25 --source-ref HEAD --skip-tag
+npm run verify:release -- --version 2.0.26 --source-ref HEAD --skip-tag
 git diff --exit-code
 test -z "$(git status --porcelain=v1 --untracked-files=all)"

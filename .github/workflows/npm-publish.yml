@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       source_tag:
-        description: Exact signed source tag (v2.0.25)
+        description: Exact signed source tag (v2.0.26)
         required: true
         type: string
       dist_tag:
@@ -39,7 +39,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$SOURCE_TAG" == v2.0.25 ]]
+          [[ "$SOURCE_TAG" == v2.0.26 ]]
           [[ "$CORRELATION_ID" =~ ^[0-9a-f]{32}$ ]]
           [[ "$DIST_TAG" == "sdn-candidate-$CORRELATION_ID" ]]
           [[ "$DIST_TAG" != latest ]]
@@ -222,7 +222,7 @@ jobs:
           mkdir "$artifact_root"
           GITHUB_REF_NAME="$SOURCE_TAG"
           npm run verify:release -- \
-            --version 2.0.25 \
+            --version 2.0.26 \
             --source-ref HEAD \
             --tag "$GITHUB_REF_NAME" \
             --emit-artifacts "$artifact_root"
@@ -269,8 +269,8 @@ jobs:
           const record = JSON.parse(await readFile(recordPath, 'utf8'));
           const integrity = `sha512-${createHash('sha512')
             .update(await readFile(tarballPath)).digest('base64')}`;
-          const tarball = `https://registry.npmjs.org/${name}/-/${name}-2.0.25.tgz`;
-          if (record?.name !== name || record?.version !== '2.0.25'
+          const tarball = `https://registry.npmjs.org/${name}/-/${name}-2.0.26.tgz`;
+          if (record?.name !== name || record?.version !== '2.0.26'
               || record?.gitHead !== commit || record?.dist?.integrity !== integrity
               || record?.dist?.tarball !== tarball
               || record?.dist?.signatures?.length !== 1 || !record?.dist?.attestations) {
@@ -283,7 +283,7 @@ jobs:
             local package_name="$1"
             local record="$2"
             local error_file="$3"
-            if npm view "$package_name@2.0.25" --json > "$record" 2> "$error_file"; then
+            if npm view "$package_name@2.0.26" --json > "$record" 2> "$error_file"; then
               return 0
             fi
             npm view "$package_name@latest" version --json > /dev/null
@@ -302,11 +302,11 @@ jobs:
               cd "$package_root/project"
               npm init --yes > /dev/null
               npm install --ignore-scripts --save-exact --audit=false --fund=false \
-                "$package_name@2.0.25"
+                "$package_name@2.0.26"
               npm audit signatures --json --include-attestations \
                 > "$package_root/npm-audit-signatures.json"
             )
-            npm view "$package_name@2.0.25" dist --json > "$package_root/dist.json"
+            npm view "$package_name@2.0.26" dist --json > "$package_root/dist.json"
             node scripts/collect-provenance-inputs.mjs \
               --audit "$package_root/npm-audit-signatures.json" \
               --package "$package_name" \
@@ -344,9 +344,9 @@ jobs:
           }
 
           publish_or_verify hd-wallet-wasm \
-            "$artifact_root/npm-tarballs/hd-wallet-wasm-2.0.25.tgz"
+            "$artifact_root/npm-tarballs/hd-wallet-wasm-2.0.26.tgz"
           publish_or_verify hd-wallet-ui \
-            "$artifact_root/npm-tarballs/hd-wallet-ui-2.0.25.tgz"
+            "$artifact_root/npm-tarballs/hd-wallet-ui-2.0.26.tgz"
 
       - name: Verify final registry subjects match signed workflow artifacts
         shell: bash
@@ -361,7 +361,7 @@ jobs:
             local record="$2"
             local poll
             for poll in {1..12}; do
-              if npm view "$package_name@2.0.25" --json > "$record" 2> /dev/null; then
+              if npm view "$package_name@2.0.26" --json > "$record" 2> /dev/null; then
                 return 0
               fi
               sleep 5
@@ -375,9 +375,9 @@ jobs:
 
           node --input-type=module - \
             "$provenance_root/hd-wallet-wasm.final-registry.json" \
-            "$artifact_root/npm-tarballs/hd-wallet-wasm-2.0.25.tgz" \
+            "$artifact_root/npm-tarballs/hd-wallet-wasm-2.0.26.tgz" \
             "$provenance_root/hd-wallet-ui.final-registry.json" \
-            "$artifact_root/npm-tarballs/hd-wallet-ui-2.0.25.tgz" \
+            "$artifact_root/npm-tarballs/hd-wallet-ui-2.0.26.tgz" \
             "$commit" <<'NODE'
           import { createHash } from 'node:crypto';
           import { readFile } from 'node:fs/promises';
@@ -389,8 +389,8 @@ jobs:
             const record = JSON.parse(await readFile(recordPath, 'utf8'));
             const integrity = `sha512-${createHash('sha512')
               .update(await readFile(tarballPath)).digest('base64')}`;
-            const tarball = `https://registry.npmjs.org/${name}/-/${name}-2.0.25.tgz`;
-            if (record?.name !== name || record?.version !== '2.0.25'
+            const tarball = `https://registry.npmjs.org/${name}/-/${name}-2.0.26.tgz`;
+            if (record?.name !== name || record?.version !== '2.0.26'
                 || record?.gitHead !== commit || record?.dist?.integrity !== integrity
                 || record?.dist?.tarball !== tarball
                 || record?.dist?.signatures?.length !== 1 || !record?.dist?.attestations) {
@@ -415,20 +415,20 @@ jobs:
             cd "$final_project"
             npm init --yes > /dev/null
             npm install --ignore-scripts --save-exact --audit=false --fund=false \
-              hd-wallet-wasm@2.0.25 hd-wallet-ui@2.0.25
+              hd-wallet-wasm@2.0.26 hd-wallet-ui@2.0.26
             npm audit signatures --json --include-attestations \
               > "$provenance_root/npm-audit-signatures.json"
           )
-          npm view hd-wallet-wasm@2.0.25 dist --json \
+          npm view hd-wallet-wasm@2.0.26 dist --json \
             > "$provenance_root/hd-wallet-wasm.dist.json"
-          npm view hd-wallet-ui@2.0.25 dist --json \
+          npm view hd-wallet-ui@2.0.26 dist --json \
             > "$provenance_root/hd-wallet-ui.dist.json"
           node scripts/collect-provenance-inputs.mjs \
             --audit "$provenance_root/npm-audit-signatures.json" \
             --core-dist "$provenance_root/hd-wallet-wasm.dist.json" \
-            --core-tarball "$artifact_root/npm-tarballs/hd-wallet-wasm-2.0.25.tgz" \
+            --core-tarball "$artifact_root/npm-tarballs/hd-wallet-wasm-2.0.26.tgz" \
             --ui-dist "$provenance_root/hd-wallet-ui.dist.json" \
-            --ui-tarball "$artifact_root/npm-tarballs/hd-wallet-ui-2.0.25.tgz" \
+            --ui-tarball "$artifact_root/npm-tarballs/hd-wallet-ui-2.0.26.tgz" \
             --npm-cli "$npm_cli" \
             --trust-policy release/provenance-trust.v1.json \
             --output-directory "$provenance_root/registry-evidence"
@@ -449,7 +449,7 @@ jobs:
 
           test -s "$provenance_root/npm-provenance-evidence.v1.json"
           test -s \
-            "$artifact_root/origin-service/sdn-wallet-origin-2.0.25-node24-linux-x64.tar.gz"
+            "$artifact_root/origin-service/sdn-wallet-origin-2.0.26-node24-linux-x64.tar.gz"
           test -s "$artifact_root/wallet-release-report/release-report.v1.json"
 
       - name: Attest finalized origin service and release report
@@ -457,7 +457,7 @@ jobs:
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6
         with:
           subject-path: |
-            ${{ runner.temp }}/sdn-wallet-artifacts/origin-service/sdn-wallet-origin-2.0.25-node24-linux-x64.tar.gz
+            ${{ runner.temp }}/sdn-wallet-artifacts/origin-service/sdn-wallet-origin-2.0.26-node24-linux-x64.tar.gz
             ${{ runner.temp }}/sdn-wallet-artifacts/wallet-release-report/release-report.v1.json
 
       - name: Preserve the detached workflow attestation bundle
@@ -483,7 +483,7 @@ jobs:
           provenance_root="$RUNNER_TEMP/sdn-wallet-provenance"
 
           npm run verify:release -- \
-            --version 2.0.25 \
+            --version 2.0.26 \
             --source-ref HEAD \
             --tag "$SOURCE_TAG" \
             --workflow-artifacts "$artifact_root" \
