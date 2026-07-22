@@ -418,7 +418,7 @@ test('keeps wallet credential controls outside a hostile consumer page', async (
   });
   expect(walletOwnership.origin).toBe(WALLET_ORIGIN);
   expect(walletOwnership.hostileOverlayPresent).toBe(false);
-  expect(walletOwnership.sentinel).toBe('"2.0.27"');
+  expect(walletOwnership.sentinel).toBe('"2.0.28"');
   expect(walletOwnership.stylesheets).toHaveLength(1);
   expect(walletOwnership.stylesheets[0]).toMatch(
     /^https:\/\/wallet\.spacedatanetwork\.org\/assets\/wallet-origin\.[0-9a-f]{64}\.css$/u,
@@ -542,11 +542,11 @@ test('keeps wallet credential controls outside a hostile consumer page', async (
   }
 
   expect(normalizedRequests(fixture, registrationBody.transactionId)).toEqual([
-    'consumer|spacedatanetwork.org|GET|/assets/hd-wallet-ui/2.0.27/consumer-instrumentation.<sha256>.js',
-    'consumer|spacedatanetwork.org|GET|/assets/hd-wallet-ui/2.0.27/consumer-presenter.<sha256>.js',
+    'consumer|spacedatanetwork.org|GET|/assets/hd-wallet-ui/2.0.28/consumer-instrumentation.<sha256>.js',
+    'consumer|spacedatanetwork.org|GET|/assets/hd-wallet-ui/2.0.28/consumer-presenter.<sha256>.js',
     'consumer|spacedatanetwork.org|GET|/harness',
-    'consumer|static.spacedatanetwork.org|GET|/assets/hd-wallet-ui/2.0.27/sdn-wallet-public-client.<sha256>.css',
-    'consumer|static.spacedatanetwork.org|GET|/assets/hd-wallet-ui/2.0.27/sdn-wallet-public-client.<sha256>.js',
+    'consumer|static.spacedatanetwork.org|GET|/assets/hd-wallet-ui/2.0.28/sdn-wallet-public-client.<sha256>.css',
+    'consumer|static.spacedatanetwork.org|GET|/assets/hd-wallet-ui/2.0.28/sdn-wallet-public-client.<sha256>.js',
     'wallet|wallet.spacedatanetwork.org|GET|/assets/wallet-origin.<sha256>.css',
     'wallet|wallet.spacedatanetwork.org|GET|/assets/wallet-origin.<sha256>.js',
     'wallet|wallet.spacedatanetwork.org|GET|/assets/wallet-origin.<sha256>.wasm',

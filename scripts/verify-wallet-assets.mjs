@@ -24,7 +24,7 @@ import { buildWalletAssets } from './build-wallet-assets.mjs';
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const defaultRepositoryDirectory = resolve(scriptDirectory, '..');
-const RELEASE_VERSION = '2.0.27';
+const RELEASE_VERSION = '2.0.28';
 const STATIC_ORIGIN = 'https://static.spacedatanetwork.org';
 const STATIC_PATH_PREFIX = `/assets/hd-wallet-ui/${RELEASE_VERSION}/`;
 const STATIC_URL_PREFIX = `${STATIC_ORIGIN}${STATIC_PATH_PREFIX}`;

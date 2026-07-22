@@ -4,7 +4,7 @@
   "expected": {
     "commit": "0123456789abcdef0123456789abcdef01234567",
     "repository": "https://github.com/DigitalArsenal/hd-wallet-wasm",
-    "sourceTag": "v2.0.27",
+    "sourceTag": "v2.0.28",
     "workflow": "npm-publish.yml"
   },
   "runMetadata": {
@@ -22,22 +22,22 @@
     "packages": {
       "": {
         "dependencies": {
-          "hd-wallet-ui": "2.0.27",
-          "hd-wallet-wasm": "2.0.27"
+          "hd-wallet-ui": "2.0.28",
+          "hd-wallet-wasm": "2.0.28"
         }
       },
       "node_modules/hd-wallet-ui": {
         "integrity": "sha512-dv6LqfvHuyIG/BbIVFWeDoDLEi4ya15lt7lYAfb0IjUI+pTKZAqwQ9YBOlzWN4xveQ0n2Cme6mvuRhFs74RUPw==",
-        "resolved": "https://registry.npmjs.org/hd-wallet-ui/-/hd-wallet-ui-2.0.27.tgz",
-        "version": "2.0.27",
+        "resolved": "https://registry.npmjs.org/hd-wallet-ui/-/hd-wallet-ui-2.0.28.tgz",
+        "version": "2.0.28",
         "dependencies": {
-          "hd-wallet-wasm": "2.0.27"
+          "hd-wallet-wasm": "2.0.28"
         }
       },
       "node_modules/hd-wallet-wasm": {
         "integrity": "sha512-2Sa0Zlzf0/x5o43bQSQWgGCAQO+BrtmlPznhVK4w6gYeXP6Ap7QrJrAE9qv9hIFViBTospiA8wSOErL1kL9KNw==",
-        "resolved": "https://registry.npmjs.org/hd-wallet-wasm/-/hd-wallet-wasm-2.0.27.tgz",
-        "version": "2.0.27"
+        "resolved": "https://registry.npmjs.org/hd-wallet-wasm/-/hd-wallet-wasm-2.0.28.tgz",
+        "version": "2.0.28"
       }
     }
   },
@@ -48,7 +48,7 @@
           "provenance": {
             "predicateType": "https://slsa.dev/provenance/v1"
           },
-          "url": "https://registry.npmjs.org/-/npm/v1/attestations/hd-wallet-ui@2.0.27"
+          "url": "https://registry.npmjs.org/-/npm/v1/attestations/hd-wallet-ui@2.0.28"
         },
         "integrity": "sha512-dv6LqfvHuyIG/BbIVFWeDoDLEi4ya15lt7lYAfb0IjUI+pTKZAqwQ9YBOlzWN4xveQ0n2Cme6mvuRhFs74RUPw==",
         "signatures": [
@@ -57,7 +57,7 @@
             "sig": "MEUCIDLxtqgcLXhtdPbqhzL2+3+PTtmRo1sjuG3CLroAJWqLAiEA+9mGRwrWG5xAeFVGFOa/X3NkRGkWCAaeRK7k5YxF810="
           }
         ],
-        "tarball": "https://registry.npmjs.org/hd-wallet-ui/-/hd-wallet-ui-2.0.27.tgz"
+        "tarball": "https://registry.npmjs.org/hd-wallet-ui/-/hd-wallet-ui-2.0.28.tgz"
       },
       "registryKeys": [
         {
@@ -92,7 +92,7 @@
           "provenance": {
             "predicateType": "https://slsa.dev/provenance/v1"
           },
-          "url": "https://registry.npmjs.org/-/npm/v1/attestations/hd-wallet-wasm@2.0.27"
+          "url": "https://registry.npmjs.org/-/npm/v1/attestations/hd-wallet-wasm@2.0.28"
         },
         "integrity": "sha512-2Sa0Zlzf0/x5o43bQSQWgGCAQO+BrtmlPznhVK4w6gYeXP6Ap7QrJrAE9qv9hIFViBTospiA8wSOErL1kL9KNw==",
         "signatures": [
@@ -101,7 +101,7 @@
             "sig": "MEUCIQCetaOtq845YLUHxc7WMA+J70+B+07jeoqUFW6FEvc5PwIgLaK1pP+UU93waJoEOtWtR5RQpYYtAesiDQiII5yuLZg="
           }
         ],
-        "tarball": "https://registry.npmjs.org/hd-wallet-wasm/-/hd-wallet-wasm-2.0.27.tgz"
+        "tarball": "https://registry.npmjs.org/hd-wallet-wasm/-/hd-wallet-wasm-2.0.28.tgz"
       },
       "registryKeys": [
         {
@@ -137,14 +137,14 @@
     "verified": [
       {
         "name": "hd-wallet-ui",
-        "version": "2.0.27",
+        "version": "2.0.28",
         "location": "node_modules/hd-wallet-ui",
         "registry": "https://registry.npmjs.org/",
         "attestations": {
           "provenance": {
             "predicateType": "https://slsa.dev/provenance/v1"
           },
-          "url": "https://registry.npmjs.org/-/npm/v1/attestations/hd-wallet-ui@2.0.27"
+          "url": "https://registry.npmjs.org/-/npm/v1/attestations/hd-wallet-ui@2.0.28"
         },
         "attestationBundles": [
           {
@@ -201,14 +201,14 @@
       },
       {
         "name": "hd-wallet-wasm",
-        "version": "2.0.27",
+        "version": "2.0.28",
         "location": "node_modules/hd-wallet-wasm",
         "registry": "https://registry.npmjs.org/",
         "attestations": {
           "provenance": {
             "predicateType": "https://slsa.dev/provenance/v1"
           },
-          "url": "https://registry.npmjs.org/-/npm/v1/attestations/hd-wallet-wasm@2.0.27"
+          "url": "https://registry.npmjs.org/-/npm/v1/attestations/hd-wallet-wasm@2.0.28"
         },
         "attestationBundles": [
           {
