@@ -510,7 +510,14 @@ describe('PRF-only remembered wallet coordinator', () => {
         { alg: -7, type: 'public-key' },
         { alg: -257, type: 'public-key' },
       ],
-      rp: { id: 'wallet.spacedatanetwork.org', name: 'Space Data Network Wallet' },
+      // rp.id is deliberately ABSENT: it used to be hard-coded to
+      // wallet.spacedatanetwork.org, which made the remembered-wallet passkey
+      // path throw SecurityError on every other origin — including every
+      // self-hosted SDN node. Omitting it makes WebAuthn default to the
+      // caller's effective domain, i.e. the serving origin, which is what every
+      // deployment actually wants. A host may still supply an explicit rpId; it
+      // is then validated against the document origin.
+      rp: { name: 'Space Data Network Wallet' },
       timeout: 120000,
       user: { displayName: 'alice_01', name: 'alice_01' },
     });
@@ -523,7 +530,6 @@ describe('PRF-only remembered wallet coordinator', () => {
     expect(assertion.publicKey).toMatchObject({
       allowCredentials: [{ id: credentialId, type: 'public-key' }],
       extensions: { prf: { eval: { first: expect.any(Uint8Array) } } },
-      rpId: 'wallet.spacedatanetwork.org',
       timeout: 120000,
       userVerification: 'required',
     });

@@ -158,6 +158,8 @@ export class WalletOriginController {
     registry,
     relay,
     rng,
+    rpId,
+    rpName,
     storage,
     wasm,
     window,
@@ -179,6 +181,9 @@ export class WalletOriginController {
         return controller;
       },
       credentials: credentials ?? window?.navigator?.credentials ?? globalThis.navigator?.credentials,
+      rpHostname: window?.location?.hostname ?? globalThis?.location?.hostname,
+      rpId,
+      rpName,
       destroyHandle: (handle) => this.#destroyHandle(handle),
       module: wasm,
       now,

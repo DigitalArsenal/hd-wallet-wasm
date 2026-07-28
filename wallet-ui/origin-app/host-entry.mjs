@@ -9,7 +9,7 @@ async function startWalletOrigin() {
   if (window.top !== window) throw new Error('Wallet origin cannot run in a frame');
   const styleSentinel = getComputedStyle(document.documentElement)
     .getPropertyValue('--sdn-wallet-origin-style-ready').trim();
-  if (styleSentinel !== '"2.0.28"') throw new Error('Wallet origin style integrity failed');
+  if (styleSentinel !== '"2.0.29"') throw new Error('Wallet origin style integrity failed');
   const wasm = await initHDWallet();
   await mountWalletOriginApp({ document, mount, wasm, window });
 }

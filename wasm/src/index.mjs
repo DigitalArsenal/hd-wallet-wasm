@@ -9,7 +9,7 @@
  * - Transaction building and signing
  *
  * @module hd-wallet-wasm
- * @version 2.0.28
+ * @version 2.0.29
  */
 
 // Import aligned API for batch operations

@@ -1,6 +1,6 @@
 {
   "name": "hd-wallet-wasm-workspace",
-  "version": "2.0.28",
+  "version": "2.0.29",
   "private": true,
   "packageManager": "npm@11.16.0",
   "engines": {
@@ -20,7 +20,7 @@
     "build:openssl-fips": "./openssl-fips/build.sh",
     "configure:wasm": "emcmake cmake -B build-wasm -S . -DCMAKE_BUILD_TYPE=Release -DHD_WALLET_BUILD_WASM=ON -DHD_WALLET_USE_OPENSSL=ON",
     "build:release": "npm run build:openssl-fips && npm run configure:wasm && npm --workspace hd-wallet-wasm run build && npm run verify:build-paths && npm --workspace hd-wallet-ui run build:release && npm --workspace @sdn/wallet-relay run build && npm run build:wallet-assets",
-    "build:wallet-assets": "node scripts/build-wallet-assets.mjs --version 2.0.28",
+    "build:wallet-assets": "node scripts/build-wallet-assets.mjs --version 2.0.29",
     "test": "npm run test:offline-contracts && npm run test:release && npm run test:native && npm run test:wasm && npm run test:wallet-ui && npm run test:relay",
     "test:offline-contracts": "node scripts/verify-fixtures.mjs && node --test scripts/test-no-live-test-fetches.test.mjs && node scripts/test-no-live-test-fetches.mjs && node scripts/test-wasm-package-copy-contract.mjs && node scripts/test-wasm-tests-fail-closed.mjs && node scripts/test-capability-skip-contract.mjs && node scripts/test-offline-contract-wiring.mjs",
     "test:native": "cmake -S . -B build-native -DHD_WALLET_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release && cmake --build build-native --parallel && ctest --test-dir build-native --output-on-failure",
@@ -33,7 +33,7 @@
     "test:packed": "node scripts/test-packed-consumers.mjs",
     "verify:release": "node scripts/verify-release.mjs",
     "verify:build-paths": "node scripts/verify-build-paths.mjs",
-    "verify:wallet-assets": "node scripts/verify-wallet-assets.mjs --version 2.0.28"
+    "verify:wallet-assets": "node scripts/verify-wallet-assets.mjs --version 2.0.29"
   },
   "devDependencies": {
     "esbuild": "0.21.5",
