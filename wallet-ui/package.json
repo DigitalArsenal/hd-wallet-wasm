@@ -1,6 +1,6 @@
 {
   "name": "hd-wallet-ui",
-  "version": "2.0.29",
+  "version": "2.0.30",
   "description": "HD Wallet modal UI — login, keys, identity, trust map, and security bond. Attach to any button in your app.",
   "type": "module",
   "main": "./dist/compat/index.js",
@@ -10,6 +10,10 @@
     ".": {
       "types": "./dist/compat/index.d.ts",
       "import": "./dist/compat/index.js"
+    },
+    "./account": {
+      "types": "./dist/account/index.d.ts",
+      "import": "./dist/account/index.js"
     },
     "./client": {
       "types": "./dist/client/index.d.ts",
@@ -57,7 +61,7 @@
     "test:browser": "playwright test --config test/browser/playwright.config.mjs"
   },
   "dependencies": {
-    "hd-wallet-wasm": "2.0.29"
+    "hd-wallet-wasm": "2.0.30"
   },
   "devDependencies": {
     "@noble/curves": "^1.9.7",

@@ -15,7 +15,7 @@ import {
 const COMMIT = '0123456789abcdef0123456789abcdef01234567';
 const RUN_ID = '123456789';
 const RUN_ATTEMPT = '2';
-const SOURCE_TAG = 'v2.0.29';
+const SOURCE_TAG = 'v2.0.30';
 const REPOSITORY = 'DigitalArsenal/hd-wallet-wasm';
 const REPOSITORY_URL = `https://github.com/${REPOSITORY}`;
 const REF = `refs/tags/${SOURCE_TAG}`;
@@ -155,7 +155,7 @@ test('accepts only an exact GitHub-hosted workflow attestation identity and subj
 test('verifies both immutable snapshots with exact gh identity flags before returning', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'sdn-workflow-attestation-'));
   t.after(() => rm(root, { force: true, recursive: true }));
-  const origin = join(root, 'sdn-wallet-origin-2.0.29-node24-linux-x64.tar.gz');
+  const origin = join(root, 'sdn-wallet-origin-2.0.30-node24-linux-x64.tar.gz');
   const report = join(root, 'release-report.v1.json');
   const bundle = join(root, 'workflow-artifacts.sigstore.json');
   const originBytes = Buffer.from('origin fixture');

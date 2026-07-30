@@ -31,6 +31,11 @@ const CLIENT_ENTRIES = Object.freeze([
   ['client/sdn.mjs', 'client/sdn.js'],
   ['client/asset-review.mjs', 'client/asset-review.js'],
   ['client/callback.mjs', 'client/callback.js'],
+  // The standalone account view. It is built like the client entries because
+  // it is one: pure DOM with no wallet core, no WASM, and no network — see
+  // account/index.mjs for why the account SCREEN must not drag the account
+  // KEYSTORE into a consumer's bundle.
+  ['account/index.mjs', 'account/index.js'],
 ]);
 
 function sha256(bytes) {
@@ -67,6 +72,13 @@ async function copyDeclarations() {
   await copyFile(
     resolve(walletUiDirectory, 'client/style.css'),
     resolve(clientDirectory, 'style.css'),
+  );
+
+  const accountDirectory = resolve(outputDirectory, 'account');
+  await mkdir(accountDirectory, { recursive: true });
+  await copyFile(
+    resolve(walletUiDirectory, 'account/index.d.ts'),
+    resolve(accountDirectory, 'index.d.ts'),
   );
 }
 

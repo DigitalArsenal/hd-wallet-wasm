@@ -22,8 +22,8 @@ import {
   selectBetterSqlite3Prebuild,
 } from './acquire-better-sqlite3-prebuild.mjs';
 
-export const ORIGIN_SERVICE_VERSION = '2.0.29';
-export const ARCHIVE_BASENAME = 'sdn-wallet-origin-2.0.29-node24-linux-x64.tar.gz';
+export const ORIGIN_SERVICE_VERSION = '2.0.30';
+export const ARCHIVE_BASENAME = 'sdn-wallet-origin-2.0.30-node24-linux-x64.tar.gz';
 export const ADDON_PATH = 'node_modules/better-sqlite3/build/Release/better_sqlite3.node';
 export const REQUIRED_RUNTIME = Object.freeze({
   architecture: 'x64',

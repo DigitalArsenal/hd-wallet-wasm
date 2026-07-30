@@ -13,6 +13,8 @@ const repositoryDirectory = resolve(walletUiDirectory, '..');
 const distDirectory = join(walletUiDirectory, 'dist');
 
 const STATIC_DIST_FILES = Object.freeze([
+  'account/index.d.ts',
+  'account/index.js',
   'browser/sdn-wallet-callback.js',
   'browser/sdn-wallet-public-client.js',
   'browser/wallet-callback.html',
@@ -42,6 +44,7 @@ const ALLOWED_PUBLIC_PROTOCOL_LITERALS = Object.freeze([
 
 const UI_EXPORTS = Object.freeze({
   '.': { types: './dist/compat/index.d.ts', import: './dist/compat/index.js' },
+  './account': { types: './dist/account/index.d.ts', import: './dist/account/index.js' },
   './client': { types: './dist/client/index.d.ts', import: './dist/client/index.js' },
   './client/asset-review': {
     types: './dist/client/asset-review.d.ts',
@@ -119,13 +122,13 @@ function redactExactPublicProtocolLiterals(source, label) {
 }
 
 describe('packed export contracts', () => {
-  test('UI exposes exactly seven dist-only typed exports and a strict file allowlist', async () => {
+  test('UI exposes exactly eight dist-only typed exports and a strict file allowlist', async () => {
     const manifest = JSON.parse(await readFile(join(walletUiDirectory, 'package.json'), 'utf8'));
     expect(manifest.main).toBe('./dist/compat/index.js');
     expect(manifest.module).toBe('./dist/compat/index.js');
     expect(manifest.types).toBe('./dist/compat/index.d.ts');
     expect(manifest.exports).toEqual(UI_EXPORTS);
-    expect(manifest.dependencies).toEqual({ 'hd-wallet-wasm': '2.0.29' });
+    expect(manifest.dependencies).toEqual({ 'hd-wallet-wasm': '2.0.30' });
     expect(manifest.sideEffects).toEqual(['./dist/client/style.css']);
     expect(manifest.scripts.prepack).toBeUndefined();
     expect(manifest.files).toEqual([
@@ -168,6 +171,7 @@ describe('release bundle isolation', () => {
   test('public outputs are fixed single-file graphs with no wallet-origin or secret runtime', async () => {
     const files = await walk(distDirectory);
     const expectedJavascript = [
+      'account/index.js',
       'browser/sdn-wallet-callback.js',
       'browser/sdn-wallet-public-client.js',
       'client/asset-review.js',

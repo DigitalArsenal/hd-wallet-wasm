@@ -105,9 +105,9 @@ function signLogEntry(entry) {
 function buildPublishBundle({ integratedTime, name, sha512 }) {
   const statement = {
     _type: 'https://in-toto.io/Statement/v0.1',
-    predicate: { name, registry: 'https://registry.npmjs.org', version: '2.0.29' },
+    predicate: { name, registry: 'https://registry.npmjs.org', version: '2.0.30' },
     predicateType: PUBLISH_PREDICATE,
-    subject: [{ digest: { sha512 }, name: `pkg:npm/${name}@2.0.29` }],
+    subject: [{ digest: { sha512 }, name: `pkg:npm/${name}@2.0.30` }],
   };
   const payloadType = 'application/vnd.in-toto+json';
   const payload = Buffer.from(canonicalizeJson(statement), 'utf8');
@@ -417,8 +417,8 @@ function syntheticTrustPolicy() {
       repository: 'https://github.com/DigitalArsenal/hd-wallet-wasm',
       repositoryId: '1142529413',
       repositoryOwnerId: '29587475',
-      sourceTag: 'v2.0.29',
-      version: '2.0.29',
+      sourceTag: 'v2.0.30',
+      version: '2.0.30',
       workflow: '.github/workflows/npm-publish.yml',
     },
     schemaVersion: 1,
