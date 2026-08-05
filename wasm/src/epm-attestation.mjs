@@ -119,8 +119,8 @@ function epmJcsCanonicalize(value) {
  * wallet signature over this content verifies isomorphically in the browser and
  * on wasmedge. Mirrors the field set/rules exactly: trim + omit-empty strings,
  * enum-label ENTITY_TYPE (always) / KEY_TYPE (Signing|Encryption only), nested
- * ADDRESS, KEYS/CHAIN_PROOFS arrays, SIGNATURE_TIMESTAMP (integer, when nonzero),
- * and SIGNATURE excluded.
+ * ADDRESS, all public CryptoKey fields in KEYS, CHAIN_PROOFS arrays,
+ * SIGNATURE_TIMESTAMP (integer, when nonzero), and SIGNATURE excluded.
  *
  * @param {Object} epm - EPM fields as a plain object (schema UPPER_SNAKE keys;
  *   ENTITY_TYPE/KEY_TYPE may be enum index or label)
@@ -170,6 +170,9 @@ export function buildEPMSigningContent(epm) {
       epmAddStr(e, 'KEY_ADDRESS', kg('KEY_ADDRESS'));
       const kt = epmEnumName(kg('KEY_TYPE'), EPM_KEY_TYPE_NAMES);
       if (kt === 'Signing' || kt === 'Encryption') e.KEY_TYPE = kt;
+      epmAddStr(e, 'KEY_PATH', kg('KEY_PATH'));
+      epmAddStr(e, 'ALGORITHM', kg('ALGORITHM'));
+      epmAddStr(e, 'ENCODING', kg('ENCODING'));
       if (Object.keys(e).length) arr.push(e);
     }
     if (arr.length) content.KEYS = arr;

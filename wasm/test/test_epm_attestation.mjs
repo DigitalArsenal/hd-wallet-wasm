@@ -18,14 +18,57 @@ test('EPM JCS: machine-identity vector matches in-module C++', () => {
     ENTITY_TYPE: 'Individual',
     SIGNATURE_TIMESTAMP: 1782470000,
     KEYS: [
-      { PUBLIC_KEY: 'aabbcc', XPUB: 'xpubTEST', ADDRESS_TYPE: 'ed25519', KEY_TYPE: 'Signing' },
+      {
+        PUBLIC_KEY: 'aabbcc',
+        XPUB: 'xpubTEST',
+        ADDRESS_TYPE: 'raw',
+        KEY_TYPE: 'Signing',
+        KEY_PATH: "m/44'/0'/0'/0'/0'",
+        ALGORITHM: 'ed25519',
+        ENCODING: 'raw-ed25519',
+      },
     ],
     SIGNATURE: 'deadbeef', // must be excluded from signed content
   };
   const expect =
-    '{"ENTITY_TYPE":"Individual","KEYS":[{"ADDRESS_TYPE":"ed25519","KEY_TYPE":"Signing",' +
+    '{"ENTITY_TYPE":"Individual","KEYS":[{"ADDRESS_TYPE":"raw","ALGORITHM":"ed25519",' +
+    '"ENCODING":"raw-ed25519","KEY_PATH":"m/44\'/0\'/0\'/0\'/0\'","KEY_TYPE":"Signing",' +
     '"PUBLIC_KEY":"aabbcc","XPUB":"xpubTEST"}],"SIGNATURE_TIMESTAMP":1782470000}';
   assertEqual(decode(buildEPMSigningContent(epm)), expect, 'machine-identity canonical content');
+});
+
+// Pre-1.174 EPMs omitted the added CryptoKey fields. Their signed bytes remain
+// unchanged: compatibility is omission-based, never synthesized defaults.
+test('EPM JCS: legacy CryptoKey projection remains byte-compatible', () => {
+  const epm = {
+    ENTITY_TYPE: 'User',
+    KEYS: [
+      { PUBLIC_KEY: 'aa', XPUB: 'xpubLegacy', ADDRESS_TYPE: 'raw', KEY_TYPE: 'Signing' },
+    ],
+  };
+  const expect =
+    '{"ENTITY_TYPE":"User","KEYS":[{"ADDRESS_TYPE":"raw","KEY_TYPE":"Signing",' +
+    '"PUBLIC_KEY":"aa","XPUB":"xpubLegacy"}]}';
+  assertEqual(decode(buildEPMSigningContent(epm)), expect, 'legacy CryptoKey canonical content');
+});
+
+test('EPM JCS: CryptoKey normative fields trim, omit empty, and accept schema casing', () => {
+  const epm = {
+    ENTITY_TYPE: 'User',
+    KEYS: [
+      {
+        PUBLIC_KEY: 'aa',
+        KEY_PATH: "  m/44'/0'/0'/0/0  ",
+        algorithm: '  secp256k1  ',
+        encoding: '   ',
+        KEY_TYPE: 'Signing',
+      },
+    ],
+  };
+  const expect =
+    '{"ENTITY_TYPE":"User","KEYS":[{"ALGORITHM":"secp256k1",' +
+    '"KEY_PATH":"m/44\'/0\'/0\'/0/0","KEY_TYPE":"Signing","PUBLIC_KEY":"aa"}]}';
+  assertEqual(decode(buildEPMSigningContent(epm)), expect, 'new CryptoKey field rules');
 });
 
 // Vector 2 — trim whitespace, raw & < > (no HTML escaping), omit empties.
