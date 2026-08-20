@@ -2624,9 +2624,10 @@ async function loginExternal(account) {
 
   // Live balance for the connected address, then the bond total from it.
   try {
-    state.externalAccount.balance = chain === 'eth'
+    const result = chain === 'eth'
       ? await fetchEthBalance(account.address)
       : await fetchSolBalance(account.address);
+    state.externalAccount.balance = result?.balance ?? '--';
   } catch (e) {
     console.warn('External balance fetch failed:', e);
   }

@@ -434,31 +434,40 @@ export async function fetchBtcBalance(address) {
  * @returns {Promise<{balance: string, error?: string}>}
  */
 export async function fetchEthBalance(address) {
-  try {
-    const response = await fetch(apiUrl('https://cloudflare-eth.com'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'eth_getBalance',
-        params: [address, 'latest']
-      })
-    });
-    if (!response.ok) {
-      return { balance: '--', error: `HTTP ${response.status}` };
+  // Public RPCs fail independently (cloudflare-eth measured returning
+  // -32603 while publicnode answered, 2026-08-20) — try each in turn.
+  const endpoints = ['https://cloudflare-eth.com', 'https://ethereum-rpc.publicnode.com'];
+  let lastError = 'ETH RPC unavailable';
+  for (const endpoint of endpoints) {
+    try {
+      const response = await fetch(apiUrl(endpoint), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'eth_getBalance',
+          params: [address, 'latest']
+        })
+      });
+      if (!response.ok) {
+        lastError = `HTTP ${response.status}`;
+        continue;
+      }
+      const data = await response.json();
+      if (data.error) {
+        lastError = data.error.message || 'ETH RPC error';
+        continue;
+      }
+      const balanceWei = BigInt(data.result || '0x0');
+      const balanceEth = Number(balanceWei) / 1e18;
+      return { balance: balanceEth.toFixed(6) };
+    } catch (e) {
+      console.debug('ETH balance fetch unavailable:', e.message);
+      lastError = e.message;
     }
-    const data = await response.json();
-    if (data.error) {
-      return { balance: '--', error: data.error.message || 'ETH RPC error' };
-    }
-    const balanceWei = BigInt(data.result || '0x0');
-    const balanceEth = Number(balanceWei) / 1e18;
-    return { balance: balanceEth.toFixed(6) };
-  } catch (e) {
-    console.debug('ETH balance fetch unavailable:', e.message);
-    return { balance: '--', error: e.message };
   }
+  return { balance: '--', error: lastError };
 }
 
 /**
