@@ -159,7 +159,16 @@ document.getElementById('my-btn')
 wallet.openAccount();
 
 // Remove all injected UI
-wallet.destroy();</code></pre>
+wallet.destroy();
+
+// External wallets (EIP-6963 / Wallet Standard):
+// mount the connect panel anywhere
+import { createExternalWalletPanel } from 'hd-wallet-ui/external';
+
+createExternalWalletPanel({
+  mount: document.getElementById('connect'),
+  onConnected: ({ lane, address, chainId }) => { /* ... */ },
+});</code></pre>
           </div>
           <p style="font-size:0.85rem;opacity:0.7;margin:0.5rem 0;" data-i18n-html="packages.ui.note">Headless utilities (address derivation, wallet storage) are also available via <code>hd-wallet-ui/lib</code>.</p>
           <div style="flex:1;"></div>

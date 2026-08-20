@@ -13,6 +13,211 @@
    Extracted from FlatBuffers demo, adapted for standalone wallet interface
    ============================================================================= */
 
+/* The external-wallet panel's default skin (ONE source: consumed here for the
+   demo/widget, and directly as hd-wallet-ui/external/style by embedding apps).
+   Vite inlines this for the demo build; build-widget-css.mjs inlines it before
+   namespacing widget.css. */
+/*
+ * hd-wallet-ui/external — default panel skin.
+ *
+ * The defaults ARE the current dashboard palette (IRIS 2026-08-20: "that IS
+ * the design today — the dashboard wrapper overrides nothing, the demo site
+ * overrides its skin"). Hosts theme through the --hdw-ext-* custom
+ * properties; forking the markup or the class names is refused.
+ */
+
+#hd-wallet-ui-container .hdw-ext-panel {
+  --hdw-ext-font-display: 'Chakra Petch', sans-serif;
+  --hdw-ext-font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --hdw-ext-muted: #6d8794;
+  --hdw-ext-body: #7f9aa6;
+  --hdw-ext-label: #b3c6ce;
+  --hdw-ext-text: #c7d6dd;
+  --hdw-ext-bright: #d7e6ec;
+  --hdw-ext-accent: #7fe9f5;
+  --hdw-ext-accent-border: rgba(53, 201, 216, 0.35);
+  --hdw-ext-accent-border-hover: rgba(53, 201, 216, 0.45);
+  --hdw-ext-ice-border: rgba(159, 212, 245, 0.4);
+  --hdw-ext-ice: #9fd4f5;
+  --hdw-ext-border: rgba(190, 225, 240, 0.14);
+  --hdw-ext-border-dashed: rgba(190, 225, 240, 0.22);
+  --hdw-ext-surface: rgba(255, 255, 255, 0.04);
+  --hdw-ext-surface-hover: rgba(255, 255, 255, 0.07);
+  --hdw-ext-well: rgba(6, 12, 18, 0.35);
+  --hdw-ext-well-deep: rgba(6, 12, 18, 0.45);
+  --hdw-ext-notice: #e8c268;
+
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+#hd-wallet-ui-container .hdw-ext-scan {
+  text-align: center;
+  padding: 18px 0;
+  font-family: var(--hdw-ext-font-display);
+  font-size: 11.5px;
+  letter-spacing: 0.22em;
+  color: var(--hdw-ext-muted);
+}
+
+#hd-wallet-ui-container .hdw-ext-nowallet {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: center;
+  padding: 16px 14px;
+  border-radius: 14px;
+  border: 1px dashed var(--hdw-ext-border-dashed);
+  background: var(--hdw-ext-well);
+}
+#hd-wallet-ui-container .hdw-ext-nwtitle {
+  font-family: var(--hdw-ext-font-display);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.2em;
+  color: var(--hdw-ext-label);
+}
+#hd-wallet-ui-container .hdw-ext-nwbody {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--hdw-ext-body);
+}
+
+#hd-wallet-ui-container .hdw-ext-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+#hd-wallet-ui-container .hdw-ext-wallet {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--hdw-ext-border);
+  background: var(--hdw-ext-surface);
+  color: var(--hdw-ext-text);
+}
+#hd-wallet-ui-container .hdw-ext-wallet:hover:not(:disabled) {
+  border-color: var(--hdw-ext-accent-border-hover);
+  background: var(--hdw-ext-surface-hover);
+}
+#hd-wallet-ui-container .hdw-ext-wallet:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+#hd-wallet-ui-container .hdw-ext-wicon {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  object-fit: contain;
+}
+#hd-wallet-ui-container .hdw-ext-wicon-fallback {
+  display: grid;
+  place-items: center;
+  color: var(--hdw-ext-accent);
+  font-size: 14px;
+}
+#hd-wallet-ui-container .hdw-ext-wname {
+  font-size: 13.5px;
+  letter-spacing: 0.05em;
+  color: var(--hdw-ext-bright);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#hd-wallet-ui-container .hdw-ext-wkind {
+  font-family: var(--hdw-ext-font-display);
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  color: var(--hdw-ext-accent);
+  border: 1px solid var(--hdw-ext-accent-border);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+/* Connected account — attachment chrome (ice, no presence dot). */
+#hd-wallet-ui-container .hdw-ext-connected {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--hdw-ext-ice-border);
+  background: var(--hdw-ext-well-deep);
+}
+#hd-wallet-ui-container .hdw-ext-chead {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  align-items: center;
+  gap: 10px;
+}
+#hd-wallet-ui-container .hdw-ext-cname {
+  font-size: 12.5px;
+  letter-spacing: 0.06em;
+  color: var(--hdw-ext-label);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#hd-wallet-ui-container .hdw-ext-badge {
+  font-family: var(--hdw-ext-font-display);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  color: var(--hdw-ext-ice);
+  border: 1px solid var(--hdw-ext-ice-border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+#hd-wallet-ui-container .hdw-ext-caddr {
+  font-family: var(--hdw-ext-font-mono);
+  font-size: 12.5px;
+  color: var(--hdw-ext-bright);
+  background: none;
+  border: 1px solid var(--hdw-ext-border);
+  border-radius: 10px;
+  padding: 6px 10px;
+  cursor: copy;
+  text-align: center;
+}
+#hd-wallet-ui-container .hdw-ext-caddr:hover {
+  border-color: var(--hdw-ext-accent-border-hover);
+}
+#hd-wallet-ui-container .hdw-ext-disconnect {
+  font-family: var(--hdw-ext-font-display);
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  color: var(--hdw-ext-label);
+  background: var(--hdw-ext-surface);
+  border: 1px solid var(--hdw-ext-border);
+  border-radius: 999px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+#hd-wallet-ui-container .hdw-ext-disconnect:hover {
+  color: var(--hdw-ext-bright);
+  background: var(--hdw-ext-surface-hover);
+}
+
+#hd-wallet-ui-container .hdw-ext-notice {
+  border: 1px solid currentColor;
+  border-radius: 12px;
+  padding: 8px 10px;
+  font-size: 11.5px;
+  line-height: 17px;
+  letter-spacing: 0.04em;
+  color: var(--hdw-ext-notice);
+}
+
+
 /* Reset & Base */
 #hd-wallet-ui-container *, #hd-wallet-ui-container *::before, #hd-wallet-ui-container *::after {
   box-sizing: border-box;
@@ -6209,4 +6414,56 @@ body:has(#hd-wallet-ui-container .modal.active) #hd-wallet-ui-container .nav-bar
   font-size: 0.95rem;
   color: var(--white);
   word-break: break-word;
+}
+
+/* ------------------------------------------------------------------ */
+/* Language switcher (top-10 language support)                        */
+/* ------------------------------------------------------------------ */
+#hd-wallet-ui-container .lang-switcher {
+  appearance: none;
+  -webkit-appearance: none;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.15));
+  border-radius: 8px;
+  color: var(--text-primary, #fff);
+  font-size: 0.85rem;
+  font-family: inherit;
+  padding: 0.4rem 1.8rem 0.4rem 0.7rem;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.55rem center;
+}
+#hd-wallet-ui-container .lang-switcher:hover {
+  background-color: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+#hd-wallet-ui-container .lang-switcher:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.4);
+}
+#hd-wallet-ui-container .lang-switcher option {
+  color: #111;
+  background: #fff;
+}
+@media (max-width: 720px) {
+  #hd-wallet-ui-container .lang-switcher { padding: 0.35rem 1.6rem 0.35rem 0.6rem; font-size: 0.8rem; }
+}
+
+/* ------------------------------------------------------------------ */
+/* RTL support (Arabic, Urdu)                                          */
+/* ------------------------------------------------------------------ */
+#hd-wallet-ui-container html[dir="rtl"] .lang-switcher {
+  padding: 0.4rem 0.7rem 0.4rem 1.8rem;
+  background-position: left 0.55rem center;
+}
+/* Inline text-align:left elements flip to the right under RTL */
+#hd-wallet-ui-container html[dir="rtl"] [style*="text-align:left"] { text-align: right !important; }
+#hd-wallet-ui-container html[dir="rtl"] [style*="text-align: left"] { text-align: right !important; }
+/* Code, cryptographic identifiers and addresses are always LTR */
+#hd-wallet-ui-container html[dir="rtl"] code, #hd-wallet-ui-container html[dir="rtl"] pre, #hd-wallet-ui-container html[dir="rtl"] .code-block, #hd-wallet-ui-container html[dir="rtl"] .code-block-header, #hd-wallet-ui-container html[dir="rtl"] .example-code, #hd-wallet-ui-container html[dir="rtl"] .derivation-path, #hd-wallet-ui-container html[dir="rtl"] .network-address-link code, #hd-wallet-ui-container html[dir="rtl"] .balance-value, #hd-wallet-ui-container html[dir="rtl"] .x509-tag {
+  direction: ltr;
+  unicode-bidi: embed;
+  text-align: left;
 }

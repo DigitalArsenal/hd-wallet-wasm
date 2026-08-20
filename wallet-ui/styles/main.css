@@ -3,6 +3,12 @@
    Extracted from FlatBuffers demo, adapted for standalone wallet interface
    ============================================================================= */
 
+/* The external-wallet panel's default skin (ONE source: consumed here for the
+   demo/widget, and directly as hd-wallet-ui/external/style by embedding apps).
+   Vite inlines this for the demo build; build-widget-css.mjs inlines it before
+   namespacing widget.css. */
+@import url('./external-panel.css');
+
 /* Reset & Base */
 *, *::before, *::after {
   box-sizing: border-box;

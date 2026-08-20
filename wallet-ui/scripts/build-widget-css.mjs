@@ -69,7 +69,14 @@ function prefixSelector(selector) {
 }
 
 async function main() {
-  const raw = await fs.readFile(SOURCE_CSS, 'utf8');
+  let raw = await fs.readFile(SOURCE_CSS, 'utf8');
+  // Inline relative @imports (e.g. external-panel.css) so the widget build
+  // namespaces ONE flat sheet — a raw @import would ship an unresolved
+  // relative path inside the published widget.css.
+  for (const match of raw.matchAll(/@import\s+url\(\s*['"]?(\.\/[^'")]+)['"]?\s*\)\s*;/g)) {
+    const imported = await fs.readFile(path.join(ROOT, 'styles', match[1]), 'utf8');
+    raw = raw.replace(match[0], imported);
+  }
   const root = postcss.parse(raw, { from: SOURCE_CSS });
 
   // Rename keyframes to avoid global collisions.

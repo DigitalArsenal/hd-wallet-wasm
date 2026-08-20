@@ -8,6 +8,8 @@
   "exports": {
     ".": "./src/app.js",
     "./lib": "./src/lib.js",
+    "./external": "./src/external/index.js",
+    "./external/style": "./styles/external-panel.css",
     "./styles": "./styles/widget.css",
     "./styles/demo": "./styles/main.css"
   },

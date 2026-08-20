@@ -563,11 +563,15 @@ export function getModalHTML() {
       </div>
       <div class="modal-body">
         <div class="method-tabs">
-          <button class="method-tab active" data-method="password">Password</button>
+          <button class="method-tab active" data-method="external">External Wallet</button>
+          <button class="method-tab" data-method="password">Password</button>
           <button class="method-tab" data-method="seed">Seed Phrase</button>
           <button class="method-tab" data-method="stored" id="stored-tab" style="display: none;">Stored</button>
         </div>
-        <form id="password-method" class="method-content active" onsubmit="return false;">
+        <div id="external-method" class="method-content active">
+          <div id="external-wallet-mount"></div>
+        </div>
+        <form id="password-method" class="method-content" onsubmit="return false;">
           <div class="glass-input-group"><input type="text" id="wallet-username" class="glass-input" placeholder="Username" autocomplete="username"></div>
           <div class="glass-input-group">
             <div class="password-input-wrap"><input type="password" id="wallet-password" class="glass-input" placeholder="Password (24+ chars)" autocomplete="new-password"><button type="button" id="toggle-password-vis" class="password-toggle" title="Show password"><svg class="eye-open" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-closed" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button></div>

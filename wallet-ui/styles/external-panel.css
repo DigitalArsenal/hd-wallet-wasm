@@ -1,0 +1,199 @@
+/*
+ * hd-wallet-ui/external — default panel skin.
+ *
+ * The defaults ARE the current dashboard palette (IRIS 2026-08-20: "that IS
+ * the design today — the dashboard wrapper overrides nothing, the demo site
+ * overrides its skin"). Hosts theme through the --hdw-ext-* custom
+ * properties; forking the markup or the class names is refused.
+ */
+
+.hdw-ext-panel {
+  --hdw-ext-font-display: 'Chakra Petch', sans-serif;
+  --hdw-ext-font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --hdw-ext-muted: #6d8794;
+  --hdw-ext-body: #7f9aa6;
+  --hdw-ext-label: #b3c6ce;
+  --hdw-ext-text: #c7d6dd;
+  --hdw-ext-bright: #d7e6ec;
+  --hdw-ext-accent: #7fe9f5;
+  --hdw-ext-accent-border: rgba(53, 201, 216, 0.35);
+  --hdw-ext-accent-border-hover: rgba(53, 201, 216, 0.45);
+  --hdw-ext-ice-border: rgba(159, 212, 245, 0.4);
+  --hdw-ext-ice: #9fd4f5;
+  --hdw-ext-border: rgba(190, 225, 240, 0.14);
+  --hdw-ext-border-dashed: rgba(190, 225, 240, 0.22);
+  --hdw-ext-surface: rgba(255, 255, 255, 0.04);
+  --hdw-ext-surface-hover: rgba(255, 255, 255, 0.07);
+  --hdw-ext-well: rgba(6, 12, 18, 0.35);
+  --hdw-ext-well-deep: rgba(6, 12, 18, 0.45);
+  --hdw-ext-notice: #e8c268;
+
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.hdw-ext-scan {
+  text-align: center;
+  padding: 18px 0;
+  font-family: var(--hdw-ext-font-display);
+  font-size: 11.5px;
+  letter-spacing: 0.22em;
+  color: var(--hdw-ext-muted);
+}
+
+.hdw-ext-nowallet {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: center;
+  padding: 16px 14px;
+  border-radius: 14px;
+  border: 1px dashed var(--hdw-ext-border-dashed);
+  background: var(--hdw-ext-well);
+}
+.hdw-ext-nwtitle {
+  font-family: var(--hdw-ext-font-display);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.2em;
+  color: var(--hdw-ext-label);
+}
+.hdw-ext-nwbody {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--hdw-ext-body);
+}
+
+.hdw-ext-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.hdw-ext-wallet {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--hdw-ext-border);
+  background: var(--hdw-ext-surface);
+  color: var(--hdw-ext-text);
+}
+.hdw-ext-wallet:hover:not(:disabled) {
+  border-color: var(--hdw-ext-accent-border-hover);
+  background: var(--hdw-ext-surface-hover);
+}
+.hdw-ext-wallet:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.hdw-ext-wicon {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  object-fit: contain;
+}
+.hdw-ext-wicon-fallback {
+  display: grid;
+  place-items: center;
+  color: var(--hdw-ext-accent);
+  font-size: 14px;
+}
+.hdw-ext-wname {
+  font-size: 13.5px;
+  letter-spacing: 0.05em;
+  color: var(--hdw-ext-bright);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hdw-ext-wkind {
+  font-family: var(--hdw-ext-font-display);
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  color: var(--hdw-ext-accent);
+  border: 1px solid var(--hdw-ext-accent-border);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+/* Connected account — attachment chrome (ice, no presence dot). */
+.hdw-ext-connected {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--hdw-ext-ice-border);
+  background: var(--hdw-ext-well-deep);
+}
+.hdw-ext-chead {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  align-items: center;
+  gap: 10px;
+}
+.hdw-ext-cname {
+  font-size: 12.5px;
+  letter-spacing: 0.06em;
+  color: var(--hdw-ext-label);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hdw-ext-badge {
+  font-family: var(--hdw-ext-font-display);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  color: var(--hdw-ext-ice);
+  border: 1px solid var(--hdw-ext-ice-border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+.hdw-ext-caddr {
+  font-family: var(--hdw-ext-font-mono);
+  font-size: 12.5px;
+  color: var(--hdw-ext-bright);
+  background: none;
+  border: 1px solid var(--hdw-ext-border);
+  border-radius: 10px;
+  padding: 6px 10px;
+  cursor: copy;
+  text-align: center;
+}
+.hdw-ext-caddr:hover {
+  border-color: var(--hdw-ext-accent-border-hover);
+}
+.hdw-ext-disconnect {
+  font-family: var(--hdw-ext-font-display);
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  color: var(--hdw-ext-label);
+  background: var(--hdw-ext-surface);
+  border: 1px solid var(--hdw-ext-border);
+  border-radius: 999px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.hdw-ext-disconnect:hover {
+  color: var(--hdw-ext-bright);
+  background: var(--hdw-ext-surface-hover);
+}
+
+.hdw-ext-notice {
+  border: 1px solid currentColor;
+  border-radius: 12px;
+  padding: 8px 10px;
+  font-size: 11.5px;
+  line-height: 17px;
+  letter-spacing: 0.04em;
+  color: var(--hdw-ext-notice);
+}

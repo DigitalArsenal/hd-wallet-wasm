@@ -27,6 +27,7 @@ window.Buffer = Buffer;
 // =============================================================================
 
 import { getModalHTML } from './template.js';
+import { createExternalWalletPanel } from './external/panel.js';
 import WalletStorage, { StorageMethod } from './wallet-storage.js';
 import { safeCopyText } from './clipboard.js';
 import { normalizeTabHash } from './hash.js';
@@ -3781,6 +3782,17 @@ const rememberMethod = {
 };
 
 function setupLoginHandlers() {
+  // External wallet — the FIRST sign-in method. The panel is the shared
+  // hd-wallet-ui/external component; it discovers injected wallets
+  // (EIP-6963 / Wallet Standard), connects, and shows the connected account
+  // honestly. It never touches the HD custody state: state.hdRoot stays
+  // null, no keys modal — an external account is an attachment, not an
+  // unlock.
+  const externalMount = $('external-wallet-mount');
+  if (externalMount && !externalMount.childElementCount) {
+    createExternalWalletPanel({ mount: externalMount, connectedView: true });
+  }
+
   // Migrate from old storage format if needed
   WalletStorage.migrateStorage();
 
