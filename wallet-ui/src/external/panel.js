@@ -62,6 +62,10 @@ function describeWalletError(err) {
  *   mount: Element,                       // REQUIRED — the panel renders here
  *   onConnected?: (account: {lane, address, addressKey, chainId,
  *                            walletName, icon}) => void,
+ *   onDisconnected?: () => void,          // fired when the in-panel
+ *                                         // DISCONNECT clears the connected
+ *                                         // view — the host ends whatever
+ *                                         // session it built from onConnected
  *   connectedView?: boolean,              // render the connected account
  *                                         // in-panel (copyable address +
  *                                         // disconnect). Default false: the
@@ -76,6 +80,7 @@ function describeWalletError(err) {
 export function createExternalWalletPanel({
   mount,
   onConnected = null,
+  onDisconnected = null,
   connectedView = false,
   document: doc = globalThis.document,
   events,
@@ -217,6 +222,7 @@ export function createExternalWalletPanel({
       connected = null;
       notice = '';
       render();
+      onDisconnected?.();
     });
     card.appendChild(off);
     return card;

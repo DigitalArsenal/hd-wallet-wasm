@@ -1531,6 +1531,49 @@ function renderAccountsList() {
 
   // Clear all dynamic content (wallet headers + token rows)
   listEl.querySelectorAll('.ph-token-row, .ph-wallet-header').forEach(r => r.remove());
+
+  // External session: ONE row — the connected account (no derivation, no
+  // wallet selector). Wallet-supplied strings go in via textContent only.
+  if (state.externalAccount && !state.hdRoot) {
+    if (emptyEl) emptyEl.style.display = 'none';
+    const acct = state.externalAccount;
+    const symbol = acct.chain.toUpperCase();
+    const icon = CHAIN_ICONS[symbol] || { color: '#888', symbol: '?' };
+    const bal = parseFloat(acct.balance);
+    const balDisplay = isNaN(bal) ? '--' : (bal > 0 ? bal.toFixed(bal < 0.001 ? 8 : 4) : '0');
+
+    const row = document.createElement('div');
+    row.className = 'ph-token-row';
+    row.innerHTML =
+      '<div class="ph-token-icon" style="background:' + icon.color + '">' + icon.symbol + '</div>' +
+      '<div class="ph-token-info">' +
+        '<div class="ph-token-name"></div>' +
+        '<div class="ph-token-path"></div>' +
+      '</div>' +
+      '<div class="ph-token-amounts">' +
+        '<div class="ph-token-balance">' + balDisplay + ' ' + symbol + '</div>' +
+        '<div class="ph-token-fiat" id="ph-fiat-external"></div>' +
+      '</div>';
+    row.querySelector('.ph-token-name').textContent =
+      acct.walletName || (CHAIN_FULL_NAMES[symbol] || symbol);
+    const pathEl = row.querySelector('.ph-token-path');
+    pathEl.textContent = truncateAddress(acct.address);
+    pathEl.title = acct.address;
+    listEl.appendChild(row);
+
+    if (!isNaN(bal) && bal > 0) {
+      fetchCryptoPrices(getSelectedCurrency()).then((prices) => {
+        const price = Number.parseFloat(prices?.[symbol]);
+        const fiatEl = $('ph-fiat-external');
+        if (fiatEl && Number.isFinite(price) && price > 0) {
+          fiatEl.textContent = formatCurrencyValue(bal * price, getSelectedCurrency());
+        }
+      }).catch(() => {});
+    }
+    updateWalletActionMenus();
+    return;
+  }
+
   const entries = getVisibleWalletEntries();
   if (entries.length === 0) {
     if (emptyEl) emptyEl.style.display = 'flex';
@@ -2051,6 +2094,20 @@ async function updateWalletBondTotal() {
       walletTotals[walletId] = (walletTotals[walletId] || 0) + fiatValue;
     }
 
+    // External session: the connected address's balance IS the bond.
+    if (state.externalAccount) {
+      const bal = Number.parseFloat(state.externalAccount.balance);
+      if (Number.isFinite(bal) && bal > 0) {
+        hasPositiveBalance = true;
+        const price = Number.parseFloat(prices[state.externalAccount.chain.toUpperCase()]);
+        if (Number.isFinite(price) && price > 0) {
+          total += bal * price;
+        } else {
+          missingPriceForFundedAccount = true;
+        }
+      }
+    }
+
     if (hasPositiveBalance && total <= 0 && missingPriceForFundedAccount) {
       throw new Error('Funded accounts found but fiat pricing is unavailable');
     }
@@ -2490,6 +2547,93 @@ async function generatePKIKeyPairs() {
 // Login / Logout
 // =============================================================================
 
+/**
+ * EXTERNAL-WALLET SESSION (owner 2026-08-20: "we need the old interface back
+ * with the bond, etc."): a connected external wallet opens the SAME account
+ * interface an HD login does — the bond total, the account row with its live
+ * balance, the bond-tab address rows, name resolution, and trust scanning —
+ * all driven by the connected ADDRESS. No custody is fabricated: state.hdRoot
+ * and state.wallet stay null, so every custody surface (xpub/xprv/seed, PKI,
+ * derivation, export) keeps its existing guarded behavior. DISCONNECT in the
+ * external panel is the logout affordance for this session.
+ */
+async function loginExternal(account) {
+  state.loggedIn = true;
+  const chain = account.lane === 'evm' ? 'eth' : 'sol';
+  state.externalAccount = { ...account, chain, balance: null };
+  state.addresses = { [chain]: account.address };
+  state.selectedCrypto = chain;
+
+  // Close the login modal; flip nav + hero to the signed-in state.
+  $('login-modal')?.classList.remove('active');
+  const heroWalletType = $('hero-wallet-type');
+  const heroAddress = $('hero-address');
+  const heroStats = $('hero-stats');
+  if (heroWalletType) heroWalletType.textContent = account.walletName || cryptoConfig[chain].name;
+  if (heroAddress) heroAddress.textContent = truncateAddress(account.address);
+  if (heroStats) heroStats.classList.remove('hidden');
+  const navLogin = $('nav-login');
+  const navKeys = $('nav-keys');
+  const navLogout = $('nav-logout');
+  if (navLogin) navLogin.style.display = 'none';
+  if (navKeys) navKeys.style.display = 'flex';
+  if (navLogout) navLogout.style.display = 'flex';
+  const mobileLogin = $('mobile-login');
+  const mobileLogout = $('mobile-logout');
+  if (mobileLogin) mobileLogin.style.display = 'none';
+  if (mobileLogout) mobileLogout.style.display = 'block';
+
+  // The account's public identity is its ADDRESS — the header and wallet-tab
+  // rows that show the xpub for HD sessions show the address here.
+  const headerLabel = $q('.account-address-label');
+  const headerDisplay = $('account-address-display');
+  if (headerLabel) headerLabel.textContent = 'address';
+  if (headerDisplay) {
+    headerDisplay.textContent = account.address;
+    headerDisplay.title = account.address;
+  }
+  const walletTabXpub = $('wallet-tab-xpub');
+  if (walletTabXpub) {
+    walletTabXpub.textContent = account.address;
+    walletTabXpub.title = account.address;
+  }
+
+  // Custody-only controls have nothing to act on without keys — hide them
+  // rather than leave dead buttons. Receive stays: it shows the connected
+  // address as a QR (see the receive handler's external branch).
+  $q('.wallet-selector-row')?.style.setProperty('display', 'none');
+  $('wallet-scan-btn')?.style.setProperty('display', 'none');
+  $('wallet-send-action')?.style.setProperty('display', 'none');
+  $('wallet-export-btn-main')?.style.setProperty('display', 'none');
+  $('wallet-advanced-btn-main')?.style.setProperty('display', 'none');
+
+  populateWalletAddresses();
+  renderAccountsList();
+  updateWalletBondTotal();
+
+  // Open the Account modal so the user sees the account they just connected.
+  if (_openAccountAfterLogin) {
+    $('keys-modal')?.classList.add('active');
+  }
+
+  clearNameCache();
+  resolveNames().then(names => updateAccountTitle(names));
+
+  // Trust scanning runs off state.addresses — the address IS the identity.
+  if (state._startTrustScanning) state._startTrustScanning();
+
+  // Live balance for the connected address, then the bond total from it.
+  try {
+    state.externalAccount.balance = chain === 'eth'
+      ? await fetchEthBalance(account.address)
+      : await fetchSolBalance(account.address);
+  } catch (e) {
+    console.warn('External balance fetch failed:', e);
+  }
+  renderAccountsList();
+  updateWalletBondTotal();
+}
+
 function login(keys) {
   state.loggedIn = true;
   state.wallet = keys;
@@ -2695,6 +2839,22 @@ function logout() {
   state.masterSeed = null;
   state.hdRoot = null;
   state.mnemonic = null;
+  state.externalAccount = null;
+  state.addresses = null;
+
+  // Restore the custody controls an external session hid.
+  $q('.wallet-selector-row')?.style.removeProperty('display');
+  $('wallet-scan-btn')?.style.removeProperty('display');
+  $('wallet-send-action')?.style.removeProperty('display');
+  $('wallet-export-btn-main')?.style.removeProperty('display');
+  $('wallet-advanced-btn-main')?.style.removeProperty('display');
+  const extHeaderLabel = $q('.account-address-label');
+  if (extHeaderLabel) extHeaderLabel.textContent = 'xpub';
+  const extHeaderDisplay = $('account-address-display');
+  if (extHeaderDisplay) {
+    extHeaderDisplay.textContent = '';
+    extHeaderDisplay.title = '';
+  }
 
   localStorage.removeItem(PKI_STORAGE_KEY);
 
@@ -2858,7 +3018,8 @@ function populateAccountAddressDropdown() {
 }
 
 function populateWalletAddresses() {
-  if (!state.wallet) return;
+  // External sessions have addresses (the connected account) without custody.
+  if (!state.wallet && !state.externalAccount) return;
 
   const btcAddress = state.addresses?.btc || '--';
   const ethAddress = state.addresses?.eth || '--';
@@ -3784,13 +3945,18 @@ const rememberMethod = {
 function setupLoginHandlers() {
   // External wallet — the FIRST sign-in method. The panel is the shared
   // hd-wallet-ui/external component; it discovers injected wallets
-  // (EIP-6963 / Wallet Standard), connects, and shows the connected account
-  // honestly. It never touches the HD custody state: state.hdRoot stays
-  // null, no keys modal — an external account is an attachment, not an
-  // unlock.
+  // (EIP-6963 / Wallet Standard) and connects. A successful connect opens
+  // the SAME account interface an HD login does (bond, balances, trust),
+  // driven by the connected address — never touching HD custody state
+  // (state.hdRoot stays null; nav logout ends the session).
   const externalMount = $('external-wallet-mount');
   if (externalMount && !externalMount.childElementCount) {
-    createExternalWalletPanel({ mount: externalMount, connectedView: true });
+    createExternalWalletPanel({
+      mount: externalMount,
+      onConnected: (account) => {
+        loginExternal(account).catch((e) => console.warn('External sign-in failed:', e));
+      },
+    });
   }
 
   // Migrate from old storage format if needed
@@ -4788,6 +4954,14 @@ function setupMainAppHandlers() {
   });
   $('wallet-receive-btn-main')?.addEventListener('click', (e) => {
     e.stopPropagation();
+    // External session: one account, one address — straight to its QR.
+    if (state.externalAccount && !state.hdRoot) {
+      showReceiveModal({
+        name: state.externalAccount.chain.toUpperCase(),
+        address: state.externalAccount.address,
+      });
+      return;
+    }
     updateWalletActionMenus();
     const sendMenu = $('wallet-send-menu');
     const receiveMenu = $('wallet-receive-menu');
