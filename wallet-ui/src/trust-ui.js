@@ -11,7 +11,8 @@ import {
   scanSolanaTrustTransactions,
   scanEthereumTrustTransactions,
   buildTrustGraph,
-  calculateTrustScore,
+  buildSdsTrustExport,
+  parseSdsTrustImport,
   analyzeTrustRelationships,
 } from './blockchain-trust.js';
 
@@ -93,29 +94,23 @@ export function renderTrustList(container, relationships, ownAddresses) {
     const row = document.createElement('div');
     row.className = 'trust-row';
 
-    const ownSet = new Set(
-      Array.isArray(ownAddresses)
-        ? ownAddresses
-        : Object.values(ownAddresses || {}).flat()
-    );
-
-    const isOutbound = ownSet.has(rel.from);
-    const isInbound = ownSet.has(rel.to);
-    const direction = isOutbound && isInbound ? 'mutual'
-      : isOutbound ? 'outbound'
-      : isInbound ? 'inbound'
-      : 'outbound';
-
-    const displayAddress = direction === 'inbound' ? rel.from : rel.to;
+    // analyzeTrustRelationships is the direction authority: it keys
+    // relationships on `address` (the counterparty) and sets `direction`.
+    const direction = rel.direction || 'outbound';
+    const displayAddress = rel.address || rel.from || rel.to || '';
     const chain = rel.chain || rel.network || 'btc';
 
     // Header
     const header = document.createElement('div');
     header.className = 'trust-row-header';
+    const drainedBadge = rel.drained
+      ? '<span class="trust-drain-alert" title="Balance on the published bound address dropped past the drain threshold">DRAIN</span>'
+      : '';
     header.innerHTML = `
       <span class="trust-row-address" title="${displayAddress}">${truncatePubkey(displayAddress)}</span>
       ${chainBadge(chain)}
       ${trustLevelBadge(rel.level)}
+      ${drainedBadge}
       ${directionIndicator(direction)}
       <span class="trust-row-expand">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -146,6 +141,15 @@ export function renderTrustList(container, relationships, ownAddresses) {
       ? `<button class="glass-btn glass-btn-sm trust-revoke-btn" data-address="${displayAddress}">Revoke</button>`
       : '';
 
+    const drainDetail = rel.drained ? `
+      <div class="trust-drain-detail" role="alert">
+        Balance on the published bound address fell from
+        ${rel.previousBalance ?? '--'} to ${rel.currentBalance ?? '--'}
+        (${((rel.dropRatioObserved ?? 0) * 100).toFixed(1)}% drop) — past the
+        ${((rel.dropRatio ?? 0) * 100).toFixed(0)}% drain threshold. Treat this
+        relationship as compromised until re-verified.
+      </div>` : '';
+
     detail.innerHTML = `
       <div class="trust-detail-address">
         <label>Full Address</label>
@@ -155,6 +159,7 @@ export function renderTrustList(container, relationships, ownAddresses) {
         <label>Transactions</label>
         ${txRows || '<span class="trust-no-txs">No transactions recorded</span>'}
       </div>
+      ${drainDetail}
       ${revokeBtn ? `<div class="trust-detail-actions">${revokeBtn}</div>` : ''}
     `;
 
@@ -691,16 +696,12 @@ export async function scanAllTrustTransactions(addresses) {
 // =============================================================================
 
 export function exportTrustData(trustTransactions, xpub) {
-  const payload = {
-    exportDate: new Date().toISOString(),
-    xpub: xpub || null,
-    chainInfo: {
-      btc: 'Bitcoin mainnet',
-      sol: 'Solana mainnet-beta',
-      eth: 'Ethereum mainnet',
-    },
-    transactions: trustTransactions || [],
-  };
+  // SDS export grammar (Themis trust program): trust records → TRE edges
+  // (WEIGHT = (level-1)/4, never DELETED, additive TX_HASH provenance),
+  // revocations → $LOT loss-of-trust events.
+  const payload = buildSdsTrustExport(trustTransactions || [], {
+    peerId: xpub || undefined,
+  });
 
   const json = JSON.stringify(payload, null, 2);
   const blob = new Blob([json], { type: 'application/json' });
@@ -708,7 +709,7 @@ export function exportTrustData(trustTransactions, xpub) {
 
   const a = document.createElement('a');
   a.href = url;
-  a.download = `trust-export-${Date.now()}.trust.json`;
+  a.download = `trust-export-${Date.now()}.sds.json`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -730,8 +731,14 @@ export function importTrustData(file) {
     reader.onload = (e) => {
       try {
         const data = JSON.parse(e.target.result);
+        // SDS TRE/$LOT document (trust program export grammar) first;
+        // legacy { transactions } shape accepted as fallback.
+        if (data && (Array.isArray(data.tre) || Array.isArray(data.lot))) {
+          resolve(parseSdsTrustImport(data));
+          return;
+        }
         if (!data.transactions || !Array.isArray(data.transactions)) {
-          reject(new Error('Invalid trust data: missing transactions array'));
+          reject(new Error('Invalid trust data: expected an SDS TRE/$LOT document or a transactions array'));
           return;
         }
         resolve(data.transactions);

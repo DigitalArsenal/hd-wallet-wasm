@@ -28,6 +28,7 @@ window.Buffer = Buffer;
 
 import { getModalHTML } from './template.js';
 import { createExternalWalletPanel } from './external/panel.js';
+import { decodeBase58 } from './external/accounts.js';
 import WalletStorage, { StorageMethod } from './wallet-storage.js';
 import { safeCopyText } from './clipboard.js';
 import { normalizeTabHash } from './hash.js';
@@ -266,6 +267,28 @@ let _onLoginCallback = null;
 // When false, login() will NOT auto-open the Account modal after authentication.
 // Set via options.openAccountAfterLogin in createWalletUI / init (default: true).
 let _openAccountAfterLogin = true;
+
+// Trust event surface (owner 2026-08-21): consuming apps (SDN dashboard,
+// /beta) receive trust lifecycle + drain alerts through the init
+// onTrustEvent option AND through the external wallet panel controller's
+// notifyTrustEvent. The panel's own onTrustEvent option is NOT wired back
+// here — that would self-loop through the controller.
+let _onTrustEventCallback = null;
+let _externalPanelController = null;
+
+function dispatchTrustEvent(event) {
+  const stamped = { at: Date.now(), ...event };
+  // Consuming apps holding the panel controller subscribe here.
+  _externalPanelController?.notifyTrustEvent?.(stamped);
+  // Consuming apps that passed init({ onTrustEvent }) receive every event.
+  if (typeof _onTrustEventCallback === 'function') {
+    try {
+      _onTrustEventCallback(stamped);
+    } catch (e) {
+      console.warn('onTrustEvent callback failed:', e);
+    }
+  }
+}
 
 const state = {
   initialized: false,
@@ -3952,12 +3975,17 @@ function setupLoginHandlers() {
   // (state.hdRoot stays null; nav logout ends the session).
   const externalMount = $('external-wallet-mount');
   if (externalMount && !externalMount.childElementCount) {
-    createExternalWalletPanel({
+    const panelController = createExternalWalletPanel({
       mount: externalMount,
       onConnected: (account) => {
         loginExternal(account).catch((e) => console.warn('External sign-in failed:', e));
       },
     });
+    // Host-facing event surface: subscribeTrustEvents / notifyTrustEvent on
+    // the controller fan out trust lifecycle + drain alerts. (The panel's
+    // onTrustEvent OPTION stays unwired here — dispatchTrustEvent below would
+    // otherwise re-enter the controller and loop.)
+    _externalPanelController = panelController;
   }
 
   // Migrate from old storage format if needed
@@ -5270,6 +5298,7 @@ function setupTrustHandlers() {
   const TRUST_SCAN_FAIL_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes on failure
   const TRUST_RULES_KEY = 'trust-rules';
   const TRUST_IMPORTED_KEY = 'trust-imported-txs';
+  const TRUST_DRAIN_BASELINES_KEY = 'trust-drain-baselines';
 
   // Auto-scan trust transactions
   async function runTrustScan() {
@@ -5317,6 +5346,10 @@ function setupTrustHandlers() {
       if (rules.length > 0) {
         applyTrustRules(relationships, rules);
       }
+
+      // Drain watch: monitor trusted keys' published bond addresses
+      // client-side and raise the drain alert in the Trust Map.
+      await monitorTrustDrains(relationships);
 
       // Store in state
       state.trustGraph = graph;
@@ -5401,16 +5434,309 @@ function setupTrustHandlers() {
     }
   }
 
-  // Establish trust button
+  // --- Trust publish / revoke lanes (owner 2026-08-21) -----------------------
+
+  const TX_HASH_HEX_RE = /^[0-9a-fA-F]{64}$/;
+  const EVM_ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
+
+  const bytesToHexStr = (bytes) =>
+    Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+
+  // BTC/ETH hashes are 32-byte hex; Solana signatures are base58 — reduce
+  // any of them to the 64-hex/32-byte form the revocation record embeds.
+  function normalizeTxHashHex(hash) {
+    const raw = String(hash ?? '').trim();
+    const hex = raw.startsWith('0x') || raw.startsWith('0X') ? raw.slice(2) : raw;
+    if (TX_HASH_HEX_RE.test(hex)) return hex.toLowerCase();
+    const bytes = decodeBase58(raw);
+    if (bytes && bytes.length === 32) return bytesToHexStr(bytes);
+    throw new Error('Revocation needs a 32-byte original transaction hash (BTC/ETH hex or Solana signature).');
+  }
+
+  // HD signing keys derive the SAME identity account the published address
+  // belongs to (account 0 / index 0, matching deriveAllAddressesFromHD).
+  function deriveTrustSigningKey(coinType) {
+    if (!state.hdRoot) return null;
+    const derived = state.hdRoot.derivePath(buildSigningPath(coinType, 0, 0));
+    return derived.privateKey();
+  }
+
+  // Scanner chain names ('bitcoin'/'ethereum'/'solana', external 'eth'/'sol')
+  // -> publish-lane slug.
+  function chainForTxRecord(record) {
+    const c = String(record?.chain || record?.network || '').toLowerCase();
+    if (c.startsWith('bitcoin') || c === 'btc') return 'btc';
+    if (c.startsWith('ethereum') || c === 'eth') return 'eth';
+    if (c.startsWith('solana') || c === 'sol') return 'sol';
+    return null;
+  }
+
+  // The outbound on-chain trust record we published toward `address` — the
+  // revocation must bind its hash.
+  function matchOutboundTrustTx(address) {
+    const target = String(address ?? '').toLowerCase();
+    return (state.trustTransactions || []).find(tx =>
+      tx.type === 'trust' &&
+      String(tx.recipientPubkey ?? '').toLowerCase() === target &&
+      chainForTxRecord(tx) !== null
+    ) || null;
+  }
+
+  /**
+   * Build, sign and broadcast a trust or revocation record on btc/eth/sol.
+   * Built-in wallet: derived HD keys + free-RPC broadcast. External wallet:
+   * the connected provider signs and sends (eth_sendTransaction /
+   * solana:signAndSendTransaction through the panel transport).
+   *
+   * @returns {Promise<{txHash: string, chain: string}>}
+   */
+  async function publishTrustRecord({
+    recordType,
+    network,
+    recipientAddress = null,
+    level = null,
+    originalTxHash = null,
+  }) {
+    const bt = await import('./blockchain-trust.js');
+
+    const metadataBytes = recordType === 'revocation'
+      ? bt.encodeRevocationMetadata(normalizeTxHashHex(originalTxHash))
+      : bt.encodeTrustMetadata(level, recipientAddress);
+
+    const external = !!(state.externalAccount && !state.hdRoot);
+
+    if (network === 'btc') {
+      if (external) {
+        throw new Error('Bitcoin trust publishing needs the built-in wallet (the external lane covers EVM and Solana).');
+      }
+      const sender = state.addresses.btc;
+      const utxos = await bt.fetchBtcUtxos(sender);
+      if (!utxos.length) throw new Error('No confirmed UTXOs — keep a small BTC balance to cover the trust fee.');
+      const signPrivateKey = deriveTrustSigningKey(0);
+      if (!signPrivateKey) throw new Error('No built-in Bitcoin signing key.');
+      const { rawHex } = bt.btcTrustTransaction({
+        utxos, metadataBytes, changeAddress: sender, signPrivateKey, feeSats: 5000,
+      });
+      return { txHash: await bt.broadcastBtcRawTx(rawHex), chain: 'btc' };
+    }
+
+    if (network === 'eth') {
+      const to = recipientAddress;
+      if (external) {
+        const ethSend = state.externalAccount.transport?.ethSendTransaction;
+        if (!ethSend) throw new Error('The connected EVM wallet offers no eth_sendTransaction.');
+        return { txHash: await ethSend({ to, data: metadataBytes, value: '0x0' }), chain: 'eth' };
+      }
+      const module = state.hdWalletModule;
+      if (!module?.ethereum?.tx) throw new Error('Ethereum tx builder not available.');
+      const sender = state.addresses.eth;
+      const rpc = async (method, params) => {
+        let lastError = 'ETH RPC unavailable';
+        for (const endpoint of bt.getEthereumTrustRpcEndpoints()) {
+          try {
+            const resp = await fetch(apiUrl(endpoint), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+            });
+            if (!resp.ok) { lastError = `HTTP ${resp.status}`; continue; }
+            const data = await resp.json();
+            if (data.error) { lastError = data.error.message || 'ETH RPC error'; continue; }
+            return data.result;
+          } catch (e) { lastError = e?.message || 'ETH RPC fetch failed'; }
+        }
+        throw new Error(`Cannot reach an Ethereum RPC (${lastError})`);
+      };
+
+      const [nonceHex, head, chainIdHex] = await Promise.all([
+        rpc('eth_getTransactionCount', [sender, 'latest']),
+        rpc('eth_getBlockByNumber', ['latest', false]),
+        rpc('eth_chainId', []),
+      ]);
+      const nonce = Number.parseInt(nonceHex, 16);
+      const baseFee = BigInt(head?.baseFeePerGas || '0x0');
+      const maxPriorityFee = 2000000000n; // 2 gwei
+      const maxFee = baseFee * 2n + maxPriorityFee;
+      // 21000 base + 16/byte of data + margin; trust records are <= 80 bytes.
+      const gasLimit = 21000n + BigInt(metadataBytes.length * 16) + 4000n;
+      const tx = module.ethereum.tx.createEIP1559({
+        nonce,
+        maxFeePerGas: maxFee,
+        maxPriorityFeePerGas: maxPriorityFee,
+        gasLimit,
+        to,
+        value: 0n,
+        data: metadataBytes,
+        chainId: Number.parseInt(chainIdHex, 16),
+      });
+      const signPrivateKey = deriveTrustSigningKey(60);
+      if (!signPrivateKey) throw new Error('No built-in Ethereum signing key.');
+      tx.sign(signPrivateKey);
+      const txHash = await rpc('eth_sendRawTransaction', ['0x' + bytesToHexStr(tx.serialize())]);
+      return { txHash, chain: 'eth' };
+    }
+
+    if (network === 'sol') {
+      const sender = state.addresses.sol;
+      const recentBlockhash = await bt.solanaGetLatestBlockhash();
+      if (external) {
+        const solSend = state.externalAccount.transport?.solanaSignAndSendTransaction;
+        if (!solSend) throw new Error('The connected Solana wallet offers no solana:signAndSendTransaction.');
+        const { raw } = bt.buildSolanaTrustTx({
+          feePayer: sender, recentBlockhash, metadataBytes, signPrivateKey: null,
+        });
+        const signature = await solSend(raw);
+        const txHash = typeof signature === 'string'
+          ? signature
+          : bt.base58EncodeBytes(signature);
+        return { txHash, chain: 'sol' };
+      }
+      const signPrivateKey = deriveTrustSigningKey(501);
+      if (!signPrivateKey) throw new Error('No built-in Solana signing key.');
+      const built = bt.buildSolanaTrustTx({
+        feePayer: sender, recentBlockhash, metadataBytes, signPrivateKey,
+      });
+      const txHash = await bt.broadcastSolanaRawTx(built.rawBase64);
+      return { txHash, chain: 'sol' };
+    }
+
+    throw new Error(`Unsupported trust network: ${network}`);
+  }
+
+  // Establish trust button — builds, signs and BROADCASTS the record on the
+  // chosen chain (built-in wallet keys, or the connected external wallet's
+  // provider for eth/sol).
   $('establish-trust-btn')?.addEventListener('click', async () => {
     if (!state.loggedIn) { alert('Please login first'); return; }
     const { showEstablishTrustModal } = await import('./trust-ui.js');
-    showEstablishTrustModal(({ level, network, recipientAddress }) => {
-      console.log('Establish trust:', { level, network, recipientAddress });
-      // TODO: Build, sign, and broadcast trust transaction
-      alert(`Trust transaction would be published on ${network.toUpperCase()} for level ${level}.\nTransaction signing/broadcasting is not yet implemented.`);
+    showEstablishTrustModal(async ({ level, network, recipientAddress }) => {
+      try {
+        const { txHash, chain } = await publishTrustRecord({
+          recordType: 'trust', network, level, recipientAddress,
+        });
+        dispatchTrustEvent({ type: 'trust-published', network, level, recipientAddress, txHash });
+        runTrustScan();
+        alert(`Trust record published on ${network.toUpperCase()}.\nTransaction: ${txHash}`);
+      } catch (err) {
+        console.error('Trust publish failed:', err);
+        alert('Publish failed: ' + (err.message || 'Unknown error'));
+      }
     });
   });
+
+  // Revoke delegation — the revoke button lives in trust-ui's rendered rows.
+  $('trust-list')?.addEventListener('click', async (e) => {
+    const revokeBtn = e.target.closest('.trust-revoke-btn');
+    if (!revokeBtn) return;
+    const address = revokeBtn.dataset?.address;
+    const record = matchOutboundTrustTx(address);
+    if (!record) {
+      alert('No outbound on-chain trust record found for this address.');
+      return;
+    }
+    const network = chainForTxRecord(record);
+    const { showRevokeTrustModal } = await import('./trust-ui.js');
+    showRevokeTrustModal(record.txHash, async ({ originalTxHash }) => {
+      try {
+        const { txHash, chain } = await publishTrustRecord({
+          recordType: 'revocation',
+          network,
+          recipientAddress: record.recipientPubkey,
+          originalTxHash: normalizeTxHashHex(originalTxHash),
+        });
+        dispatchTrustEvent({ type: 'trust-revoked', network, recipientAddress: record.recipientPubkey, txHash });
+        runTrustScan();
+        alert(`Revocation published on ${network.toUpperCase()}.\nTransaction: ${txHash}`);
+      } catch (err) {
+        console.error('Trust revocation failed:', err);
+        alert('Revocation failed: ' + (err.message || 'Unknown error'));
+      }
+    });
+  });
+
+  // Drain watch: for every outbound/mutual relationship, monitor the trusted
+  // counterparty's published address balance client-side. A drop past the
+  // drain ratio from the last funded observation flags the relationship,
+  // raises the alert in the Trust Map, and fires a drain trust event.
+  async function monitorTrustDrains(relationships) {
+    if (!relationships || !relationships.length) return;
+    const { evaluateTrustDrain, getTrustDrainDropRatio } = await import('./blockchain-trust.js');
+    const dropRatio = getTrustDrainDropRatio();
+
+    const detectChain = (address) => {
+      const a = String(address ?? '').trim();
+      if (EVM_ADDR_RE.test(a)) return 'eth';
+      if (/^(1|3)[a-km-zA-HJ-NP-Z1-9]{25,34}$/.test(a) || /^bc1[a-z0-9]{25,90}$/.test(a)) return 'btc';
+      if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a)) return 'sol';
+      return null;
+    };
+    const fetchers = { btc: fetchBtcBalance, eth: fetchEthBalance, sol: fetchSolBalance };
+
+    let baselines = {};
+    try {
+      baselines = JSON.parse(localStorage.getItem(TRUST_DRAIN_BASELINES_KEY) || '{}');
+    } catch (e) { /* fresh baselines */ }
+    let changed = false;
+
+    const watched = relationships
+      .filter(rel => rel.direction !== 'inbound' && detectChain(rel.address))
+      .map(rel => ({ rel, chain: detectChain(rel.address) }));
+
+    await Promise.all(watched.map(async ({ rel, chain }) => {
+      const key = String(rel.address).toLowerCase();
+      const baseline = baselines[key];
+      const prev = baseline ? Number(baseline.balance) : NaN;
+      try {
+        const result = await fetchers[chain](rel.address);
+        const cur = Number(result?.balance);
+        if (!Number.isFinite(cur)) return; // '--' = fetch failure, not a drain
+
+        // Recovery: balance returned to at least half the drained level —
+        // re-arm the watch at the recovered balance.
+        if (baseline?.drained && cur >= prev * 0.5) {
+          baseline.balance = cur;
+          baseline.at = Date.now();
+          baseline.drained = false;
+          rel.drained = false;
+          changed = true;
+          return;
+        }
+
+        const evalRes = evaluateTrustDrain({ previousBalance: prev, currentBalance: cur, dropRatio });
+        if (evalRes.drained && !baseline?.drained) {
+          rel.drained = true;
+          rel.previousBalance = prev;
+          rel.currentBalance = cur;
+          rel.dropRatioObserved = evalRes.dropRatioObserved;
+          rel.dropRatio = dropRatio;
+          dispatchTrustEvent({
+            type: 'drain', network: chain, address: rel.address,
+            previousBalance: prev, currentBalance: cur,
+            dropRatioObserved: evalRes.dropRatioObserved, dropRatio,
+          });
+        }
+
+        // Baseline = the highest funded level observed (the expected bond);
+        // it stays put while the address is drained so the alert persists.
+        if (!baseline || cur > prev) {
+          baselines[key] = {
+            balance: cur,
+            at: Date.now(),
+            drained: !!(evalRes.drained || baseline?.drained),
+          };
+          changed = true;
+        }
+      } catch (err) {
+        console.warn(`Drain check failed for ${rel.address}:`, err?.message || err);
+      }
+    }));
+
+    if (changed) {
+      try {
+        localStorage.setItem(TRUST_DRAIN_BASELINES_KEY, JSON.stringify(baselines));
+      } catch (e) { /* storage quota — monitor still works for this session */ }
+    }
+  }
 
   // Rules button
   $('trust-rules-btn')?.addEventListener('click', async () => {
@@ -6049,10 +6375,11 @@ function setupHomepageHandlers() {
 // =============================================================================
 
 export async function init(rootElement, options = {}) {
-  const { autoOpenWallet = false, onLogin = null, openAccountAfterLogin = true } = typeof rootElement === 'object' && !(rootElement instanceof Node)
+  const { autoOpenWallet = false, onLogin = null, onTrustEvent = null, openAccountAfterLogin = true } = typeof rootElement === 'object' && !(rootElement instanceof Node)
     ? (options = rootElement, {}) : options;
   if (rootElement && rootElement instanceof Node) _root = rootElement;
   if (typeof onLogin === 'function') _onLoginCallback = onLogin;
+  if (typeof onTrustEvent === 'function') _onTrustEventCallback = onTrustEvent;
   _openAccountAfterLogin = openAccountAfterLogin;
 
   // Inject modal HTML if not already present in the DOM
@@ -6167,6 +6494,10 @@ export async function init(rootElement, options = {}) {
  * @param {Object} [options]      - Options passed to init()
  * @param {Function} [options.onLogin] - Callback fired after successful login with
  *   `{ xpub, signingPublicKey, sign(message) }` for SDN identity (BIP-44 coin type 0)
+ * @param {Function} [options.onTrustEvent] - Callback receiving trust lifecycle
+ *   + drain alert events `{ type: 'trust-published'|'trust-revoked'|'drain', at, ... }`
+ *   (component event surface — the external panel controller's
+ *   subscribeTrustEvents/notifyTrustEvent carry the same stream).
  * @param {boolean}  [options.openAccountAfterLogin=true] - When false, the Account
  *   modal will NOT auto-open after login. Useful for integrations that handle
  *   post-login UX themselves (e.g. challenge-response auth flows).

@@ -26,7 +26,13 @@
  */
 
 import { createDiscovery } from './discovery.js';
-import { connectEvm, connectSolana, normalizeProviderError } from './provider.js';
+import {
+  connectEvm,
+  connectSolana,
+  normalizeProviderError,
+  sendEvmTransaction,
+  signAndSendSolanaTransaction,
+} from './provider.js';
 import { chainLabel } from './chains.js';
 import { truncateMiddle } from './format.js';
 
@@ -61,11 +67,22 @@ function describeWalletError(err) {
  * @param {{
  *   mount: Element,                       // REQUIRED — the panel renders here
  *   onConnected?: (account: {lane, address, addressKey, chainId,
- *                            walletName, icon}) => void,
+ *                            walletName, icon, transport}) => void,
+ *                                         // transport = { ethSendTransaction,
+ *                                         // solanaSignAndSendTransaction }
+ *                                         // closures bound to the connected
+ *                                         // wallet — the wallet signs and
+ *                                         // broadcasts, this panel still
+ *                                         // never touches a key
  *   onDisconnected?: () => void,          // fired when the in-panel
  *                                         // DISCONNECT clears the connected
  *                                         // view — the host ends whatever
  *                                         // session it built from onConnected
+ *   onTrustEvent?: (event: {type: string, at: number}) => void,
+ *                                         // trust lifecycle + drain alerts
+ *                                         // (SDN dashboard, /beta) — fired
+ *                                         // by the host through the returned
+ *                                         // controller's notifyTrustEvent
  *   connectedView?: boolean,              // render the connected account
  *                                         // in-panel (copyable address +
  *                                         // disconnect). Default false: the
@@ -81,6 +98,7 @@ export function createExternalWalletPanel({
   mount,
   onConnected = null,
   onDisconnected = null,
+  onTrustEvent = null,
   connectedView = false,
   document: doc = globalThis.document,
   events,
@@ -158,29 +176,68 @@ export function createExternalWalletPanel({
     pick(key, async () => {
       const { accounts, chainId } = await connectEvm(entry.provider, entry.info);
       if (!accounts.length) return null;
+      const account = accounts[0];
       return {
         lane: 'evm',
-        address: accounts[0].address,
-        addressKey: accounts[0].addressKey,
+        address: account.address,
+        addressKey: account.addressKey,
         chainId,
         walletName: entry.info.name,
         icon: entry.info.icon,
+        transport: {
+          ethSendTransaction: (args) =>
+            sendEvmTransaction(entry.provider, { from: account.address, ...args }),
+        },
       };
     });
 
   const pickSolana = (entry, key) =>
     pick(key, async () => {
-      const { accounts } = await connectSolana(entry.wallet);
+      const { accounts, walletAccounts } = await connectSolana(entry.wallet);
       if (!accounts.length) return null;
+      const account = accounts[0];
+      const walletAccount = walletAccounts[0];
       return {
         lane: 'solana',
-        address: accounts[0].address,
-        addressKey: accounts[0].addressKey,
+        address: account.address,
+        addressKey: account.addressKey,
         chainId: null,
         walletName: entry.name,
         icon: entry.icon,
+        transport: {
+          solanaSignAndSendTransaction: (transaction) =>
+            signAndSendSolanaTransaction(entry.wallet, walletAccount, transaction),
+        },
       };
     });
+
+  /**
+   * Trust event fan-out (component event surface, owner 2026-08-21): hosts
+   * receive trust lifecycle events (trust-published, trust-revoked, drain)
+   * through onTrustEvent or by subscribing via the controller's
+   * subscribeTrustEvents. A listener that throws must not break the panel.
+   *
+   * @returns {{type: string, at: number, ...}} the stamped event
+   */
+  const trustListeners = new Set();
+  function dispatchTrustEvent(event) {
+    const stamped = { at: Date.now(), ...event };
+    if (typeof onTrustEvent === 'function') {
+      try {
+        onTrustEvent(stamped);
+      } catch {
+        /* host callback errors are the host's, not the panel's */
+      }
+    }
+    for (const fn of trustListeners) {
+      try {
+        fn(stamped);
+      } catch {
+        /* same rule per listener */
+      }
+    }
+    return stamped;
+  }
 
   function renderConnected() {
     const card = el('div', 'hdw-ext-connected');
@@ -298,9 +355,19 @@ export function createExternalWalletPanel({
 
   return {
     destroy() {
+      trustListeners.clear();
       unsubscribe();
       discovery.stop();
       root.remove();
+    },
+    /** Subscribe to trust lifecycle + drain events; returns unsubscribe. */
+    subscribeTrustEvents(listener) {
+      trustListeners.add(listener);
+      return () => trustListeners.delete(listener);
+    },
+    /** Fire a trust event (publish/revoke/drain) to the hosts. */
+    notifyTrustEvent(event) {
+      return dispatchTrustEvent(event);
     },
   };
 }

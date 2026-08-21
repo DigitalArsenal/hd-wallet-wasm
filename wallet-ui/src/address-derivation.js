@@ -26,7 +26,6 @@ const proxyMap = {
   'https://cloudflare-eth.com': '/api/eth',
   'https://api.mainnet-beta.solana.com': '/api/solana/official',
   'https://solana-rpc.publicnode.com': '/api/solana/publicnode',
-  'https://mainnet.helius-rpc.com': '/api/solana/helius',
   /* Commented out — BTC/ETH/SOL only for now
   'https://fullnode.mainnet.sui.io:443': '/api/sui',
   'https://testnet-rpc.monad.xyz': '/api/monad',
@@ -476,9 +475,10 @@ export async function fetchEthBalance(address) {
  * @returns {Promise<{balance: string, error?: string}>}
  */
 export async function fetchSolBalance(address) {
+  // Free-RPC policy (owner 2026-08-21): no paid API keys in public client
+  // source. The previous Helius keyed endpoint was rotated and removed.
   const endpoints = [
     'https://solana-rpc.publicnode.com',
-    'https://mainnet.helius-rpc.com/?api-key=1d8740dc-e5f4-421c-b823-e1bad1889eda',
     'https://api.mainnet-beta.solana.com',
   ];
   let lastError = 'No available endpoint';

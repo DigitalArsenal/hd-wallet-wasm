@@ -142,6 +142,11 @@ export function watchEvmProvider(provider, { onAccounts, onChain, onDisconnect }
 /**
  * Connect on the Solana lane through Wallet Standard features.
  * The base58 address IS the Ed25519 public key; both are surfaced.
+ *
+ * `walletAccounts` returns the raw Wallet Standard account objects
+ * (publicKey, chains, features) alongside the normalized ones — signing
+ * features like solana:signAndSendTransaction take the RAW account, never
+ * the normalized read-only shape.
  */
 export async function connectSolana(wallet) {
   const connect = wallet?.features?.['standard:connect']?.connect;
@@ -149,10 +154,93 @@ export async function connectSolana(wallet) {
     throw new Error('Not a Wallet Standard wallet: no standard:connect.');
   }
   const result = await connect();
-  const accounts = (Array.isArray(result?.accounts) ? result.accounts : [])
+  const walletAccounts = Array.isArray(result?.accounts) ? result.accounts : [];
+  const accounts = walletAccounts
     .map((account) => normalizeSolanaAccount({ address: account?.address, wallet: { name: wallet.name } }))
     .filter(Boolean);
-  return { accounts };
+  return { accounts, walletAccounts };
+}
+
+/**
+ * The exact eth_sendTransaction wire request (EIP-1193). `data` may be a
+ * Uint8Array or 0x-hex; `value` is a hex quantity string ('0x0' by default —
+ * trust records carry their value in `data`, not the amount). The sender
+ * MUST be explicit: wallets derive `from` from the request, never guess.
+ *
+ * @param {{from: string, to: string, data?: Uint8Array|string,
+ *          value?: string}} args
+ */
+export function toSendEvmTransactionRequest({ from, to, data, value = '0x0' }) {
+  const clean = (s) => String(s ?? '').trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(clean(from))) {
+    throw new Error('eth_sendTransaction requires a valid from address.');
+  }
+  if (!/^0x[0-9a-fA-F]{40}$/.test(clean(to))) {
+    throw new Error('eth_sendTransaction requires a valid to address.');
+  }
+  const params = { from: clean(from), to: clean(to), value: clean(value) };
+  if (data !== undefined && data !== null) {
+    const dataHex = data instanceof Uint8Array ? bytesToHex(data) : clean(data);
+    if (!/^0x[0-9a-fA-F]*$/.test(dataHex)) {
+      throw new Error('eth_sendTransaction data must be 0x-prefixed hex bytes.');
+    }
+    params.data = dataHex;
+  }
+  return { method: 'eth_sendTransaction', params: [params] };
+}
+
+/**
+ * Send a transaction through an EIP-1193 provider by DELEGATION — the wallet
+ * signs with its own key and broadcasts on its own connection; this module
+ * only ever sees the wire request and the resulting transaction hash.
+ *
+ * @returns {Promise<string>} the 0x + 32-byte transaction hash
+ */
+export async function sendEvmTransaction(provider, txArgs) {
+  if (typeof provider?.request !== 'function') {
+    throw new Error('Not an EIP-1193 provider: no request().');
+  }
+  const txHash = await provider.request(toSendEvmTransactionRequest(txArgs));
+  const value = String(txHash ?? '').trim();
+  if (!/^0x[0-9a-fA-F]{64}$/.test(value)) {
+    throw new Error('eth_sendTransaction returned a malformed transaction hash.');
+  }
+  return value;
+}
+
+/**
+ * solana:signAndSendTransaction over a Wallet Standard account: the wallet
+ * SIGNS the supplied serialized transaction and BROADCASTS it itself — the
+ * caller never touches the key and gets only the 64-byte signature back
+ * (some wallets answer a base58 string; both forms pass through verbatim).
+ *
+ * @param {object} wallet — a discovered Wallet Standard wallet
+ * @param {object} walletAccount — the RAW WalletAccount from connectSolana's
+ *                                 walletAccounts, not the normalized shape
+ * @param {Uint8Array} transaction — serialized (unsigned) transaction bytes
+ * @returns {Promise<Uint8Array|string>}
+ */
+export async function signAndSendSolanaTransaction(wallet, walletAccount, transaction) {
+  const signAndSend = wallet?.features?.['solana:signAndSendTransaction']?.signAndSendTransaction;
+  if (typeof signAndSend !== 'function') {
+    throw new Error('This wallet does not offer solana:signAndSendTransaction.');
+  }
+  if (!(transaction instanceof Uint8Array) || transaction.length === 0) {
+    throw new Error('signAndSendTransaction takes the serialized transaction BYTES.');
+  }
+  const [result] = await signAndSend({ account: walletAccount, transaction });
+  const signature = result?.signature;
+  if (signature instanceof Uint8Array) {
+    if (signature.length !== 64) {
+      throw new Error('The wallet returned a malformed Ed25519 signature.');
+    }
+    return signature;
+  }
+  const value = String(signature ?? '').trim();
+  if (!/^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(value)) {
+    throw new Error('The wallet returned a malformed signature value.');
+  }
+  return value;
 }
 
 /**
