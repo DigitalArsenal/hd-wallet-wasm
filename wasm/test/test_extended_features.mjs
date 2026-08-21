@@ -20,13 +20,7 @@ import { test, assert, assertEqual, assertThrows, bytesToHex, hexToBytes } from 
 // Node-only reference implementation for AES-CTR vectors.
 import { createCipheriv } from 'crypto';
 
-let wallet;
-try {
-  wallet = await init();
-} catch (error) {
-  console.log('  Skipping extended feature tests: WASM module not available');
-  process.exit(0);
-}
+const wallet = await init();
 
 const encoder = new TextEncoder();
 
@@ -611,4 +605,3 @@ test('Polkadot: signMessage is deterministic', () => {
   const sig2 = wallet.polkadot.signMessage(msg, priv);
   assertEqual(bytesToHex(sig1), bytesToHex(sig2), 'Polkadot signMessage should be deterministic');
 });
-

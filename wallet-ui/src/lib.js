@@ -15,9 +15,6 @@ export {
   getEncryptionKey,
   WellKnownCoinType,
   PKI_STORAGE_KEY,
-  STORED_WALLET_KEY,
-  PASSKEY_CREDENTIAL_KEY,
-  PASSKEY_WALLET_KEY,
 } from './constants.js';
 
 // Address derivation & utilities
@@ -46,21 +43,24 @@ export {
   fetchXrpBalance,
 } from './address-derivation.js';
 
-// Wallet storage & encryption
+// Canonical PRF-only remembered-wallet records and explicit quarantine tools.
+// Key derivation and credential ceremony code remains wallet-origin only.
 export {
-  default as WalletStorage,
-  StorageMethod,
-  isPasskeySupported,
-  isPRFLikelySupported,
-  registerPasskey,
-  authenticatePasskey,
-  getStorageMetadata,
-  hasStoredWallet,
-  getStorageMethod,
-  storeWithPIN,
-  retrieveWithPIN,
-  storeWithPasskey,
-  retrieveWithPasskey,
-  clearStorage,
-  migrateStorage,
+  ACTIVE_REMEMBERED_WALLET_KEY,
+  LEGACY_WALLET_QUARANTINE_KEYS,
+  MAX_QUARANTINE_EXPORT_CHARACTERS,
+  PENDING_REMEMBERED_WALLET_KEY,
+  WalletStorageError,
+  beginRememberedWalletWrite,
+  commitRememberedWalletWrite,
+  decodeCanonicalBase64url,
+  deleteQuarantinedWalletRecord,
+  exportQuarantinedWalletRecord,
+  forgetRememberedWallet,
+  inspectLegacyWalletQuarantine,
+  inspectQuarantinedWalletStorage,
+  inspectRememberedWalletStorage,
+  parseRememberedWalletRecord,
+  serializeRememberedWalletRecord,
+  validateRememberedWalletRecord,
 } from './wallet-storage.js';

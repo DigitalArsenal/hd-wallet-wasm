@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "profile": "webauthn-prf-hkdf-sha256-aes256gcm-v2",
+  "prfOutputHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "hkdfSaltHex": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+  "nonceHex": "404142434445464748494a4b",
+  "credentialIdBase64url": "oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr8",
+  "canonicalUsername": "alice_01",
+  "usernameSha256": "661eac7c194c79f1d07fb7f1570303d615debd059051059a1326344f748a727b",
+  "identityScheme": "sdn-bip32-slip10-purpose-v1",
+  "seedProfile": "password-scrypt-v2",
+  "passwordUtf8Hex": "436f727265637420486f727365204261747465727920537461706c6521",
+  "derivedSeedHex": "c63fbe791b92d91eb828eab4b203cffe7f333e9d200ec2355d77c7796c080f79c9ed753af213bf155512e3c667c3be26a22c1c599cbae52cb44add279559fe5b",
+  "canonicalAad": "{\"credentialIdBase64url\":\"oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr8\",\"identityScheme\":\"sdn-bip32-slip10-purpose-v1\",\"schemaVersion\":2,\"seedProfile\":\"password-scrypt-v2\",\"storageProfile\":\"webauthn-prf-hkdf-sha256-aes256gcm-v2\",\"usernameSha256\":\"661eac7c194c79f1d07fb7f1570303d615debd059051059a1326344f748a727b\"}",
+  "canonicalPlaintext": "{\"identityScheme\":\"sdn-bip32-slip10-purpose-v1\",\"passwordBase64url\":\"Q29ycmVjdCBIb3JzZSBCYXR0ZXJ5IFN0YXBsZSE\",\"seedProfile\":\"password-scrypt-v2\",\"username\":\"alice_01\"}",
+  "wrappingKeyHex": "8f7504aae664d8ec10d03b4d3875012f28b176f3b1d31de97ddc308c51f1f78f",
+  "ciphertextAndTagHex": "097cf85a7e2500ce6b4038905bd0bcdf8d169729c9941622ecee486424ebddc89780e4c6ede8f3fd701a341eaa1954d73cc5d47fb170b503e48df9e5ea01aec9b8610b95905eadbe66ab2456eae2e210037f6481b8b2e9ead5ed4f2dfe90583d39cb96a50caedc4eb960539cdb24e350b504ac71c1d64726084a758791ba59faab02dccfcb41cc3cddcf4c897f7d9e67429322763e3ca8e9086a18c6f6bb15e9ca7c24814313b5d53f29aa892804660f11129655fe787b"
+}

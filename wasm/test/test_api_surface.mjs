@@ -28,13 +28,7 @@ import init, {
 
 import { test, testAsync, assert, assertEqual, assertDeepEqual, bytesToHex, hexToBytes } from './test_all.mjs';
 
-let wallet;
-try {
-  wallet = await init();
-} catch (error) {
-  console.log('  Skipping API surface tests: WASM module not available');
-  process.exit(0);
-}
+const wallet = await init();
 
 function expectHdWalletError(fn, code) {
   let threw = false;
@@ -94,7 +88,7 @@ await testAsync('verifyWasmIntegrity accepts and rejects hashes correctly', asyn
 });
 
 test('module metadata APIs return typed values', () => {
-  assert(wallet.getVersion().length > 0, 'Version string should be non-empty');
+  assertEqual(wallet.getVersion(), '2.0.30', 'Version string should match the release contract');
   assert(typeof wallet.hasCryptopp() === 'boolean', 'hasCryptopp should return boolean');
   assert(typeof wallet.isFipsMode() === 'boolean', 'isFipsMode should return boolean');
 

@@ -28,14 +28,8 @@ import {
   hexToBytes,
 } from './test_all.mjs';
 
-let wallet;
-try {
-  wallet = await init();
-  wallet.injectEntropy(new Uint8Array(32).fill(42));
-} catch (error) {
-  console.log('  Skipping low-priority edge case tests: WASM module not available');
-  process.exit(0);
-}
+const wallet = await init();
+wallet.injectEntropy(new Uint8Array(32).fill(42));
 
 const encoder = new TextEncoder();
 

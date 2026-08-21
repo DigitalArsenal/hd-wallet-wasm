@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "hashAlgorithm": "sha256",
+  "entries": [
+    {
+      "path": "release/protocol/asset-review-v1.json",
+      "bytes": 3762,
+      "sha256": "7dbc959e1cb7f263ab0a203afde39911347a3e28f2142c32ba3815f2c657ce1f"
+    },
+    {
+      "path": "test/fixtures/sdn-operation-wire-v1.json",
+      "bytes": 17512,
+      "sha256": "f81924055c9b64d839c702257215c5a77861843388327deeddd5929c31e7cc46"
+    },
+    {
+      "path": "test/fixtures/sdn-remember-wallet-v2.json",
+      "bytes": 1864,
+      "sha256": "1fb4cdea378b180765fd09ee0912026cef38f1e7504568131eccb9f7f1063a69"
+    },
+    {
+      "path": "test/fixtures/sdn-wallet-vectors.v1.json",
+      "bytes": 36960,
+      "sha256": "63fc032f3243d18b5ce5e47a4d82ad1ebc7c5213e9c8323b1899763c436e8bc1"
+    },
+    {
+      "path": "test/fixtures/trezor-bip39-vectors.json",
+      "bytes": 152400,
+      "sha256": "fa3b937b7cff9c9b8ecd3aa011faeb8d6dd67993174b72326e83f4de8fdb30f8"
+    },
+    {
+      "path": "test/fixtures/trezor-bip39-vectors.source.json",
+      "bytes": 478,
+      "sha256": "02e36289cf83f142cc9b731be41aec463fc35bc40d6f0dd4fc94bfbb46da768b"
+    },
+    {
+      "path": "wallet-ui/data/common-passwords-sdn-v1.source.json",
+      "bytes": 590,
+      "sha256": "5c97eee5f7b3f58da8d32d1080014b99fed5faa326cfb98c6d28362031722032"
+    },
+    {
+      "path": "wallet-ui/data/common-passwords-sdn-v1.txt",
+      "bytes": 73017,
+      "sha256": "4adb3f0afb4a10cf19ebe48d8c69a46f934bbc8d77c694c210564f9583e7f4ba"
+    }
+  ]
+}

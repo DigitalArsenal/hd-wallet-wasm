@@ -9,7 +9,7 @@
  * - Transaction building and signing
  *
  * @module hd-wallet-wasm
- * @version 2.0.9
+ * @version 2.0.30
  */
 
 // Import aligned API for batch operations
@@ -19,6 +19,56 @@ import {
   SDN_PLUGIN_MANIFEST_EXPORTS
 } from './sdn-plugin.mjs';
 import { HD_WALLET_SDN_PLUGIN_MANIFEST } from './sdn-plugin-manifest-source.mjs';
+import { createSdnTypedCapabilities } from './sdn-typed.mjs';
+
+const walletOriginCapabilitiesByModule = new WeakMap();
+
+function createWalletOriginCapabilitiesBinding(module) {
+  const sdn = module.sdn;
+  const utils = module.utils;
+  const wasmSha256 = utils.sha256;
+  return Object.freeze({
+    sdn,
+    sha256(bytes) {
+      return wasmSha256(bytes);
+    },
+  });
+}
+
+function installWalletOriginCapabilities(module) {
+  const binding = createWalletOriginCapabilitiesBinding(module);
+  Object.defineProperty(module, 'walletOriginCapabilities', {
+    value: binding,
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
+  walletOriginCapabilitiesByModule.set(module, binding);
+}
+
+/**
+ * Resolve the wallet-origin binding only for the exact initialized owner.
+ * Forged pairs and copied bindings are never accepted as module authority.
+ *
+ * @param {Object} module - An initialized HDWalletModule returned by init().
+ * @returns {{sdn: Object, sha256: (bytes: Uint8Array) => Uint8Array}}
+ */
+export function getWalletOriginCapabilities(module) {
+  if (module === null || typeof module !== 'object') {
+    throw new TypeError('Invalid HD wallet module');
+  }
+  const binding = walletOriginCapabilitiesByModule.get(module);
+  if (!binding) throw new TypeError('Invalid HD wallet module');
+  const descriptor = Object.getOwnPropertyDescriptor(
+    module,
+    'walletOriginCapabilities',
+  );
+  if (!descriptor || descriptor.value !== binding || descriptor.enumerable ||
+      descriptor.writable || descriptor.configurable) {
+    throw new TypeError('Invalid HD wallet module');
+  }
+  return binding;
+}
 
 // =============================================================================
 // Enums (matching TypeScript definitions)
@@ -4586,6 +4636,13 @@ function createModule(wasm) {
     }
   };
 
+  Object.defineProperty(module, 'sdn', {
+    value: createSdnTypedCapabilities(wasm),
+    enumerable: true,
+    writable: false,
+    configurable: false,
+  });
+  installWalletOriginCapabilities(module);
   module.plugin = createSdnPluginContract({ wallet: module, wasm });
   return module;
 }

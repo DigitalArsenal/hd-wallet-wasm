@@ -32,7 +32,7 @@ cmake_minimum_required(VERSION 3.16...3.28)
 # Version
 set(HD_WALLET_VERSION_MAJOR 2)
 set(HD_WALLET_VERSION_MINOR 0)
-set(HD_WALLET_VERSION_PATCH 6)
+set(HD_WALLET_VERSION_PATCH 30)
 
 project(HDWalletWasm
   VERSION ${HD_WALLET_VERSION_MAJOR}.${HD_WALLET_VERSION_MINOR}.${HD_WALLET_VERSION_PATCH}
@@ -66,14 +66,24 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(HD_WALLET_USE_CRYPTOPP)
   include(FetchContent)
-  # SECURITY FIX [CRIT-04]: Pin to specific commit SHA instead of tag
-  # Tags can be force-pushed with malicious code; commit SHAs are immutable.
-  # This is the commit for CRYPTOPP_8_9_0 tag, verified 2026-02-03
+
+  # The wrapper's default source resolver uses a mutable upstream tag. Declare
+  # the direct Crypto++ source first so FetchContent's first-declaration-wins
+  # rule binds the wrapper to the reviewed full commit instead. The wrapper is
+  # itself fetched from a commit-addressed archive with a frozen SHA-256.
+  FetchContent_Declare(
+    cryptopp
+    GIT_REPOSITORY https://github.com/weidai11/cryptopp.git
+    GIT_TAG        843d74c7c97f9e19a615b8ff3c0ca06599ca501b
+    GIT_SHALLOW    FALSE
+    GIT_SUBMODULES ""
+    SOURCE_DIR "${FETCHCONTENT_BASE_DIR}/cryptopp-cmake-build/cryptopp"
+  )
   FetchContent_Declare(
     cryptopp-cmake
-    GIT_REPOSITORY https://github.com/abdes/cryptopp-cmake.git
-    GIT_TAG        604d3df147e7b16fb7caa70e22c54c9a40ac1bd5  # CRYPTOPP_8_9_0
-    GIT_SHALLOW    TRUE
+    URL https://github.com/abdes/cryptopp-cmake/archive/f815f6284684be6ab03af4b6c273359331c61241.tar.gz
+    URL_HASH SHA256=6ac4e8002b1167bb5393744e1f97a1207c39c9073fcff0efc1a43c0f0255edbe
+    DOWNLOAD_EXTRACT_TIMESTAMP FALSE
   )
   set(CRYPTOPP_BUILD_TESTING OFF CACHE BOOL "" FORCE)
   set(CRYPTOPP_INSTALL OFF CACHE BOOL "" FORCE)
@@ -84,9 +94,23 @@ if(HD_WALLET_USE_CRYPTOPP)
     set(CRYPTOPP_DISABLE_SSSE3 ON CACHE BOOL "" FORCE)
     set(CRYPTOPP_DISABLE_AESNI ON CACHE BOOL "" FORCE)
     set(CRYPTOPP_USE_INTERMEDIATE_OBJECTS_TARGET OFF CACHE BOOL "" FORCE)
+
+    # The pinned wrapper probes for SunCC by invoking the C++ compiler with -V.
+    # Emscripten treats that unsupported probe as a link and writes a.out.js in
+    # the caller's source directory. This sentinel skips the two Solaris probes;
+    # the wrapper's only later Solaris branches are additionally restricted to
+    # SunPro or GNU, while the frozen Emscripten compiler is Clang.
+    set(CRYPTOPP_SOLARIS TRUE)
   endif()
 
   FetchContent_MakeAvailable(cryptopp-cmake)
+  if(EMSCRIPTEN)
+    unset(CRYPTOPP_SOLARIS)
+    target_compile_options(cryptopp PRIVATE
+      $<$<CONFIG:Release>:-Oz>
+      $<$<CONFIG:Release>:-flto>
+    )
+  endif()
   add_definitions(-DHD_WALLET_USE_CRYPTOPP=1)
   message(STATUS "Using Crypto++ for cryptographic operations")
 endif()
@@ -133,6 +157,8 @@ set(HD_WALLET_HEADERS
   include/hd_wallet/error.h
   include/hd_wallet/utils.h
   include/hd_wallet/secure_memory.h
+  include/hd_wallet/password_profile.h
+  include/hd_wallet/sdn_identity.h
   # BIP Standards
   include/hd_wallet/bip39.h
   include/hd_wallet/bip32.h
@@ -144,6 +170,7 @@ set(HD_WALLET_HEADERS
   include/hd_wallet/ecdsa.h
   include/hd_wallet/eddsa.h
   include/hd_wallet/ecdh.h
+  include/hd_wallet/libp2p.h
   include/hd_wallet/x509.h
   # Coins/Chains
   include/hd_wallet/coins/coin.h
@@ -176,6 +203,10 @@ set(HD_WALLET_SOURCES
   src/utils.cpp
   src/secure_memory.cpp
   src/error.cpp
+  src/password_profile.cpp
+  src/sdn_identity.cpp
+  src/sdn_identity_secrets.cpp
+  src/canonical_json.cpp
   # BIP Standards
   src/bip39.cpp
   src/bip32.cpp
@@ -188,6 +219,7 @@ set(HD_WALLET_SOURCES
   src/ecdh.cpp
   src/ecies.cpp
   src/x509.cpp
+  src/libp2p.cpp
   # Coins
   src/coins/coin.cpp
   src/coins/bitcoin.cpp
@@ -225,7 +257,17 @@ if(NOT EMSCRIPTEN)
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/generated/aligned>
       $<INSTALL_INTERFACE:include>
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/generated
   )
+  target_compile_features(hd_wallet PUBLIC cxx_std_20)
+
+  if(HD_WALLET_BUILD_TESTS)
+    target_compile_definitions(hd_wallet PRIVATE
+      HD_WALLET_PASSWORD_PROFILE_TESTING=1
+      HD_WALLET_SDN_IDENTITY_TESTING=1
+    )
+  endif()
 
   if(HD_WALLET_USE_CRYPTOPP)
     target_link_libraries(hd_wallet PUBLIC cryptopp)
@@ -599,6 +641,21 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
     endif()
     string(JOIN "," EXPORTED_FUNCS_STR ${WASM_EXPORTED_FUNCTIONS})
 
+    set(BROWSER_EXPORTED_FUNCTIONS
+      ${WASM_EXPORTED_FUNCTIONS}
+      "_hd_sdn_derive_password_identity"
+      "_hd_sdn_derive_legacy_password_identity"
+      "_hd_sdn_import_legacy_mnemonic_identity"
+      "_hd_sdn_import_remembered_identity"
+      "_hd_sdn_sign_login_v1"
+      "_hd_sdn_sign_login_v2"
+      "_hd_sdn_sign_asset_review_authority_activation"
+      "_hd_sdn_sign_asset_review_decision"
+      "_hd_sdn_seal_remembered_identity"
+      "_hd_sdn_destroy_identity"
+    )
+    string(JOIN "," BROWSER_EXPORTED_FUNCS_STR ${BROWSER_EXPORTED_FUNCTIONS})
+
     # =========================================================================
     # libsecp256k1 - Bitcoin Core's secp256k1 (replaces Crypto++ EC in WASM)
     # Crypto++ ECP::ScalarMultiply is unreliable in 32-bit WASM due to
@@ -623,6 +680,14 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
     set(SECP256K1_INSTALL OFF CACHE BOOL "" FORCE)
     set(SECP256K1_ASM "OFF" CACHE STRING "" FORCE)
     FetchContent_MakeAvailable(secp256k1)
+    target_compile_options(secp256k1_precomputed PRIVATE
+      $<$<CONFIG:Release>:-Oz>
+      $<$<CONFIG:Release>:-flto>
+    )
+    target_compile_options(secp256k1 PRIVATE
+      $<$<CONFIG:Release>:-Oz>
+      $<$<CONFIG:Release>:-flto>
+    )
     message(STATUS "Using libsecp256k1 for WASM EC operations")
 
     # WASM compile options
@@ -681,7 +746,7 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       -sDISABLE_EXCEPTION_CATCHING=1
       -fignore-exceptions
       --no-entry
-      $<$<CONFIG:Release>:-O3>
+      $<$<CONFIG:Release>:-Oz>
       $<$<CONFIG:Release>:-flto>
       $<$<CONFIG:Debug>:-g>
     )
@@ -976,7 +1041,7 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       -fignore-exceptions
       -sDISABLE_EXCEPTION_CATCHING=1
       --no-entry
-      $<$<CONFIG:Release>:-O3>
+      $<$<CONFIG:Release>:-Oz>
       $<$<CONFIG:Release>:-flto>
       $<$<CONFIG:Debug>:-g>
     )
@@ -985,10 +1050,21 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
     # Target: JavaScript ES6 module (browsers and Node.js)
     # =========================================================================
     add_executable(hd_wallet_wasm_js ${HD_WALLET_WASM_SOURCES})
+    target_sources(hd_wallet_wasm_js PRIVATE
+      src/password_profile.cpp
+      src/sdn_identity.cpp
+      src/sdn_identity_secrets.cpp
+      src/canonical_json.cpp
+    )
     target_include_directories(hd_wallet_wasm_js PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}/include
+      ${CMAKE_CURRENT_SOURCE_DIR}/generated
       ${CMAKE_CURRENT_SOURCE_DIR}/generated/aligned
       $<$<BOOL:${HD_WALLET_USE_OPENSSL}>:${OPENSSL_FIPS_INCLUDE}>
+    )
+    target_compile_features(hd_wallet_wasm_js PRIVATE cxx_std_20)
+    target_compile_definitions(hd_wallet_wasm_js PRIVATE
+      HD_WALLET_SDN_TYPED_API=1
     )
     target_compile_options(hd_wallet_wasm_js PRIVATE ${WASM_COMPILE_OPTIONS} -fexceptions)
     target_link_libraries(hd_wallet_wasm_js PRIVATE cryptopp secp256k1)
@@ -998,7 +1074,7 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
     set_target_properties(hd_wallet_wasm_js PROPERTIES
       OUTPUT_NAME "hd-wallet"
       SUFFIX ".js"
-      RUNTIME_OUTPUT_DIRECTORY "${WASM_OUTPUT_DIR}"
+      RUNTIME_OUTPUT_DIRECTORY "${WASM_OUTPUT_DIR}/browser"
     )
     target_link_options(hd_wallet_wasm_js PRIVATE
       -sWASM=1
@@ -1012,14 +1088,14 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       -sSTACK_SIZE=2MB
       -sERROR_ON_UNDEFINED_SYMBOLS=0
       -Wno-undefined
-      "-sEXPORTED_FUNCTIONS=[${EXPORTED_FUNCS_STR}]"
+      "-sEXPORTED_FUNCTIONS=[${BROWSER_EXPORTED_FUNCS_STR}]"
       -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,getValue,setValue,UTF8ToString,stringToUTF8,lengthBytesUTF8,HEAPU8,HEAP32
       -sENVIRONMENT=web,worker
       -sNO_EXIT_RUNTIME=1
       -fexceptions
       -sDISABLE_EXCEPTION_THROWING=0
       --no-entry
-      $<$<CONFIG:Release>:-O3>
+      $<$<CONFIG:Release>:-Oz>
       $<$<CONFIG:Release>:-flto>
       $<$<CONFIG:Debug>:-g>
     )
@@ -1028,10 +1104,21 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
     # Target: Single-file version (inlined WASM)
     # =========================================================================
     add_executable(hd_wallet_wasm_inline ${HD_WALLET_WASM_SOURCES})
+    target_sources(hd_wallet_wasm_inline PRIVATE
+      src/password_profile.cpp
+      src/sdn_identity.cpp
+      src/sdn_identity_secrets.cpp
+      src/canonical_json.cpp
+    )
     target_include_directories(hd_wallet_wasm_inline PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}/include
+      ${CMAKE_CURRENT_SOURCE_DIR}/generated
       ${CMAKE_CURRENT_SOURCE_DIR}/generated/aligned
       $<$<BOOL:${HD_WALLET_USE_OPENSSL}>:${OPENSSL_FIPS_INCLUDE}>
+    )
+    target_compile_features(hd_wallet_wasm_inline PRIVATE cxx_std_20)
+    target_compile_definitions(hd_wallet_wasm_inline PRIVATE
+      HD_WALLET_SDN_TYPED_API=1
     )
     target_compile_options(hd_wallet_wasm_inline PRIVATE ${WASM_COMPILE_OPTIONS} -fexceptions)
     target_link_libraries(hd_wallet_wasm_inline PRIVATE cryptopp secp256k1)
@@ -1056,14 +1143,14 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       -sSTACK_SIZE=2MB
       -sERROR_ON_UNDEFINED_SYMBOLS=0
       -Wno-undefined
-      "-sEXPORTED_FUNCTIONS=[${EXPORTED_FUNCS_STR}]"
+      "-sEXPORTED_FUNCTIONS=[${BROWSER_EXPORTED_FUNCS_STR}]"
       -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,getValue,setValue,UTF8ToString,stringToUTF8,lengthBytesUTF8,HEAPU8,HEAP32
       -sENVIRONMENT=web,worker
       -sNO_EXIT_RUNTIME=1
       -fexceptions
       -sDISABLE_EXCEPTION_THROWING=0
       --no-entry
-      $<$<CONFIG:Release>:-O3>
+      $<$<CONFIG:Release>:-Oz>
       $<$<CONFIG:Release>:-flto>
       $<$<CONFIG:Debug>:-g>
     )
@@ -1091,7 +1178,7 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
         "${WASM_OUTPUT_DIR}/hd-wallet-inline.js"
         "${WASM_NPM_DIR}/hd-wallet.js"
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${WASM_OUTPUT_DIR}/hd-wallet.wasm"
+        "${WASM_OUTPUT_DIR}/browser/hd-wallet.wasm"
         "${WASM_NPM_DIR}/hd-wallet.wasm"
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${WASM_OUTPUT_DIR}/hd-wallet-wasi.wasm"
@@ -1122,16 +1209,29 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
     if(WASM_OPT)
       add_custom_command(TARGET hd_wallet_wasm_npm POST_BUILD
         COMMAND "$<$<CONFIG:Release>:${WASM_OPT}>"
-                $<$<CONFIG:Release>:-O3>
+                $<$<CONFIG:Release>:-Oz>
                 $<$<CONFIG:Release>:--strip-debug>
                 $<$<CONFIG:Release>:--strip-producers>
                 $<$<CONFIG:Release>:--all-features>
                 $<$<CONFIG:Release>:-o>
                 $<$<CONFIG:Release>:${WASM_NPM_DIR}/hd-wallet.wasm>
                 $<$<CONFIG:Release>:${WASM_NPM_DIR}/hd-wallet.wasm>
-        COMMENT "Optimizing standalone WASM binary with wasm-opt -O3"
+        COMMENT "Optimizing standalone WASM binary with wasm-opt -Oz"
       )
     endif()
+
+    # Stage the typed high-level runtime only after the canonical raw/WASI
+    # artifacts and all post-processing are complete. Every local and hosted
+    # caller of hd_wallet_wasm_npm therefore receives the same package graph.
+    find_program(NODE_PROGRAM NAMES node)
+    if(NOT NODE_PROGRAM)
+      message(FATAL_ERROR "Node.js is required to stage the core NPM package")
+    endif()
+    add_custom_command(TARGET hd_wallet_wasm_npm POST_BUILD
+      COMMAND "${NODE_PROGRAM}" "${CMAKE_SOURCE_DIR}/scripts/stage-core-package.mjs"
+      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      COMMENT "Staging deterministic typed core package runtime"
+    )
 
     message(STATUS "WASM targets configured:")
     message(STATUS "  hd_wallet_wasm        - WASI standalone module (.wasm)")
@@ -1163,17 +1263,40 @@ endif()
 if(HD_WALLET_BUILD_TESTS AND NOT EMSCRIPTEN)
   enable_testing()
 
-  # Fetch test vectors
-  FetchContent_Declare(
-    test_vectors
-    URL https://raw.githubusercontent.com/trezor/python-mnemonic/master/vectors.json
-    DOWNLOAD_NO_EXTRACT TRUE
-    DOWNLOAD_DIR ${CMAKE_BINARY_DIR}/test_data
+  # Copy the committed, integrity-checked test vectors into the build tree.
+  configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/trezor-bip39-vectors.json
+    ${CMAKE_BINARY_DIR}/test_data/vectors.json
+    COPYONLY
   )
-  FetchContent_MakeAvailable(test_vectors)
+
+  configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/sdn-wallet-vectors.v1.json
+    ${CMAKE_BINARY_DIR}/test_data/sdn-wallet-vectors.v1.json
+    COPYONLY
+  )
+
+  configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/sdn-operation-wire-v1.json
+    ${CMAKE_BINARY_DIR}/test_data/sdn-operation-wire-v1.json
+    COPYONLY
+  )
+
+  configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/sdn-remember-wallet-v2.json
+    ${CMAKE_BINARY_DIR}/test_data/sdn-remember-wallet-v2.json
+    COPYONLY
+  )
+
+  configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/release/protocol/asset-review-v1.json
+    ${CMAKE_BINARY_DIR}/test_data/asset-review-v1.json
+    COPYONLY
+  )
 
   add_executable(hd_wallet_tests
     test/test_main.cpp
+    test/test_version.cpp
     test/test_bip39.cpp
     test/test_bip32.cpp
     test/test_curves.cpp
@@ -1194,6 +1317,69 @@ if(HD_WALLET_BUILD_TESTS AND NOT EMSCRIPTEN)
   )
 
   add_test(NAME hd_wallet_tests COMMAND hd_wallet_tests)
+
+  add_executable(test_password_profile
+    test/test_main.cpp
+    test/test_password_profile.cpp
+  )
+  target_link_libraries(test_password_profile PRIVATE hd_wallet)
+  target_include_directories(test_password_profile PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/test
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_compile_definitions(test_password_profile PRIVATE
+    HD_WALLET_PASSWORD_PROFILE_TESTING=1
+  )
+
+  add_executable(test_sdn_vectors
+    test/test_main.cpp
+    test/test_sdn_vectors.cpp
+  )
+  target_link_libraries(test_sdn_vectors PRIVATE hd_wallet)
+  target_include_directories(test_sdn_vectors PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/test
+  )
+  target_compile_definitions(test_sdn_vectors PRIVATE
+    TEST_VECTORS_PATH="${CMAKE_BINARY_DIR}/test_data"
+  )
+
+  add_executable(test_sdn_identity
+    test/test_main.cpp
+    test/test_sdn_identity.cpp
+  )
+  target_link_libraries(test_sdn_identity PRIVATE hd_wallet)
+  target_include_directories(test_sdn_identity PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/test
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_compile_definitions(test_sdn_identity PRIVATE
+    HD_WALLET_PASSWORD_PROFILE_TESTING=1
+    HD_WALLET_SDN_IDENTITY_TESTING=1
+    TEST_VECTORS_PATH="${CMAKE_BINARY_DIR}/test_data"
+  )
+
+  add_executable(test_sdn_signing
+    test/test_main.cpp
+    test/test_sdn_signing.cpp
+  )
+  target_link_libraries(test_sdn_signing PRIVATE hd_wallet)
+  target_include_directories(test_sdn_signing PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/test
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_compile_definitions(test_sdn_signing PRIVATE
+    HD_WALLET_SDN_IDENTITY_TESTING=1
+    TEST_VECTORS_PATH="${CMAKE_BINARY_DIR}/test_data"
+  )
+
+  add_test(NAME test_password_profile COMMAND test_password_profile)
+  add_test(NAME test_sdn_vectors COMMAND test_sdn_vectors)
+  add_test(NAME test_sdn_identity COMMAND test_sdn_identity)
+  add_test(NAME test_sdn_signing COMMAND test_sdn_signing)
 
   message(STATUS "Tests enabled: hd_wallet_tests")
 endif()

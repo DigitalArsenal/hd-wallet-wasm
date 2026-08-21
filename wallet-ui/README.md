@@ -1,173 +1,151 @@
-# HD Wallet UI
+# hd-wallet-ui
 
-Standalone HD wallet interface with glass morphism design. Supports BIP-32/39/44 key derivation across multiple blockchain networks.
+Browser UI and public relay clients for the Space Data Network wallet. The
+package keeps credential entry and key operations on the dedicated wallet
+origin while giving registered SDN sites a small, typed API for login, account,
+and signed approval requests.
 
-## Features
+## Install
 
-- **Multi-chain support** -- BTC, ETH, SOL, SUI, Monad, Cardano (and more via HD derivation)
-- **Three login methods** -- Password, BIP39 seed phrase, or stored wallet (PIN/Passkey)
-- **HD key derivation** -- BIP44 paths with configurable network, account, and index
-- **Secure storage** -- PIN (PBKDF2 + AES-256-GCM) or Passkey (WebAuthn PRF)
-- **vCard generation** -- Export identity with cryptographic public keys
-- **Live balance checking** -- Fetches balances from public blockchain APIs
-- **Glass morphism UI** -- Frosted glass aesthetic with blurred background
-
-## Quick Start
-
-```bash
-npm install
-npm run dev
+```sh
+npm install hd-wallet-ui@2.0.30
 ```
 
-Opens on `http://localhost:3000`.
+`hd-wallet-wasm` 2.0.30 is the package's only runtime dependency.
 
-## Build
+## Published surfaces
 
-```bash
-npm run build    # Output in dist/
-npm run preview  # Preview the build
-```
+The package exposes exactly these seven entry points:
 
-## Project Structure
+| Import | Purpose |
+| --- | --- |
+| `hd-wallet-ui` | Compatibility controller with `createWalletUI()` and `init()` |
+| `hd-wallet-ui/client` | Generic registered-site client |
+| `hd-wallet-ui/client/sdn` | Typed SDN login client |
+| `hd-wallet-ui/client/asset-review` | Typed asset-review approval client |
+| `hd-wallet-ui/client/callback` | Registered callback-page completion helper |
+| `hd-wallet-ui/styles` | Namespaced public-client styles |
+| `hd-wallet-ui/wallet-origin` | Installed wallet-origin application API |
 
-```
-wallet-ui/
-├── index.html                  # Main HTML
-├── src/
-│   ├── app.js                  # Entry point, login/logout, UI handlers
-│   ├── wallet-storage.js       # Encrypted wallet storage (PIN/Passkey)
-│   ├── address-derivation.js   # Multi-chain address generation
-│   └── constants.js            # Coin configs, explorer URLs, path helpers
-├── styles/
-│   ├── main.css                # Standalone demo site styles (global)
-│   └── widget.css              # Namespaced embed styles (scoped to #hd-wallet-ui-container)
-├── package.json
-└── vite.config.js
-```
+Internal source modules are not public package APIs.
 
-## Embedding (Avoiding CSS Collisions)
-
-If you're integrating the modal UI into an existing webpage, use the namespaced stylesheet export:
+## Add Login and Account buttons
 
 ```js
+import { createWalletClient } from 'hd-wallet-ui/client';
 import 'hd-wallet-ui/styles';
-```
 
-For the standalone demo site styling, use:
+const wallet = createWalletClient({ clientId: 'sdn-landing-web-v1' });
 
-```js
-import 'hd-wallet-ui/styles/demo';
-```
-
-## Usage Examples
-
-### Address Derivation
-
-```js
-import {
-  generateBtcAddress,
-  generateEthAddress,
-  generateSolAddress,
-  deriveSuiAddress,
-  deriveCardanoAddress,
-} from './src/address-derivation.js';
-
-// Bitcoin P2PKH from compressed secp256k1 pubkey
-const btcAddr = generateBtcAddress(compressedPubKey);   // "1A1zP1..."
-
-// Ethereum from secp256k1 (handles 33, 64, or 65 byte keys)
-const ethAddr = generateEthAddress(compressedPubKey);   // "0x..."
-
-// Solana from Ed25519 pubkey
-const solAddr = generateSolAddress(ed25519PubKey);      // Base58 string
-
-// SUI from Ed25519 with BLAKE2b
-const suiAddr = deriveSuiAddress(ed25519PubKey, 'ed25519');  // "0x..."
-
-// Cardano enterprise address (Bech32)
-const adaAddr = deriveCardanoAddress(ed25519PubKey);    // "addr1..."
-```
-
-### Derivation Paths
-
-```js
-import { buildSigningPath, buildEncryptionPath } from './src/constants.js';
-
-buildSigningPath(0, 0, 0);      // "m/44'/0'/0'/0/0"   (Bitcoin)
-buildSigningPath(60, 0, 0);     // "m/44'/60'/0'/0/0"  (Ethereum)
-buildEncryptionPath(0, 0, 0);   // "m/44'/0'/0'/1/0"   (encryption key)
-```
-
-### Coin Configuration
-
-```js
-import { cryptoConfig, coinTypeToConfig } from './src/constants.js';
-
-cryptoConfig.btc.explorer;            // "https://blockstream.info/address/"
-coinTypeToConfig[60].name;            // "Ethereum"
-cryptoConfig.eth.formatBalance(1e18); // "1.000000 ETH"
-```
-
-### Wallet Storage
-
-```js
-import WalletStorage, { StorageMethod } from './src/wallet-storage.js';
-
-// Store with PIN
-await WalletStorage.storeWithPIN('123456', { type: 'seed', seedPhrase: '...' });
-
-// Retrieve with PIN
-const data = await WalletStorage.retrieveWithPIN('123456');
-
-// Store with Passkey (WebAuthn PRF)
-await WalletStorage.storeWithPasskey(walletData, {
-  rpName: 'My Wallet',
-  userName: 'user',
+const unsubscribe = wallet.subscribe((snapshot) => {
+  loginButton.hidden = snapshot.status === 'connected';
+  accountButton.hidden = snapshot.status !== 'connected';
 });
 
-// Check storage status
-const meta = WalletStorage.getStorageMetadata();
-// { method: 'passkey', storedAt: 1706000000000, version: 2 }
+loginButton.addEventListener('click', async () => {
+  const publicIdentity = await wallet.connect();
+  console.log(publicIdentity.accountPeerId);
+});
+
+accountButton.addEventListener('click', () => wallet.openAccount());
+
+// On page teardown:
+unsubscribe();
+await wallet.destroy();
 ```
 
-### Balance Fetching
+Use the client ID registered for the calling origin. An unknown client, origin,
+callback, operation, or audience fails closed.
+
+Importing a client module and constructing, inspecting, subscribing to, or
+destroying a client does not read browser storage, install a callback listener,
+open a window, request entropy, or contact the network. The first valid command
+activates the one-shot callback channel before any popup or network work.
+
+## Typed requests
+
+Use `createSdnWalletClient()` for SDN authentication requests and
+`createAssetReviewWalletClient()` for authority activation and approve or
+disapprove attestations:
 
 ```js
-import {
-  fetchBtcBalance,
-  fetchEthBalance,
-  fetchSolBalance,
-} from './src/address-derivation.js';
+import { createAssetReviewWalletClient } from 'hd-wallet-ui/client/asset-review';
 
-const { balance } = await fetchBtcBalance('1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa');
-// "50.00000000"
-
-const { balance: ethBal } = await fetchEthBalance('0xde0B295669a9FD93d5F28D9Ec85E40f4cb697BAe');
-// "0.000000"
+const wallet = createAssetReviewWalletClient();
+const signature = await wallet.requestAssetReviewApproval(reviewRequest);
+await wallet.destroy();
 ```
 
-## Dependencies
+Request objects are validated against the frozen protocol contract before the
+wallet window opens. The caller receives only a public identity or a bounded
+signature response; credential material and signing keys remain on the wallet
+origin.
 
-| Package | Purpose |
-|---------|---------|
-| `hd-wallet-wasm` | HD key derivation (BIP-32/39/44), WASM runtime |
-| `@noble/curves` | secp256k1, ed25519, p256 elliptic curves |
-| `@noble/hashes` | SHA-256, Keccak-256, RIPEMD-160, BLAKE2b |
-| `@scure/base` | Base58, Base58Check encoding |
-| `@scure/bip32` | BIP-32 extended key derivation |
-| `bip39` | BIP-39 mnemonic generation/validation |
-| `qrcode` | QR code rendering for addresses and vCards |
-| `vcard-cryptoperson` | vCard 4.0 with cryptographic keys |
-| `buffer` | Buffer polyfill for browser |
+## Callback page
 
-## Tests
+Deploy the generated `dist/browser/wallet-callback.html` and its adjacent
+`sdn-wallet-callback.js` unchanged at each registry callback URI. The generated
+HTML binds the script with subresource integrity and a restrictive content
+security policy.
 
-```bash
+For a custom callback shell, use
+`completeWalletCallbackV1()` from `hd-wallet-ui/client/callback` and pass its
+location, storage, history, and close capabilities explicitly.
+
+## Wallet origin
+
+Deploy `dist/wallet-origin-host/` as immutable HTTPS content at the registered
+wallet origin. Its HTML references only content-hashed local JavaScript, CSS,
+and WebAssembly assets, binds each asset with integrity metadata, and ships a
+deny-by-default content security policy.
+
+The wallet origin presents a username and basic password form. The optional
+WebAuthn PRF “Remember” control is available only there. Once authenticated, the
+same surface becomes Account and provides explicit logout. Calling sites never
+render or receive those credential fields.
+
+Bundler integrations that mount the origin application directly may use:
+
+```js
+import { createWalletOriginApp } from 'hd-wallet-ui/wallet-origin';
+
+const app = createWalletOriginApp({ wasm: initializedWallet });
+await app.start();
+// Later:
+await app.logout();
+await app.stop('page-teardown');
+```
+
+## Compatibility controller
+
+Existing integrations may use the root entry point:
+
+```js
+import { createWalletUI } from 'hd-wallet-ui';
+
+const controller = await createWalletUI({ wasm: initializedWallet });
+await controller.openLogin();
+await controller.openAccount();
+await controller.logout();
+await controller.destroy();
+```
+
+New registered sites should prefer the public clients because their request
+and response boundaries are narrower.
+
+## Build and verify
+
+```sh
+npm run build:release
 npm test
+npm run test:browser
 ```
 
-Runs unit tests for address derivation, Bech32 encoding, and coin configuration. See [test/](test/) for details.
+The release build cleans only this package's `dist/` directory. Repository
+release checks also install packed core and UI tarballs into an external
+consumer project, resolve every export, type-check representative calls, and
+scan the public bundle boundary.
 
 ## License
 
-Same as parent `hd-wallet-wasm` repository.
+Apache-2.0. See `LICENSE`.

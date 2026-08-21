@@ -1,263 +1,512 @@
-name: Publish to NPM
+name: Stage verified wallet packages
+run-name: sdn-wallet-stage-${{ inputs.correlation_id }}
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
-      dry_run:
-        description: "Dry run (do not publish)"
-        required: false
-        default: false
-        type: boolean
+      source_tag:
+        description: Exact signed source tag (v2.0.30)
+        required: true
+        type: string
+      dist_tag:
+        description: Correlation-bound staging dist-tag
+        required: true
+        type: string
+      correlation_id:
+        description: 32 lowercase hexadecimal characters
+        required: true
+        type: string
 
-# Required for NPM provenance / trusted publishing
 permissions:
   contents: read
   id-token: write
+  attestations: write
 
 jobs:
-  build:
-    name: Build WASM
-    runs-on: ubuntu-latest
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    environment: npm-publish
+    env:
+      SOURCE_TAG: ${{ inputs.source_tag }}
+      DIST_TAG: ${{ inputs.dist_tag }}
+      CORRELATION_ID: ${{ inputs.correlation_id }}
+      WALLET_RELEASE_GPG_PUBLIC_KEY_BASE64: ${{ vars.WALLET_RELEASE_GPG_PUBLIC_KEY_BASE64 }}
+      WALLET_RELEASE_GPG_FINGERPRINT: ${{ vars.WALLET_RELEASE_GPG_FINGERPRINT }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Validate dispatch inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_TAG" == v2.0.30 ]]
+          [[ "$CORRELATION_ID" =~ ^[0-9a-f]{32}$ ]]
+          [[ "$DIST_TAG" == "sdn-candidate-$CORRELATION_ID" ]]
+          [[ "$DIST_TAG" != latest ]]
+          test "$GITHUB_REF" = "refs/tags/$SOURCE_TAG"
+          test "$GITHUB_REF_TYPE" = tag
+          test "$GITHUB_REF_NAME" = "$SOURCE_TAG"
 
-      - name: Setup Emscripten
-        uses: mymindstorm/setup-emsdk@v14
+      - name: Checkout the exact signed tag
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: refs/tags/${{ inputs.source_tag }}
+          fetch-depth: 0
+
+      - name: Bind checkout to annotated tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git cat-file -t "$SOURCE_TAG")" = tag
+          tag_commit="$(git rev-parse "$SOURCE_TAG^{commit}")"
+          test "$(git rev-parse HEAD)" = "$tag_commit"
+          test "$GITHUB_SHA" = "$tag_commit"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Verify protected signing identity and signed tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$WALLET_RELEASE_GPG_PUBLIC_KEY_BASE64"
+          expected="${WALLET_RELEASE_GPG_FINGERPRINT//[[:space:]]/}"
+          expected="${expected^^}"
+          [[ "$expected" =~ ^[0-9A-F]{40,64}$ ]]
+          export GNUPGHOME="$(mktemp -d)"
+          trap 'rm -rf -- "$GNUPGHOME"' EXIT
+          chmod 700 "$GNUPGHOME"
+          key_file="$(mktemp)"
+          trap 'rm -rf -- "$GNUPGHOME"; rm -f -- "$key_file"' EXIT
+          umask 077
+          printf '%s' "$WALLET_RELEASE_GPG_PUBLIC_KEY_BASE64" | base64 --decode > "$key_file"
+          gpg --batch --import "$key_file"
+          mapfile -t primaries < <(
+            gpg --batch --with-colons --fingerprint --list-keys |
+              awk -F: '$1 == "pub" { next_is_primary = 1; next }
+                next_is_primary && $1 == "fpr" { print toupper($10); next_is_primary = 0 }'
+          )
+          test "${#primaries[@]}" -eq 1
+          test "${primaries[0]}" = "$expected"
+          mapfile -t signing_fingerprints < <(
+            gpg --batch --with-colons --fingerprint --list-keys |
+              awk -F: '$1 == "pub" || $1 == "sub" {
+                  signing = ($12 ~ /[sS]/); next
+                }
+                signing && $1 == "fpr" { print toupper($10); signing = 0 }'
+          )
+          test "${#signing_fingerprints[@]}" -ge 1
+          verify_status="$(git verify-tag --raw "$SOURCE_TAG" 2>&1)"
+          mapfile -t valid_signatures < <(
+            printf '%s\n' "$verify_status" |
+              awk '$2 == "VALIDSIG" { print toupper($3) ":" toupper($NF) }'
+          )
+          test "${#valid_signatures[@]}" -eq 1
+          signer="${valid_signatures[0]%%:*}"
+          primary="${valid_signatures[0]##*:}"
+          test "$primary" = "$expected"
+          printf '%s\n' "${signing_fingerprints[@]}" | grep -Fx -- "$signer"
+
+      - name: Record and assert runner platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          . /etc/os-release
+          test "$ID" = ubuntu
+          test "$VERSION_ID" = 24.04
+          test "$(getconf GNU_LIBC_VERSION)" = 'glibc 2.39'
+          printf '%s\n' \
+            "runner_image=${ImageVersion:-unknown}" \
+            "os=$ID-$VERSION_ID" \
+            "architecture=$(uname -m)" \
+            "libc=$(getconf GNU_LIBC_VERSION)" \
+            "run_id=${{ github.run_id }}" \
+            "run_attempt=${{ github.run_attempt }}" > "$RUNNER_TEMP/runner-platform.txt"
+
+      - name: Setup exact Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: "24.18.0"
+          registry-url: https://registry.npmjs.org/
+
+      - name: Install exact npm
+        run: npm install --global npm@11.16.0
+
+      - name: Setup exact Emscripten
+        uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021
         with:
           version: "3.1.51"
-          actions-cache-folder: "emsdk-cache"
 
-      - name: Verify Emscripten
-        run: emcc --version
-
-      - name: Cache OpenSSL FIPS build
-        id: cache-openssl
-        uses: actions/cache@v4
-        with:
-          path: openssl-fips/dist
-          key: openssl-fips-wasm-${{ runner.os }}-3.0.9-emsdk-3.1.51
-
-      - name: Build OpenSSL FIPS
-        if: steps.cache-openssl.outputs.cache-hit != 'true'
+      - name: Install verified CMake 4.0.0
+        shell: bash
         run: |
-          cd openssl-fips
-          chmod +x build.sh
-          ./build.sh
+          set -euo pipefail
+          cmake_tmp="$(mktemp -d)"
+          trap 'rm -rf -- "$cmake_tmp"' EXIT
+          archive="$cmake_tmp/cmake-4.0.0-linux-x86_64.tar.gz"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$archive" \
+            https://github.com/Kitware/CMake/releases/download/v4.0.0/cmake-4.0.0-linux-x86_64.tar.gz
+          printf '%s  %s\n' \
+            'a06e6e32da747e569162bc0442a3fd400fadd9db7d4f185c9e4464ab299a294b' \
+            "$archive" | sha256sum --check --strict
+          mkdir "$RUNNER_TEMP/cmake-4.0.0"
+          tar --extract --gzip --file "$archive" \
+            --directory "$RUNNER_TEMP/cmake-4.0.0" --strip-components=1 \
+            --no-same-owner --no-same-permissions
+          echo "$RUNNER_TEMP/cmake-4.0.0/bin" >> "$GITHUB_PATH"
 
-      - name: Verify OpenSSL FIPS
+      - name: Install verified GitHub CLI 2.96.0
+        shell: bash
         run: |
-          echo "Checking OpenSSL FIPS build..."
-          ls -la openssl-fips/dist/lib/ || echo "OpenSSL dist not found"
-          test -f openssl-fips/dist/lib/libcrypto.a && echo "✓ libcrypto.a found" || echo "✗ libcrypto.a missing"
+          set -euo pipefail
+          gh_tmp="$(mktemp -d)"
+          trap 'rm -rf -- "$gh_tmp"' EXIT
+          archive="$gh_tmp/gh_2.96.0_linux_amd64.tar.gz"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$archive" \
+            https://github.com/cli/cli/releases/download/v2.96.0/gh_2.96.0_linux_amd64.tar.gz
+          test "$(wc -c < "$archive" | tr -d '[:space:]')" = 14652560
+          printf '%s  %s\n' \
+            '83d5c2ccad5498f58bf6368acb1ab32588cf43ab3a4b1c301bf36328b1c8bd60' \
+            "$archive" | sha256sum --check --strict
+          mkdir "$RUNNER_TEMP/gh-2.96.0"
+          tar --extract --gzip --file "$archive" \
+            --directory "$RUNNER_TEMP/gh-2.96.0" --strip-components=1 \
+            --no-same-owner --no-same-permissions
+          gh_binary="$RUNNER_TEMP/gh-2.96.0/bin/gh"
+          test -x "$gh_binary"
+          test "$(wc -c < "$gh_binary" | tr -d '[:space:]')" = 40722594
+          printf '%s  %s\n' \
+            '56b8bbbb27b066ecb33dbef9a256dc9d1314adaeff0908a752feba6c34053b40' \
+            "$gh_binary" | sha256sum --check --strict
+          echo "$RUNNER_TEMP/gh-2.96.0/bin" >> "$GITHUB_PATH"
 
-      - name: Cache CMake build
-        uses: actions/cache@v4
-        with:
-          path: build/_deps/cryptopp*
-          key: cryptopp-wasm-${{ runner.os }}-8.9.0-emsdk-3.1.51
-
-      - name: Configure CMake with Emscripten
-        run: emcmake cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DHD_WALLET_BUILD_WASM=ON -DHD_WALLET_USE_OPENSSL=ON
-
-      - name: Build WASM targets
-        run: cmake --build build --parallel $(nproc) --target hd_wallet_wasm_npm
-
-      - name: Verify build output
+      - name: Verify exact compiler toolchain
+        shell: bash
         run: |
-          echo "Checking WASM output files..."
-          ls -la wasm/dist/
-          test -f wasm/dist/hd-wallet.js
-          test -f wasm/dist/hd-wallet.wasm
-          test -f wasm/dist/hd-wallet-wasi.wasm
+          set -euo pipefail
+          test "$(node --version)" = v24.18.0
+          test "$(npm --version)" = 11.16.0
+          emcc --version | head -n 1 | grep -F '3.1.51'
+          test "$(cmake --version | head -n 1)" = 'cmake version 4.0.0'
+          gh --version | head -n 1 | grep -E '^gh version 2\.96\.0 '
+          node -e "const t=require('./release/toolchain.v1.json'); if(t.node.version!=='24.18.0'||t.npm.version!=='11.16.0'||t.githubCli.version!=='2.96.0')process.exit(1)"
 
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: npm-package
-          path: |
-            wasm/dist/
-            wasm/src/
-            wasm/package.json
-            wasm/README.md
-          retention-days: 1
-
-  test:
-    name: Test Package
-    needs: build
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: npm-package
-          path: wasm/
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-
-      - name: Install dependencies
-        run: npm install --ignore-scripts
-        working-directory: wasm
-
-      - name: Run tests
-        run: npm test
-        working-directory: wasm
-
-      - name: Verify package
-        run: npm pack --dry-run
-        working-directory: wasm
-
-  publish-wasm:
-    name: Publish hd-wallet-wasm
-    needs: [build, test]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      id-token: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: npm-package
-          path: wasm/
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          registry-url: "https://registry.npmjs.org/"
-
-      - name: Extract version from tag
-        if: startsWith(github.ref, 'refs/tags/v')
-        id: version
+      - name: Remove any checkout-local build state
+        shell: bash
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Publishing version: $VERSION"
-
-      - name: Update package.json version
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          cd wasm
-          npm version ${{ steps.version.outputs.version }} --no-git-tag-version --allow-same-version
-
-      - name: Create README for npm
-        run: |
-          if [ ! -f wasm/README.md ]; then
-            cp README.md wasm/README.md
-          fi
-
-      - name: Publish to NPM (dry run)
-        if: github.event.inputs.dry_run == 'true'
-        run: npm publish --dry-run --access public --provenance
-        working-directory: wasm
-
-      - name: Publish to NPM with provenance
-        if: github.event.inputs.dry_run != 'true'
-        run: npm publish --access public --provenance
-        working-directory: wasm
-
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v') && github.event.inputs.dry_run != 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          files: |
-            wasm/dist/hd-wallet.js
-            wasm/dist/hd-wallet.wasm
-            wasm/dist/hd-wallet-wasi.wasm
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  publish-ui:
-    name: Publish hd-wallet-ui
-    needs: [publish-wasm]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          registry-url: "https://registry.npmjs.org/"
-
-      - name: Extract version from tag
-        if: startsWith(github.ref, 'refs/tags/v')
-        id: version
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Update package.json version and dependency
-        run: |
-          cd wallet-ui
-          # Set version from tag (or keep current for workflow_dispatch)
-          if [ -n "${{ steps.version.outputs.version }}" ]; then
-            npm version ${{ steps.version.outputs.version }} --no-git-tag-version --allow-same-version
-            WASM_VERSION="${{ steps.version.outputs.version }}"
-          else
-            WASM_VERSION="$(node -p "require('../wasm/package.json').version")"
-          fi
-          # Replace file: dependency with published version
-          node -e "
-            const pkg = require('./package.json');
-            pkg.dependencies['hd-wallet-wasm'] = '^${WASM_VERSION}';
-            require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-          "
-          echo "Updated hd-wallet-wasm dependency to ^${WASM_VERSION}"
-          cat package.json | head -40
-
-      - name: Wait for hd-wallet-wasm to propagate on npm
-        run: |
-          cd wallet-ui
-          WASM_VERSION=$(node -p "require('./package.json').dependencies['hd-wallet-wasm'].replace('^','')")
-          echo "Waiting for hd-wallet-wasm@${WASM_VERSION} on npm registry..."
-          for i in $(seq 1 30); do
-            if npm view "hd-wallet-wasm@${WASM_VERSION}" version 2>/dev/null; then
-              echo "Found hd-wallet-wasm@${WASM_VERSION} on npm"
-              exit 0
-            fi
-            echo "Attempt $i/30 — not yet available, waiting 10s..."
-            sleep 10
+          set -euo pipefail
+          for path in build build-native build-wasi build-wasm openssl-fips/build openssl-fips/dist; do
+            if [[ -e "$path" ]]; then rm -rf -- "$path"; fi
           done
-          echo "Timed out waiting for hd-wallet-wasm@${WASM_VERSION}"
-          exit 1
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
 
-      - name: Install dependencies
-        run: npm install --ignore-scripts
-        working-directory: wallet-ui
+      - name: Install from the exact lock
+        run: npm ci --ignore-scripts
 
-      - name: Verify package
-        run: npm pack --dry-run
-        working-directory: wallet-ui
+      - name: Run complete source gate
+        run: ./scripts/ci-local.sh
 
-      - name: Publish to NPM (dry run)
-        if: github.event.inputs.dry_run == 'true'
-        run: npm publish --dry-run --access public --provenance --tag latest
-        working-directory: wallet-ui
+      - name: Build and verify canonical publication subjects once
+        shell: bash
+        env:
+          SDN_RELEASE_CORRELATION_ID: ${{ inputs.correlation_id }}
+          SDN_RELEASE_EVENT_NAME: ${{ github.event_name }}
+          SDN_RELEASE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          SDN_RELEASE_RUN_ID: ${{ github.run_id }}
+          SDN_RELEASE_SOURCE_TAG: ${{ inputs.source_tag }}
+          SDN_RELEASE_WORKFLOW: .github/workflows/npm-publish.yml
+        run: |
+          set -euo pipefail
+          artifact_root="$RUNNER_TEMP/sdn-wallet-artifacts"
+          mkdir "$artifact_root"
+          GITHUB_REF_NAME="$SOURCE_TAG"
+          npm run verify:release -- \
+            --version 2.0.30 \
+            --source-ref HEAD \
+            --tag "$GITHUB_REF_NAME" \
+            --emit-artifacts "$artifact_root"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
 
-      - name: Publish to NPM with provenance
-        if: github.event.inputs.dry_run != 'true'
-        run: npm publish --access public --provenance --tag latest
-        working-directory: wallet-ui
+      - name: Publish missing subjects or verify same-run subjects
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Recovery command: gh run rerun <same-run-id> --failed
+          artifact_root="$RUNNER_TEMP/sdn-wallet-artifacts"
+          provenance_root="$RUNNER_TEMP/sdn-wallet-provenance"
+          mkdir "$provenance_root"
+          commit="$(git rev-parse HEAD)"
+          npm_cli="$(readlink -f "$(command -v npm)")"
+          run_metadata="$provenance_root/run-metadata.json"
+          node --input-type=module - \
+            "$run_metadata" "$commit" "$CORRELATION_ID" \
+            '${{ github.run_id }}' '${{ github.run_attempt }}' <<'NODE'
+          import { writeFile } from 'node:fs/promises';
+          const [path, commit, correlation, runId, attemptText] = process.argv.slice(2);
+          const finalAttempt = Number(attemptText);
+          if (!Number.isSafeInteger(finalAttempt) || finalAttempt < 1 || finalAttempt > 32) {
+            throw new Error('run attempt is outside the bounded recovery chain');
+          }
+          const value = {
+            attempts: Array.from({ length: finalAttempt }, (_, index) => index + 1),
+            commit,
+            correlation,
+            finalAttempt,
+            runId,
+          };
+          await writeFile(path, `${JSON.stringify(value)}\n`, { flag: 'wx', mode: 0o600 });
+          NODE
+
+          registry_record_matches_artifact() {
+            local record="$1"
+            local tarball="$2"
+            local package_name="$3"
+            node --input-type=module - "$record" "$tarball" "$package_name" "$commit" <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { readFile } from 'node:fs/promises';
+          const [recordPath, tarballPath, name, commit] = process.argv.slice(2);
+          const record = JSON.parse(await readFile(recordPath, 'utf8'));
+          const integrity = `sha512-${createHash('sha512')
+            .update(await readFile(tarballPath)).digest('base64')}`;
+          const tarball = `https://registry.npmjs.org/${name}/-/${name}-2.0.30.tgz`;
+          if (record?.name !== name || record?.version !== '2.0.30'
+              || record?.gitHead !== commit || record?.dist?.integrity !== integrity
+              || record?.dist?.tarball !== tarball
+              || record?.dist?.signatures?.length !== 1 || !record?.dist?.attestations) {
+            throw new Error(`${name} registry metadata does not match the signed workflow subject`);
+          }
+          NODE
+          }
+
+          exact_record_exists() {
+            local package_name="$1"
+            local record="$2"
+            local error_file="$3"
+            if npm view "$package_name@2.0.30" --json > "$record" 2> "$error_file"; then
+              return 0
+            fi
+            npm view "$package_name@latest" version --json > /dev/null
+            grep -Fq 'E404' "$error_file"
+            return 1
+          }
+
+          verify_existing_same_run() {
+            local package_name="$1"
+            local tarball="$2"
+            local record="$3"
+            local package_root
+            package_root="$(mktemp -d "$RUNNER_TEMP/sdn-package-proof.XXXXXX")"
+            mkdir "$package_root/project"
+            (
+              cd "$package_root/project"
+              npm init --yes > /dev/null
+              npm install --ignore-scripts --save-exact --audit=false --fund=false \
+                "$package_name@2.0.30"
+              npm audit signatures --json --include-attestations \
+                > "$package_root/npm-audit-signatures.json"
+            )
+            npm view "$package_name@2.0.30" dist --json > "$package_root/dist.json"
+            node scripts/collect-provenance-inputs.mjs \
+              --audit "$package_root/npm-audit-signatures.json" \
+              --package "$package_name" \
+              --dist "$package_root/dist.json" \
+              --tarball "$tarball" \
+              --npm-cli "$npm_cli" \
+              --trust-policy release/provenance-trust.v1.json \
+              --output-directory "$package_root/registry-evidence"
+            node scripts/verify-provenance-evidence.mjs \
+              "$package_root/npm-audit-signatures.json" \
+              --package "$package_name" \
+              --registry-attestations \
+                "$package_root/registry-evidence/$package_name.registry-evidence.v1.json" \
+              --package-lock "$package_root/project/package-lock.json" \
+              --run-metadata "$run_metadata" \
+              --trust-policy release/provenance-trust.v1.json \
+              --repository https://github.com/DigitalArsenal/hd-wallet-wasm \
+              --workflow npm-publish.yml \
+              --tag "$SOURCE_TAG" \
+              --commit "$commit" \
+              > "$provenance_root/$package_name.existing-package-evidence.json"
+            registry_record_matches_artifact "$record" "$tarball" "$package_name"
+          }
+
+          publish_or_verify() {
+            local package_name="$1"
+            local tarball="$2"
+            local record="$provenance_root/$package_name.registry.json"
+            local error_file="$provenance_root/$package_name.registry.stderr"
+            if exact_record_exists "$package_name" "$record" "$error_file"; then
+              verify_existing_same_run "$package_name" "$tarball" "$record"
+            else
+              npm publish --provenance --tag "$DIST_TAG" --access public "$tarball"
+            fi
+          }
+
+          publish_or_verify hd-wallet-wasm \
+            "$artifact_root/npm-tarballs/hd-wallet-wasm-2.0.30.tgz"
+          publish_or_verify hd-wallet-ui \
+            "$artifact_root/npm-tarballs/hd-wallet-ui-2.0.30.tgz"
+
+      - name: Verify final registry subjects match signed workflow artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_root="$RUNNER_TEMP/sdn-wallet-artifacts"
+          provenance_root="$RUNNER_TEMP/sdn-wallet-provenance"
+          commit="$(git rev-parse HEAD)"
+
+          wait_for_registry() {
+            local package_name="$1"
+            local record="$2"
+            local poll
+            for poll in {1..12}; do
+              if npm view "$package_name@2.0.30" --json > "$record" 2> /dev/null; then
+                return 0
+              fi
+              sleep 5
+            done
+            return 1
+          }
+          wait_for_registry hd-wallet-wasm \
+            "$provenance_root/hd-wallet-wasm.final-registry.json"
+          wait_for_registry hd-wallet-ui \
+            "$provenance_root/hd-wallet-ui.final-registry.json"
+
+          node --input-type=module - \
+            "$provenance_root/hd-wallet-wasm.final-registry.json" \
+            "$artifact_root/npm-tarballs/hd-wallet-wasm-2.0.30.tgz" \
+            "$provenance_root/hd-wallet-ui.final-registry.json" \
+            "$artifact_root/npm-tarballs/hd-wallet-ui-2.0.30.tgz" \
+            "$commit" <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { readFile } from 'node:fs/promises';
+          const [coreRecord, coreTarball, uiRecord, uiTarball, commit] = process.argv.slice(2);
+          for (const [name, recordPath, tarballPath] of [
+            ['hd-wallet-wasm', coreRecord, coreTarball],
+            ['hd-wallet-ui', uiRecord, uiTarball],
+          ]) {
+            const record = JSON.parse(await readFile(recordPath, 'utf8'));
+            const integrity = `sha512-${createHash('sha512')
+              .update(await readFile(tarballPath)).digest('base64')}`;
+            const tarball = `https://registry.npmjs.org/${name}/-/${name}-2.0.30.tgz`;
+            if (record?.name !== name || record?.version !== '2.0.30'
+                || record?.gitHead !== commit || record?.dist?.integrity !== integrity
+                || record?.dist?.tarball !== tarball
+                || record?.dist?.signatures?.length !== 1 || !record?.dist?.attestations) {
+              throw new Error(`${name} final registry subject does not match the signed artifact`);
+            }
+          }
+          NODE
+
+      - name: Build final two-package public provenance evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_root="$RUNNER_TEMP/sdn-wallet-artifacts"
+          provenance_root="$RUNNER_TEMP/sdn-wallet-provenance"
+          commit="$(git rev-parse HEAD)"
+          npm_cli="$(readlink -f "$(command -v npm)")"
+          run_metadata="$provenance_root/run-metadata.json"
+
+          final_project="$provenance_root/final-project"
+          mkdir "$final_project"
+          (
+            cd "$final_project"
+            npm init --yes > /dev/null
+            npm install --ignore-scripts --save-exact --audit=false --fund=false \
+              hd-wallet-wasm@2.0.30 hd-wallet-ui@2.0.30
+            npm audit signatures --json --include-attestations \
+              > "$provenance_root/npm-audit-signatures.json"
+          )
+          npm view hd-wallet-wasm@2.0.30 dist --json \
+            > "$provenance_root/hd-wallet-wasm.dist.json"
+          npm view hd-wallet-ui@2.0.30 dist --json \
+            > "$provenance_root/hd-wallet-ui.dist.json"
+          node scripts/collect-provenance-inputs.mjs \
+            --audit "$provenance_root/npm-audit-signatures.json" \
+            --core-dist "$provenance_root/hd-wallet-wasm.dist.json" \
+            --core-tarball "$artifact_root/npm-tarballs/hd-wallet-wasm-2.0.30.tgz" \
+            --ui-dist "$provenance_root/hd-wallet-ui.dist.json" \
+            --ui-tarball "$artifact_root/npm-tarballs/hd-wallet-ui-2.0.30.tgz" \
+            --npm-cli "$npm_cli" \
+            --trust-policy release/provenance-trust.v1.json \
+            --output-directory "$provenance_root/registry-evidence"
+          node scripts/verify-provenance-evidence.mjs \
+            "$provenance_root/npm-audit-signatures.json" \
+            --core-attestations \
+              "$provenance_root/registry-evidence/hd-wallet-wasm.registry-evidence.v1.json" \
+            --ui-attestations \
+              "$provenance_root/registry-evidence/hd-wallet-ui.registry-evidence.v1.json" \
+            --package-lock "$final_project/package-lock.json" \
+            --run-metadata "$run_metadata" \
+            --trust-policy release/provenance-trust.v1.json \
+            --repository https://github.com/DigitalArsenal/hd-wallet-wasm \
+            --workflow npm-publish.yml \
+            --tag "$SOURCE_TAG" \
+            --commit "$commit" \
+            > "$provenance_root/npm-provenance-evidence.v1.json"
+
+          test -s "$provenance_root/npm-provenance-evidence.v1.json"
+          test -s \
+            "$artifact_root/origin-service/sdn-wallet-origin-2.0.30-node24-linux-x64.tar.gz"
+          test -s "$artifact_root/wallet-release-report/release-report.v1.json"
+
+      - name: Attest finalized origin service and release report
+        id: attest-origin-release
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6
+        with:
+          subject-path: |
+            ${{ runner.temp }}/sdn-wallet-artifacts/origin-service/sdn-wallet-origin-2.0.30-node24-linux-x64.tar.gz
+            ${{ runner.temp }}/sdn-wallet-artifacts/wallet-release-report/release-report.v1.json
+
+      - name: Preserve the detached workflow attestation bundle
+        shell: bash
+        env:
+          ATTESTATION_BUNDLE_PATH: ${{ steps.attest-origin-release.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          provenance_root="$RUNNER_TEMP/sdn-wallet-provenance"
+          destination="$provenance_root/workflow-artifacts.sigstore.json"
+          test -n "$ATTESTATION_BUNDLE_PATH"
+          test -f "$ATTESTATION_BUNDLE_PATH"
+          test ! -L "$ATTESTATION_BUNDLE_PATH"
+          test ! -e "$destination"
+          cp --no-dereference -- "$ATTESTATION_BUNDLE_PATH" "$destination"
+          test -s "$destination"
+
+      - name: Verify finalized workflow subjects and detached attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_root="$RUNNER_TEMP/sdn-wallet-artifacts"
+          provenance_root="$RUNNER_TEMP/sdn-wallet-provenance"
+
+          npm run verify:release -- \
+            --version 2.0.30 \
+            --source-ref HEAD \
+            --tag "$SOURCE_TAG" \
+            --workflow-artifacts "$artifact_root" \
+            --expected-run-id '${{ github.run_id }}' \
+            --expected-run-attempt '${{ github.run_attempt }}' \
+            --expected-correlation "$CORRELATION_ID" \
+            --workflow-artifact-attestation \
+              "$provenance_root/workflow-artifacts.sigstore.json"
+
+      - name: Upload same-attempt diagnostic subjects
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: wallet-stage-${{ inputs.correlation_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/sdn-wallet-artifacts
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload same-attempt public provenance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: wallet-stage-evidence-${{ inputs.correlation_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/sdn-wallet-provenance
+          if-no-files-found: ignore
+          retention-days: 30

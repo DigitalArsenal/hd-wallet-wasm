@@ -1,0 +1,65 @@
+{
+  "conflict": {
+    "error": {
+      "code": "CONFLICT",
+      "message": "The transaction has already been used."
+    },
+    "schemaVersion": 1
+  },
+  "gone": {
+    "error": {
+      "code": "GONE",
+      "message": "The transaction is no longer available."
+    },
+    "schemaVersion": 1
+  },
+  "invalidBinding": {
+    "error": {
+      "code": "INVALID_BINDING",
+      "message": "The transaction binding is invalid."
+    },
+    "schemaVersion": 1
+  },
+  "malformed": {
+    "error": {
+      "code": "MALFORMED_REQUEST",
+      "message": "The request is invalid."
+    },
+    "schemaVersion": 1
+  },
+  "notFound": {
+    "error": {
+      "code": "NOT_FOUND",
+      "message": "The requested relay resource was not found."
+    },
+    "schemaVersion": 1
+  },
+  "payloadTooLarge": {
+    "error": {
+      "code": "PAYLOAD_TOO_LARGE",
+      "message": "The request body is too large."
+    },
+    "schemaVersion": 1
+  },
+  "rateLimited": {
+    "error": {
+      "code": "RATE_LIMITED",
+      "message": "Too many relay requests."
+    },
+    "schemaVersion": 1
+  },
+  "unregistered": {
+    "error": {
+      "code": "UNREGISTERED_CLIENT",
+      "message": "The client binding is not registered."
+    },
+    "schemaVersion": 1
+  },
+  "unsupportedMediaType": {
+    "error": {
+      "code": "UNSUPPORTED_MEDIA_TYPE",
+      "message": "Content-Type must be application/json."
+    },
+    "schemaVersion": 1
+  }
+}

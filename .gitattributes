@@ -1,0 +1,2 @@
+# Vite embeds generated WASM payload bytes whose whitespace is semantically preserved.
+docs/assets/hd-wallet-*.js -whitespace

@@ -66,6 +66,26 @@ extern "C" int32_t hd_ecdh(
 #include <vector>
 #include <string>
 
+#if defined(HD_WALLET_SDN_TYPED_API) && HD_WALLET_SDN_TYPED_API
+#include "hd_wallet/sdn_identity.h"
+#include "hd_wallet/secure_memory.h"
+#include "canonical_json.h"
+
+#include <emscripten/heap.h>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <initializer_list>
+#include <limits>
+#include <new>
+#include <optional>
+#include <span>
+#include <string_view>
+#include <utility>
+#include <variant>
+#endif
+
 namespace hd_wallet::ecdsa {
 using CompactSignature = std::array<uint8_t, 64>;
 using P384PrivateKey = std::array<uint8_t, 48>;
@@ -967,3 +987,954 @@ int32_t hd_aes_gcm_decrypt(
 }
 
 } // namespace hd_wallet
+
+#if defined(HD_WALLET_SDN_TYPED_API) && HD_WALLET_SDN_TYPED_API
+
+namespace hd_wallet::sdn::wasm_adapter {
+namespace {
+
+using jcs::Value;
+
+constexpr uint32_t kMaximumOutputBytes = 131072;
+constexpr uint32_t kMaximumModernCredentialBytes = 256;
+constexpr uint32_t kMaximumLegacyCredentialBytes = 4096;
+constexpr uint32_t kMaximumMnemonicBytes = 1024;
+constexpr uint32_t kMaximumAadBytes = 4096;
+constexpr uint32_t kMinimumRememberedCiphertextBytes = 16;
+constexpr uint32_t kMaximumRememberedCiphertextBytes = 1024;
+
+uint16_t status(IdentityError error) noexcept {
+    return static_cast<uint16_t>(error);
+}
+
+template <typename Function>
+uint16_t guarded(Function&& function) noexcept {
+    try {
+        return function();
+    } catch (const std::bad_alloc&) {
+        return status(IdentityError::OutOfMemory);
+    } catch (...) {
+        return status(IdentityError::CryptoFailure);
+    }
+}
+
+bool validRange(const void* pointer, uint32_t length) noexcept {
+    if (pointer == nullptr) return false;
+    const uintptr_t start = reinterpret_cast<uintptr_t>(pointer);
+    const size_t heap_size = emscripten_get_heap_size();
+    if (start == 0 || start > heap_size) return false;
+    return static_cast<size_t>(length) <= heap_size - start;
+}
+
+template <typename T>
+bool validScalar(const T* pointer) noexcept {
+    return validRange(pointer, static_cast<uint32_t>(sizeof(T)));
+}
+
+template <typename T>
+void storeScalar(T* pointer, T value) noexcept {
+    std::memcpy(pointer, &value, sizeof(value));
+}
+
+class WipeOnExit {
+public:
+    WipeOnExit(uint8_t* pointer, uint32_t length) noexcept
+        : pointer_(pointer), length_(length) {}
+    WipeOnExit(const WipeOnExit&) = delete;
+    WipeOnExit& operator=(const WipeOnExit&) = delete;
+    ~WipeOnExit() { secureWipe(pointer_, length_); }
+
+private:
+    uint8_t* pointer_;
+    uint32_t length_;
+};
+
+class PendingHandle {
+public:
+    explicit PendingHandle(IdentityHandle handle) noexcept : handle_(handle) {}
+    PendingHandle(const PendingHandle&) = delete;
+    PendingHandle& operator=(const PendingHandle&) = delete;
+    ~PendingHandle() {
+        if (handle_ != 0) destroy_identity(handle_);
+    }
+    void release() noexcept { handle_ = 0; }
+
+private:
+    IdentityHandle handle_;
+};
+
+bool prepareOutput(uint8_t* output, uint32_t capacity,
+                   uint32_t* out_required) noexcept {
+    if (!validScalar(out_required)) return false;
+    storeScalar(out_required, uint32_t{0});
+    if (capacity > kMaximumOutputBytes || !validRange(output, capacity)) {
+        return false;
+    }
+    if (capacity != 0) std::memset(output, 0, capacity);
+    return true;
+}
+
+bool prepareDerivedOutput(uint64_t* out_handle, uint8_t* output,
+                          uint32_t capacity,
+                          uint32_t* out_required) noexcept {
+    const bool handle_valid = validScalar(out_handle);
+    if (handle_valid) storeScalar(out_handle, uint64_t{0});
+    const bool output_valid = prepareOutput(output, capacity, out_required);
+    return handle_valid && output_valid;
+}
+
+bool lowerHex(std::string_view value, size_t length) noexcept {
+    if (value.size() != length) return false;
+    return std::all_of(value.begin(), value.end(), [](char byte) {
+        return (byte >= '0' && byte <= '9') ||
+               (byte >= 'a' && byte <= 'f');
+    });
+}
+
+bool validKeyId(std::string_view value) noexcept {
+    return value.size() == 71 && value.rfind("sha256:", 0) == 0 &&
+           lowerHex(value.substr(7), 64);
+}
+
+std::string hex(std::span<const uint8_t> bytes) {
+    static constexpr char alphabet[] = "0123456789abcdef";
+    std::string result(bytes.size() * 2, '\0');
+    for (size_t index = 0; index < bytes.size(); ++index) {
+        result[index * 2] = alphabet[bytes[index] >> 4];
+        result[index * 2 + 1] = alphabet[bytes[index] & 0x0f];
+    }
+    return result;
+}
+
+std::optional<std::string> purposeName(Purpose purpose) {
+    switch (purpose) {
+        case Purpose::AssetReviewApproval:
+            return "asset-review-approval";
+        case Purpose::ContactEncryption:
+            return "contact-encryption";
+        case Purpose::SdnAuthentication:
+            return "sdn-authentication";
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> curveName(Curve curve) {
+    switch (curve) {
+        case Curve::ED25519:
+            return "ed25519";
+        case Curve::X25519:
+            return "x25519";
+        default:
+            return std::nullopt;
+    }
+}
+
+std::optional<std::string> derivationName(KeyDerivation derivation) {
+    switch (derivation) {
+        case KeyDerivation::Slip10Ed25519:
+        case KeyDerivation::Slip10X25519:
+            return "slip10";
+        case KeyDerivation::LegacyBip32ScalarAsEd25519Seed:
+            return "bip32-scalar-as-ed25519-seed";
+        default:
+            return std::nullopt;
+    }
+}
+
+bool descriptorMatches(const PublicKeyDescriptor& descriptor,
+                       std::string_view scheme,
+                       std::string_view profile,
+                       Purpose purpose,
+                       Curve curve,
+                       KeyDerivation derivation,
+                       std::string_view path,
+                       std::optional<std::string_view> signature_profile) {
+    if (descriptor.purpose != purpose || descriptor.identity_scheme != scheme ||
+        descriptor.seed_profile != profile || descriptor.curve != curve ||
+        descriptor.derivation != derivation || descriptor.path != path ||
+        descriptor.encoding != KeyEncoding::Raw ||
+        descriptor.public_key.size() != 32 ||
+        descriptor.bip32_fingerprint.has_value() ||
+        !validKeyId(descriptor.key_id)) {
+        return false;
+    }
+    if (signature_profile.has_value()) {
+        return descriptor.signature_profile.has_value() &&
+               *descriptor.signature_profile == *signature_profile;
+    }
+    return !descriptor.signature_profile.has_value();
+}
+
+using StringOutcome = std::variant<std::string, IdentityError>;
+
+StringOutcome serializeValue(Value value) {
+    auto serialized = jcs::serialize_jcs(value, jcs::Limits{});
+    if (std::holds_alternative<jcs::JcsError>(serialized)) {
+        return std::get<jcs::JcsError>(serialized) == jcs::JcsError::OutOfMemory
+                   ? IdentityError::OutOfMemory
+                   : IdentityError::CryptoFailure;
+    }
+    auto text = std::get<std::string>(std::move(serialized));
+    if (text.empty() || text.size() > kMaximumOutputBytes) {
+        return IdentityError::CryptoFailure;
+    }
+    return text;
+}
+
+StringOutcome serializeIdentity(const PublicIdentity& identity) {
+    if (identity.schema_version != 1 || identity.account_index > 1 ||
+        identity.account_label.has_value() || identity.account_xpub.empty() ||
+        identity.account_peer_id.empty()) {
+        return IdentityError::CryptoFailure;
+    }
+    const bool modern = identity.identity_scheme == kIdentityScheme &&
+                        identity.seed_profile == kPasswordProfile;
+    const bool legacy_fast =
+        identity.identity_scheme == kLegacyFastIdentityScheme &&
+        identity.seed_profile == kLegacyPasswordProfile;
+    const bool legacy_mnemonic =
+        identity.identity_scheme == kLegacyMnemonicIdentityScheme &&
+        identity.seed_profile == kLegacyMnemonicSeedProfile;
+    if (!modern && !legacy_fast && !legacy_mnemonic) {
+        return IdentityError::CryptoFailure;
+    }
+    const std::string prefix = "m/44'/0'/" +
+                               std::to_string(identity.account_index) + "'/";
+    if (modern) {
+        if (identity.keys.size() != 3 ||
+            !descriptorMatches(
+                identity.keys[0], kIdentityScheme, kPasswordProfile,
+                Purpose::AssetReviewApproval, Curve::ED25519,
+                KeyDerivation::Slip10Ed25519, prefix + "2'/0'",
+                "ed25519-over-sha256-jcs-v1") ||
+            !descriptorMatches(
+                identity.keys[1], kIdentityScheme, kPasswordProfile,
+                Purpose::ContactEncryption, Curve::X25519,
+                KeyDerivation::Slip10X25519, prefix + "1'/0'", std::nullopt) ||
+            !descriptorMatches(
+                identity.keys[2], kIdentityScheme, kPasswordProfile,
+                Purpose::SdnAuthentication, Curve::ED25519,
+                KeyDerivation::Slip10Ed25519, prefix + "0'/0'",
+                "ed25519-over-sha256-jcs-v1")) {
+            return IdentityError::CryptoFailure;
+        }
+    } else {
+        const std::string_view scheme = legacy_fast
+                                            ? kLegacyFastIdentityScheme
+                                            : kLegacyMnemonicIdentityScheme;
+        const std::string_view profile = legacy_fast
+                                             ? kLegacyPasswordProfile
+                                             : kLegacyMnemonicSeedProfile;
+        if (identity.keys.size() != 1 ||
+            !descriptorMatches(
+                identity.keys[0], scheme, profile, Purpose::SdnAuthentication,
+                Curve::ED25519,
+                KeyDerivation::LegacyBip32ScalarAsEd25519Seed,
+                prefix + "0/0", "ed25519-raw-32-v1")) {
+            return IdentityError::CryptoFailure;
+        }
+    }
+
+    Value::Array keys;
+    keys.reserve(identity.keys.size());
+    for (const auto& descriptor : identity.keys) {
+        const auto purpose = purposeName(descriptor.purpose);
+        const auto curve = curveName(descriptor.curve);
+        const auto derivation = derivationName(descriptor.derivation);
+        if (!purpose || !curve || !derivation) {
+            return IdentityError::CryptoFailure;
+        }
+        Value::Members members{
+            {"bip32Fingerprint", Value(nullptr)},
+            {"curve", *curve},
+            {"derivation", *derivation},
+            {"encoding", std::string("raw")},
+            {"identityScheme", descriptor.identity_scheme},
+            {"keyId", descriptor.key_id},
+            {"path", descriptor.path},
+            {"publicKeyHex", hex(descriptor.public_key)},
+            {"purpose", *purpose},
+            {"seedProfile", descriptor.seed_profile},
+            {"signatureProfile", descriptor.signature_profile
+                                     ? Value(*descriptor.signature_profile)
+                                     : Value(nullptr)},
+        };
+        keys.emplace_back(std::move(members));
+    }
+    Value::Members root{
+        {"accountFingerprint", hex(identity.account_fingerprint)},
+        {"accountIndex", static_cast<double>(identity.account_index)},
+        {"accountLabel", Value(nullptr)},
+        {"accountPeerId", identity.account_peer_id},
+        {"accountXpub", identity.account_xpub},
+        {"identityScheme", identity.identity_scheme},
+        {"keys", Value(std::move(keys))},
+        {"schemaVersion", 1.0},
+        {"seedProfile", identity.seed_profile},
+    };
+    return serializeValue(Value(std::move(root)));
+}
+
+StringOutcome serializeRawSignature(const RawSignature& signature) {
+    const bool legacy_scheme =
+        signature.identity_scheme == kLegacyFastIdentityScheme ||
+        signature.identity_scheme == kLegacyMnemonicIdentityScheme;
+    if (signature.schema_version != 1 || !legacy_scheme ||
+        !validKeyId(signature.key_id) ||
+        signature.algorithm != "ed25519" ||
+        signature.encoding != KeyEncoding::Raw ||
+        signature.signature_profile != "ed25519-raw-32-v1") {
+        return IdentityError::CryptoFailure;
+    }
+    Value::Members value{
+        {"algorithm", signature.algorithm},
+        {"encoding", std::string("raw")},
+        {"identityScheme", signature.identity_scheme},
+        {"keyId", signature.key_id},
+        {"schemaVersion", 1.0},
+        {"signatureHex", hex(signature.signature)},
+        {"signatureProfile", signature.signature_profile},
+    };
+    return serializeValue(Value(std::move(value)));
+}
+
+StringOutcome serializeCanonicalSignature(const CanonicalSignature& signature) {
+    if (signature.schema_version != 1 ||
+        signature.identity_scheme != kIdentityScheme ||
+        !validKeyId(signature.key_id) ||
+        signature.algorithm != "ed25519" ||
+        signature.encoding != KeyEncoding::Raw ||
+        signature.signature_profile != "ed25519-over-sha256-jcs-v1" ||
+        signature.canonical_envelope.empty()) {
+        return IdentityError::CryptoFailure;
+    }
+    Value::Members value{
+        {"algorithm", signature.algorithm},
+        {"canonicalEnvelope", signature.canonical_envelope},
+        {"encoding", std::string("raw")},
+        {"identityScheme", signature.identity_scheme},
+        {"keyId", signature.key_id},
+        {"schemaVersion", 1.0},
+        {"signatureHex", hex(signature.signature)},
+        {"signatureProfile", signature.signature_profile},
+        {"signedDigestSha256", hex(signature.signed_digest)},
+    };
+    return serializeValue(Value(std::move(value)));
+}
+
+uint16_t copyTextResult(const StringOutcome& outcome, uint8_t* output,
+                        uint32_t capacity, uint32_t* out_required) {
+    if (std::holds_alternative<IdentityError>(outcome)) {
+        return status(std::get<IdentityError>(outcome));
+    }
+    const std::string& text = std::get<std::string>(outcome);
+    if (text.empty() || text.size() > kMaximumOutputBytes ||
+        text.size() > std::numeric_limits<uint32_t>::max()) {
+        return status(IdentityError::CryptoFailure);
+    }
+    const uint32_t required = static_cast<uint32_t>(text.size());
+    storeScalar(out_required, required);
+    if (capacity < required) return status(IdentityError::InvalidRequest);
+    std::memcpy(output, text.data(), text.size());
+    return 0;
+}
+
+uint16_t finishDerived(IdentityOutcome<IdentityHandle>&& outcome,
+                       uint64_t* out_handle, uint8_t* output,
+                       uint32_t capacity, uint32_t* out_required) {
+    if (std::holds_alternative<IdentityError>(outcome)) {
+        return status(std::get<IdentityError>(outcome));
+    }
+    const IdentityHandle handle = std::get<IdentityHandle>(outcome);
+    PendingHandle pending(handle);
+    auto described = describe_identity(handle);
+    if (std::holds_alternative<IdentityError>(described)) {
+        return status(std::get<IdentityError>(described));
+    }
+    const auto serialized = serializeIdentity(std::get<PublicIdentity>(described));
+    const uint16_t result = copyTextResult(serialized, output, capacity, out_required);
+    if (result != 0) return result;
+    storeScalar(out_handle, static_cast<uint64_t>(handle));
+    pending.release();
+    return 0;
+}
+
+const Value* member(const Value& object, std::string_view name) {
+    if (object.kind() != Value::Kind::Object) return nullptr;
+    for (const auto& entry : object.members()) {
+        if (entry.first == name) return &entry.second;
+    }
+    return nullptr;
+}
+
+bool exactMembers(const Value& object,
+                  std::initializer_list<std::string_view> expected) {
+    if (object.kind() != Value::Kind::Object ||
+        object.members().size() != expected.size()) {
+        return false;
+    }
+    return std::all_of(object.members().begin(), object.members().end(),
+                       [expected](const auto& entry) {
+                           return std::find(expected.begin(), expected.end(),
+                                            entry.first) != expected.end();
+                       });
+}
+
+bool stringMember(const Value& object, std::string_view name,
+                  std::string& result) {
+    const Value* value = member(object, name);
+    if (value == nullptr || value->kind() != Value::Kind::String) return false;
+    result = value->string();
+    return true;
+}
+
+bool numberMember(const Value& object, std::string_view name, double& result) {
+    const Value* value = member(object, name);
+    if (value == nullptr || value->kind() != Value::Kind::Number) return false;
+    result = value->number();
+    return std::isfinite(result);
+}
+
+bool uint32Member(const Value& object, std::string_view name,
+                  uint32_t& result) {
+    double value = 0;
+    if (!numberMember(object, name, value) || value < 0 ||
+        value > std::numeric_limits<uint32_t>::max() ||
+        std::floor(value) != value) {
+        return false;
+    }
+    result = static_cast<uint32_t>(value);
+    return true;
+}
+
+bool uint64Member(const Value& object, std::string_view name,
+                  uint64_t& result) {
+    double value = 0;
+    constexpr double kMaximumSafeInteger = 9007199254740991.0;
+    if (!numberMember(object, name, value) || value < 0 ||
+        value > kMaximumSafeInteger || std::floor(value) != value) {
+        return false;
+    }
+    result = static_cast<uint64_t>(value);
+    return true;
+}
+
+bool nullableStringMember(const Value& object, std::string_view name,
+                          std::optional<std::string>& result) {
+    const Value* value = member(object, name);
+    if (value == nullptr) return false;
+    if (value->kind() == Value::Kind::Null) {
+        result.reset();
+        return true;
+    }
+    if (value->kind() != Value::Kind::String) return false;
+    result = value->string();
+    return true;
+}
+
+std::variant<Value, IdentityError> parseRequest(const uint8_t* bytes,
+                                                uint32_t length) {
+    jcs::Limits limits;
+    limits.max_bytes = kMaximumOutputBytes;
+    auto parsed = jcs::parse_json(std::span<const uint8_t>(bytes, length), limits);
+    if (std::holds_alternative<jcs::JcsError>(parsed)) {
+        return std::get<jcs::JcsError>(parsed) == jcs::JcsError::OutOfMemory
+                   ? IdentityError::OutOfMemory
+                   : IdentityError::InvalidRequest;
+    }
+    return std::get<Value>(std::move(parsed));
+}
+
+bool decodeBase64Url32(std::string_view encoded,
+                       std::array<uint8_t, 32>& output) noexcept {
+    static constexpr std::string_view alphabet =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    if (encoded.size() != 43 || encoded.find('=') != std::string_view::npos) {
+        return false;
+    }
+    uint32_t buffer = 0;
+    unsigned bits = 0;
+    size_t output_index = 0;
+    for (const char byte : encoded) {
+        const size_t position = alphabet.find(byte);
+        if (position == std::string_view::npos) return false;
+        buffer = (buffer << 6) | static_cast<uint32_t>(position);
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            if (output_index >= output.size()) return false;
+            output[output_index++] =
+                static_cast<uint8_t>((buffer >> bits) & 0xff);
+            buffer = bits == 0 ? 0 : buffer & ((1U << bits) - 1U);
+        }
+    }
+    return output_index == output.size() && bits == 2 && buffer == 0;
+}
+
+std::variant<SdnLoginV2Fields, IdentityError> parseLoginV2(
+    const uint8_t* bytes, uint32_t length) {
+    auto parsed = parseRequest(bytes, length);
+    if (std::holds_alternative<IdentityError>(parsed)) {
+        return std::get<IdentityError>(parsed);
+    }
+    const Value& value = std::get<Value>(parsed);
+    if (!exactMembers(value, {"audience", "challengeBase64url", "expiresAt",
+                              "issuedAt", "nonce", "protocolVersion"})) {
+        return IdentityError::InvalidRequest;
+    }
+    SdnLoginV2Fields result{};
+    std::string challenge;
+    if (!uint32Member(value, "protocolVersion", result.protocol_version) ||
+        !stringMember(value, "audience", result.audience) ||
+        !stringMember(value, "challengeBase64url", challenge) ||
+        !decodeBase64Url32(challenge, result.challenge) ||
+        !stringMember(value, "nonce", result.nonce) ||
+        !stringMember(value, "issuedAt", result.issued_at) ||
+        !stringMember(value, "expiresAt", result.expires_at)) {
+        return IdentityError::InvalidRequest;
+    }
+    return result;
+}
+
+std::variant<AuthorityActivationFields, IdentityError> parseActivation(
+    const uint8_t* bytes, uint32_t length) {
+    auto parsed = parseRequest(bytes, length);
+    if (std::holds_alternative<IdentityError>(parsed)) {
+        return std::get<IdentityError>(parsed);
+    }
+    const Value& value = std::get<Value>(parsed);
+    if (!exactMembers(value, {
+            "protocolVersion", "audience", "requestOrigin", "clientId",
+            "serviceInstance", "purpose", "nonce", "issuedAt", "expiresAt",
+            "publicKeyHex", "keyId", "identityScheme", "signatureProfile"})) {
+        return IdentityError::InvalidRequest;
+    }
+    AuthorityActivationFields result{};
+    if (!uint32Member(value, "protocolVersion", result.protocol_version) ||
+        !stringMember(value, "audience", result.audience) ||
+        !stringMember(value, "requestOrigin", result.request_origin) ||
+        !stringMember(value, "clientId", result.client_id) ||
+        !stringMember(value, "serviceInstance", result.service_instance) ||
+        !stringMember(value, "purpose", result.purpose) ||
+        !stringMember(value, "nonce", result.nonce) ||
+        !stringMember(value, "issuedAt", result.issued_at) ||
+        !stringMember(value, "expiresAt", result.expires_at) ||
+        !stringMember(value, "publicKeyHex", result.public_key_hex) ||
+        !stringMember(value, "keyId", result.key_id) ||
+        !stringMember(value, "identityScheme", result.identity_scheme) ||
+        !stringMember(value, "signatureProfile", result.signature_profile)) {
+        return IdentityError::InvalidRequest;
+    }
+    return result;
+}
+
+template <size_t Size>
+bool numberArray(const Value& object, std::string_view name,
+                 std::array<double, Size>& output) {
+    const Value* value = member(object, name);
+    if (value == nullptr || value->kind() != Value::Kind::Array ||
+        value->array().size() != Size) {
+        return false;
+    }
+    for (size_t index = 0; index < Size; ++index) {
+        const Value& element = value->array()[index];
+        if (element.kind() != Value::Kind::Number ||
+            !std::isfinite(element.number())) {
+            return false;
+        }
+        output[index] = element.number();
+    }
+    return true;
+}
+
+bool parseTransform(const Value& value, ReviewedTransform& result) {
+    return exactMembers(value, {"translation", "rotation", "scale", "upAxis",
+                                "sourceUnits", "metersPerSourceUnit"}) &&
+           numberArray(value, "translation", result.translation) &&
+           numberArray(value, "rotation", result.rotation) &&
+           numberArray(value, "scale", result.scale) &&
+           stringMember(value, "upAxis", result.up_axis) &&
+           stringMember(value, "sourceUnits", result.source_units) &&
+           numberMember(value, "metersPerSourceUnit",
+                        result.meters_per_source_unit);
+}
+
+std::variant<AssetReviewDecisionFields, IdentityError> parseDecision(
+    const uint8_t* bytes, uint32_t length) {
+    auto parsed = parseRequest(bytes, length);
+    if (std::holds_alternative<IdentityError>(parsed)) {
+        return std::get<IdentityError>(parsed);
+    }
+    const Value& value = std::get<Value>(parsed);
+    std::string decision;
+    if (!stringMember(value, "decision", decision)) {
+        return IdentityError::InvalidRequest;
+    }
+    const bool approve = decision == "approve";
+    const bool disapprove = decision == "disapprove";
+    if ((!approve && !disapprove) ||
+        (approve && !exactMembers(value, {
+            "protocolVersion", "audience", "requestOrigin", "clientId",
+            "challengeId", "nonce", "issuedAt", "expiresAt", "candidateKey",
+            "modelCid", "modelSha256", "modelBytes", "metadataSha256",
+            "previousDecisionHead", "decision", "reviewedTransform", "note"})) ||
+        (disapprove && !exactMembers(value, {
+            "protocolVersion", "audience", "requestOrigin", "clientId",
+            "challengeId", "nonce", "issuedAt", "expiresAt", "candidateKey",
+            "modelCid", "modelSha256", "modelBytes", "metadataSha256",
+            "previousDecisionHead", "decision", "reason"}))) {
+        return IdentityError::InvalidRequest;
+    }
+    AssetReviewDecisionFields result{};
+    result.decision = approve ? ReviewDecision::Approve
+                              : ReviewDecision::Disapprove;
+    if (!uint32Member(value, "protocolVersion", result.protocol_version) ||
+        !stringMember(value, "audience", result.audience) ||
+        !stringMember(value, "requestOrigin", result.request_origin) ||
+        !stringMember(value, "clientId", result.client_id) ||
+        !stringMember(value, "challengeId", result.challenge_id) ||
+        !stringMember(value, "nonce", result.nonce) ||
+        !stringMember(value, "issuedAt", result.issued_at) ||
+        !stringMember(value, "expiresAt", result.expires_at) ||
+        !stringMember(value, "candidateKey", result.candidate_key) ||
+        !stringMember(value, "modelCid", result.model_cid) ||
+        !stringMember(value, "modelSha256", result.model_sha256) ||
+        !uint64Member(value, "modelBytes", result.model_bytes) ||
+        !stringMember(value, "metadataSha256", result.metadata_sha256) ||
+        !nullableStringMember(value, "previousDecisionHead",
+                              result.previous_decision_head)) {
+        return IdentityError::InvalidRequest;
+    }
+    if (approve) {
+        const Value* transform = member(value, "reviewedTransform");
+        ReviewedTransform parsed_transform{};
+        if (transform == nullptr || !parseTransform(*transform, parsed_transform) ||
+            !nullableStringMember(value, "note", result.note)) {
+            return IdentityError::InvalidRequest;
+        }
+        result.reviewed_transform = std::move(parsed_transform);
+    } else if (!stringMember(value, "reason", result.reason.emplace())) {
+        return IdentityError::InvalidRequest;
+    }
+    return result;
+}
+
+uint16_t finishRawSignature(IdentityOutcome<RawSignature>&& outcome,
+                            uint8_t* output, uint32_t capacity,
+                            uint32_t* out_required) {
+    if (std::holds_alternative<IdentityError>(outcome)) {
+        return status(std::get<IdentityError>(outcome));
+    }
+    return copyTextResult(serializeRawSignature(std::get<RawSignature>(outcome)),
+                          output, capacity, out_required);
+}
+
+uint16_t finishCanonicalSignature(
+    IdentityOutcome<CanonicalSignature>&& outcome, uint8_t* output,
+    uint32_t capacity, uint32_t* out_required) {
+    if (std::holds_alternative<IdentityError>(outcome)) {
+        return status(std::get<IdentityError>(outcome));
+    }
+    return copyTextResult(
+        serializeCanonicalSignature(std::get<CanonicalSignature>(outcome)),
+        output, capacity, out_required);
+}
+
+} // namespace
+
+extern "C" HD_WALLET_EXPORT
+uint16_t hd_sdn_derive_password_identity(
+    const uint8_t* username, uint32_t username_len,
+    uint8_t* password, uint32_t password_len, uint32_t account_index,
+    uint64_t* out_handle, uint8_t* out_json, uint32_t out_capacity,
+    uint32_t* out_required) {
+    return guarded([&] {
+        const bool output_ready = prepareDerivedOutput(
+            out_handle, out_json, out_capacity, out_required);
+        if (!validRange(password, password_len)) {
+            return status(IdentityError::InvalidRequest);
+        }
+        WipeOnExit wipe_password(password, password_len);
+        if (!output_ready ||
+            !validRange(username, username_len)) {
+            return status(IdentityError::InvalidRequest);
+        }
+        if (username_len > kMaximumModernCredentialBytes) {
+            return status(IdentityError::InvalidUsername);
+        }
+        if (password_len > kMaximumModernCredentialBytes) {
+            return status(IdentityError::InvalidPassword);
+        }
+        return finishDerived(
+            derive_password_identity(
+                std::span<const uint8_t>(username, username_len),
+                std::span<const uint8_t>(password, password_len), account_index),
+            out_handle, out_json, out_capacity, out_required);
+    });
+}
+
+extern "C" HD_WALLET_EXPORT
+uint16_t hd_sdn_derive_legacy_password_identity(
+    const uint8_t* username, uint32_t username_len,
+    uint8_t* password, uint32_t password_len, uint32_t account_index,
+    uint64_t* out_handle, uint8_t* out_json, uint32_t out_capacity,
+    uint32_t* out_required) {
+    return guarded([&] {
+        const bool output_ready = prepareDerivedOutput(
+            out_handle, out_json, out_capacity, out_required);
+        if (!validRange(password, password_len)) {
+            return status(IdentityError::InvalidRequest);
+        }
+        WipeOnExit wipe_password(password, password_len);
+        if (!output_ready ||
+            !validRange(username, username_len)) {
+            return status(IdentityError::InvalidRequest);
+        }
+        if (username_len > kMaximumLegacyCredentialBytes) {
+            return status(IdentityError::InvalidUsername);
+        }
+        if (password_len > kMaximumLegacyCredentialBytes) {
+            return status(IdentityError::InvalidPassword);
+        }
+        return finishDerived(
+            derive_legacy_password_identity(
+                std::span<const uint8_t>(username, username_len),
+                std::span<const uint8_t>(password, password_len), account_index),
+            out_handle, out_json, out_capacity, out_required);
+    });
+}
+
+extern "C" HD_WALLET_EXPORT
+uint16_t hd_sdn_import_legacy_mnemonic_identity(
+    uint8_t* mnemonic, uint32_t mnemonic_len, uint32_t account_index,
+    uint64_t* out_handle, uint8_t* out_json, uint32_t out_capacity,
+    uint32_t* out_required) {
+    return guarded([&] {
+        const bool output_ready = prepareDerivedOutput(
+            out_handle, out_json, out_capacity, out_required);
+        if (!validRange(mnemonic, mnemonic_len)) {
+            return status(IdentityError::InvalidRequest);
+        }
+        WipeOnExit wipe_mnemonic(mnemonic, mnemonic_len);
+        if (!output_ready ||
+            mnemonic_len > kMaximumMnemonicBytes) {
+            return status(IdentityError::InvalidRequest);
+        }
+        return finishDerived(
+            import_legacy_mnemonic_identity(
+                std::span<const uint8_t>(mnemonic, mnemonic_len), account_index),
+            out_handle, out_json, out_capacity, out_required);
+    });
+}
+
+extern "C" HD_WALLET_EXPORT
+uint16_t hd_sdn_import_remembered_identity(
+    const uint8_t* ciphertext, uint32_t ciphertext_len,
+    uint8_t* prf_output, uint32_t prf_output_len,
+    const uint8_t* hkdf_salt, uint32_t hkdf_salt_len,
+    const uint8_t* nonce, uint32_t nonce_len,
+    const uint8_t* username, uint32_t username_len,
+    const uint8_t* aad, uint32_t aad_len,
+    uint64_t* out_handle, uint8_t* out_json, uint32_t out_capacity,
+    uint32_t* out_required) {
+    return guarded([&] {
+        const bool output_ready = prepareDerivedOutput(
+            out_handle, out_json, out_capacity, out_required);
+        if (!validRange(prf_output, prf_output_len)) {
+            return status(IdentityError::InvalidRequest);
+        }
+        WipeOnExit wipe_prf(prf_output, prf_output_len);
+        if (!output_ready ||
+            !validRange(ciphertext, ciphertext_len) ||
+            !validRange(hkdf_salt, hkdf_salt_len) ||
+            !validRange(nonce, nonce_len) || !validRange(username, username_len) ||
+            !validRange(aad, aad_len) || prf_output_len != 32 ||
+            hkdf_salt_len != 32 || nonce_len != 12 ||
+            ciphertext_len < kMinimumRememberedCiphertextBytes ||
+            ciphertext_len > kMaximumRememberedCiphertextBytes ||
+            username_len > kMaximumModernCredentialBytes ||
+            aad_len > kMaximumAadBytes) {
+            return status(IdentityError::InvalidRequest);
+        }
+        auto opened = remember_wallet_open(
+            std::span<const uint8_t>(ciphertext, ciphertext_len),
+            std::span<const uint8_t, 32>(prf_output, 32),
+            std::span<const uint8_t, 32>(hkdf_salt, 32),
+            std::span<const uint8_t, 12>(nonce, 12),
+            std::span<const uint8_t>(username, username_len),
+            std::span<const uint8_t>(aad, aad_len));
+        if (std::holds_alternative<IdentityError>(opened)) {
+            return status(std::get<IdentityError>(opened));
+        }
+        ImportedIdentity imported = std::get<ImportedIdentity>(std::move(opened));
+        PendingHandle pending(imported.handle);
+        const auto serialized = serializeIdentity(imported.identity);
+        const uint16_t result =
+            copyTextResult(serialized, out_json, out_capacity, out_required);
+        if (result != 0) return result;
+        storeScalar(out_handle, static_cast<uint64_t>(imported.handle));
+        pending.release();
+        return uint16_t{0};
+    });
+}
+
+extern "C" HD_WALLET_EXPORT
+uint16_t hd_sdn_sign_login_v1(
+    uint64_t handle, const uint8_t* challenge, uint32_t challenge_len,
+    uint8_t* out_json, uint32_t out_capacity, uint32_t* out_required) {
+    return guarded([&] {
+        if (!prepareOutput(out_json, out_capacity, out_required) ||
+            !validRange(challenge, challenge_len) || challenge_len != 32) {
+            return status(IdentityError::InvalidRequest);
+        }
+        return finishRawSignature(
+            sign_sdn_login_v1(
+                handle, std::span<const uint8_t, 32>(challenge, 32)),
+            out_json, out_capacity, out_required);
+    });
+}
+
+extern "C" HD_WALLET_EXPORT
+uint16_t hd_sdn_sign_login_v2(
+    uint64_t handle, const uint8_t* request_json, uint32_t request_len,
+    uint8_t registry_row, uint8_t* out_json, uint32_t out_capacity,
+    uint32_t* out_required) {
+    return guarded([&] {
+        if (!prepareOutput(out_json, out_capacity, out_required) ||
+            !validRange(request_json, request_len) ||
+            request_len > kMaximumOutputBytes) {
+            return status(IdentityError::InvalidRequest);
+        }
+        if (registry_row !=
+            static_cast<uint8_t>(RegistryRowId::SdnNodeConsoleV2)) {
+            return status(IdentityError::OperationNotAllowed);
+        }
+        auto parsed = parseLoginV2(request_json, request_len);
+        if (std::holds_alternative<IdentityError>(parsed)) {
+            return status(std::get<IdentityError>(parsed));
+        }
+        return finishCanonicalSignature(
+            sign_sdn_login_v2(
+                handle, std::get<SdnLoginV2Fields>(parsed),
+                RegistryRowId::SdnNodeConsoleV2),
+            out_json, out_capacity, out_required);
+    });
+}
+
+extern "C" HD_WALLET_EXPORT
+uint16_t hd_sdn_sign_asset_review_authority_activation(
+    uint64_t handle, const uint8_t* request_json, uint32_t request_len,
+    uint8_t registry_row, uint8_t* out_json, uint32_t out_capacity,
+    uint32_t* out_required) {
+    return guarded([&] {
+        if (!prepareOutput(out_json, out_capacity, out_required) ||
+            !validRange(request_json, request_len) ||
+            request_len > kMaximumOutputBytes) {
+            return status(IdentityError::InvalidRequest);
+        }
+        if (registry_row != static_cast<uint8_t>(
+                                RegistryRowId::AssetReviewAuthorityActivation)) {
+            return status(IdentityError::OperationNotAllowed);
+        }
+        auto parsed = parseActivation(request_json, request_len);
+        if (std::holds_alternative<IdentityError>(parsed)) {
+            return status(std::get<IdentityError>(parsed));
+        }
+        return finishCanonicalSignature(
+            sign_asset_review_authority_activation(
+                handle, std::get<AuthorityActivationFields>(parsed),
+                RegistryRowId::AssetReviewAuthorityActivation),
+            out_json, out_capacity, out_required);
+    });
+}
+
+extern "C" HD_WALLET_EXPORT
+uint16_t hd_sdn_sign_asset_review_decision(
+    uint64_t handle, const uint8_t* request_json, uint32_t request_len,
+    uint8_t registry_row, uint8_t* out_json, uint32_t out_capacity,
+    uint32_t* out_required) {
+    return guarded([&] {
+        if (!prepareOutput(out_json, out_capacity, out_required) ||
+            !validRange(request_json, request_len) ||
+            request_len > kMaximumOutputBytes) {
+            return status(IdentityError::InvalidRequest);
+        }
+        if (registry_row !=
+            static_cast<uint8_t>(RegistryRowId::AssetReviewDecision)) {
+            return status(IdentityError::OperationNotAllowed);
+        }
+        auto parsed = parseDecision(request_json, request_len);
+        if (std::holds_alternative<IdentityError>(parsed)) {
+            return status(std::get<IdentityError>(parsed));
+        }
+        return finishCanonicalSignature(
+            sign_asset_review_decision(
+                handle, std::get<AssetReviewDecisionFields>(parsed),
+                RegistryRowId::AssetReviewDecision),
+            out_json, out_capacity, out_required);
+    });
+}
+
+extern "C" HD_WALLET_EXPORT
+uint16_t hd_sdn_seal_remembered_identity(
+    uint64_t handle, uint8_t* password, uint32_t password_len,
+    uint8_t* prf_output, uint32_t prf_output_len,
+    const uint8_t* hkdf_salt, uint32_t hkdf_salt_len,
+    const uint8_t* nonce, uint32_t nonce_len,
+    const uint8_t* aad, uint32_t aad_len,
+    uint8_t* out_bytes, uint32_t out_capacity, uint32_t* out_required) {
+    return guarded([&] {
+        const bool output_ready =
+            prepareOutput(out_bytes, out_capacity, out_required);
+        const bool password_valid = validRange(password, password_len);
+        const bool prf_valid = validRange(prf_output, prf_output_len);
+        if (!password_valid) {
+            if (prf_valid) secureWipe(prf_output, prf_output_len);
+            return status(IdentityError::InvalidRequest);
+        }
+        WipeOnExit wipe_password(password, password_len);
+        if (!prf_valid) return status(IdentityError::InvalidRequest);
+        WipeOnExit wipe_prf(prf_output, prf_output_len);
+        if (!output_ready ||
+            !validRange(hkdf_salt, hkdf_salt_len) ||
+            !validRange(nonce, nonce_len) || !validRange(aad, aad_len) ||
+            password_len > kMaximumModernCredentialBytes || prf_output_len != 32 ||
+            hkdf_salt_len != 32 || nonce_len != 12 ||
+            aad_len > kMaximumAadBytes) {
+            return status(IdentityError::InvalidRequest);
+        }
+        auto sealed = remember_wallet_seal(
+            handle, std::span<const uint8_t>(password, password_len),
+            std::span<const uint8_t, 32>(prf_output, 32),
+            std::span<const uint8_t, 32>(hkdf_salt, 32),
+            std::span<const uint8_t, 12>(nonce, 12),
+            std::span<const uint8_t>(aad, aad_len));
+        if (std::holds_alternative<IdentityError>(sealed)) {
+            return status(std::get<IdentityError>(sealed));
+        }
+        const std::vector<uint8_t>& bytes = std::get<std::vector<uint8_t>>(sealed);
+        if (bytes.size() <= 16 ||
+            bytes.size() > kMaximumRememberedCiphertextBytes) {
+            return status(IdentityError::CryptoFailure);
+        }
+        const uint32_t required = static_cast<uint32_t>(bytes.size());
+        storeScalar(out_required, required);
+        if (out_capacity < required) {
+            return status(IdentityError::InvalidRequest);
+        }
+        std::memcpy(out_bytes, bytes.data(), bytes.size());
+        return uint16_t{0};
+    });
+}
+
+extern "C" HD_WALLET_EXPORT
+void hd_sdn_destroy_identity(uint64_t handle) noexcept {
+    try {
+        destroy_identity(handle);
+    } catch (...) {
+    }
+}
+
+} // namespace hd_wallet::sdn::wasm_adapter
+
+#endif

@@ -1,0 +1,875 @@
+{
+  "schemaVersion": 1,
+  "newIdentity": {
+    "identityScheme": "sdn-bip32-slip10-purpose-v1",
+    "seedProfile": "password-scrypt-v2",
+    "identitySource": "password-scrypt-v2-ascii",
+    "passwordVectors": [
+      {
+        "name": "alice-account-source",
+        "rawUsername": "  ALICE_01  ",
+        "rawUsernameUtf8Hex": "2020414c4943455f30312020",
+        "canonicalUsername": "alice_01",
+        "password": "Correct Horse Battery Staple!",
+        "passwordUtf8Hex": "436f727265637420486f727365204261747465727920537461706c6521",
+        "seedHex": "c63fbe791b92d91eb828eab4b203cffe7f333e9d200ec2355d77c7796c080f79c9ed753af213bf155512e3c667c3be26a22c1c599cbae52cb44add279559fe5b"
+      },
+      {
+        "name": "review-owner-decomposed",
+        "rawUsername": "Review-Owner",
+        "rawUsernameUtf8Hex": "5265766965772d4f776e6572",
+        "canonicalUsername": "review-owner",
+        "password": "Café-Bridge-2026!🚀",
+        "passwordUtf8Hex": "43616665cc812d4272696467652d3230323621f09f9a80",
+        "seedHex": "82a9851cafe5f364980fab1b4fbc6ed0160f788286200572e14a324ec404ebf1f84e68ca995d5bc04f540afaad67ceb5276fb754104aff574328cec200809939"
+      },
+      {
+        "name": "review-owner-composed",
+        "rawUsername": "Review-Owner",
+        "rawUsernameUtf8Hex": "5265766965772d4f776e6572",
+        "canonicalUsername": "review-owner",
+        "password": "Café-Bridge-2026!🚀",
+        "passwordUtf8Hex": "436166c3a92d4272696467652d3230323621f09f9a80",
+        "seedHex": "fdb155a9da6f464fb5cfb58a5150cf4f9ea56dbb56c45e786ebacc6130089cfd6f62bba7a0eaa9b809a9a9eb9acb07bd697515dd5cf7b77f8099ddec598a845d"
+      }
+    ],
+    "accounts": [
+      {
+        "index": 0,
+        "accountPath": "m/44'/0'/0'",
+        "accountXpub": "xpub6D9SXNXfAWtnHw8uWqUwMCBFh4R5bvzzWWemXtzwNhojQnYXyQARwhphkvtN4AJ93QFhzzHQZHj7MYQ7KuQ8vsXiTEwUq6MiF7iaLXTPFRT",
+        "peerId": "16Uiu2HAkzgWPa6HTtNTU8WQi1kppaRsYUDBxNKygQNYUk7N73CMA",
+        "fingerprint": "9b582711",
+        "authentication": {
+          "path": "m/44'/0'/0'/0'/0'",
+          "publicKeyHex": "f5b8e91319472049d552f37d58f528eecefd68cfc4c462c6fcff279c76afb319",
+          "keyId": "sha256:d997ad2bf7dbf21c490695eba54d3054628d7f7fb9037fb8145ea32b4e384b7c"
+        },
+        "contactEncryption": {
+          "path": "m/44'/0'/0'/1'/0'",
+          "publicKeyHex": "1349c6136a8765e4b2a8795037cc6233e22d31a08c76e328ad247daf836c6c0c"
+        },
+        "assetReviewApproval": {
+          "path": "m/44'/0'/0'/2'/0'",
+          "publicKeyHex": "9210df41afc82babe9f512d781d6d7a8452060515117c00a28a12ce85ae1c6ff",
+          "keyId": "sha256:150b5f54946e1a16d50eaadaaa5f6f12611a19bfbfcbec03157bdcebd4b2e27d"
+        }
+      },
+      {
+        "index": 1,
+        "accountPath": "m/44'/0'/1'",
+        "accountXpub": "xpub6D9SXNXfAWtnLsmiHP7yjWHAmZoYMgp6yWLMr42BWdpgyE6mTNAukCm2PW5AdEG33RTxNgKg42cUE69zrundhquxbWj8sHe2jxtDb3VFoT4",
+        "peerId": "16Uiu2HAm4ZJR19pVznz3KFcQYjjnyCwcspueFV19m7ca5CVPWy3b",
+        "fingerprint": "e8214de1",
+        "authentication": {
+          "path": "m/44'/0'/1'/0'/0'",
+          "publicKeyHex": "999b912a96fde6be3e718f573c29f16cc97d13fd128c2eb6a7d089af7c0fc2b0",
+          "keyId": "sha256:72a40224fc9ba6c1ddeaa4f6da6cd53ab6015f591b76f77c984a6b7d4573b9ef"
+        },
+        "contactEncryption": {
+          "path": "m/44'/0'/1'/1'/0'",
+          "publicKeyHex": "d03c2cd449e689c1f93c17f53bc08cb3f55ecb5c3accf6c1e86b14e9bdf6a610"
+        },
+        "assetReviewApproval": {
+          "path": "m/44'/0'/1'/2'/0'",
+          "publicKeyHex": "8225fc858d41aa082ac813b8b613dcc282e285090363de2ff80bff182eeb18d0",
+          "keyId": "sha256:791e490a08f2a1616fc7fd610e4a9a1f28fdfd0205c429ddeb7902420ec9ad14"
+        }
+      }
+    ]
+  },
+  "purposeSeparatedMnemonicPrimitive": {
+    "vectorKind": "derivation-primitive-only",
+    "importable": false,
+    "operationEligible": false,
+    "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+    "passphrase": "",
+    "rootXpub": "xpub661MyMwAqRbcFkPHucMnrGNzDwb6teAX1RbKQmqtEF8kK3Z7LZ59qafCjB9eCRLiTVG3uxBxgKvRgbubRhqSKXnGGb1aoaqLrpMBDrVxga8",
+    "raw32PrimitiveChallengeBase64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+    "accounts": [
+      {
+        "index": 0,
+        "accountXpub": "xpub6BosfCnifzxcFwrSzQiqu2DBVTshkCXacvNsWGYJVVhhawA7d4R5WSWGFNbi8Aw6ZRc1brxMyWMzG3DSSSSoekkudhUd9yLb6qx39T9nMdj",
+        "peerId": "16Uiu2HAmLggak6WGB3dqbUkX22r4jScmzPY6AsPC4HAp6MTGGoYx",
+        "fingerprint": "6cc9f252",
+        "authPublicKeyHex": "7c2e79f3a1701fb2a86a2c24a3fdf8634b7aad80886c0c0a526d44d23fe8e19a",
+        "authKeyId": "sha256:687194ce6572b9e8685c870cc2d9cfba469aa3b66ec1f343fc2b1c876020418b",
+        "approvalPublicKeyHex": "d8c1129d890a4284b71c6371648aef7fb8d8582ceeffc8b6d363c3394744fc68",
+        "approvalKeyId": "sha256:bbe69296944bfd7b0e7ac68328bd585ad976d4b5eaf5f3d6c19053cb86032090",
+        "encryptionPublicKeyHex": "654f607c4395ac0599a6c38bc34315dd6644f405218daa4ec5318068f008a364",
+        "raw32PrimitiveSignatureHex": "d1631f8386e88bc21985f7a166a2c37c3b635541df6c0190193399675722f420d6f6a2a193184af5c807a972a015fc1270210f3f742885177a86f0264bdfb40b"
+      },
+      {
+        "index": 1,
+        "accountXpub": "xpub6BosfCnifzxcJJ1wYuntGJfF2zPJkDeG9ELNHcKNjezuea4tumswN9sH1psMdSVqCMoJC21Bv8usSeqSP4Sp1tLzW7aY59fGn9GCYzx5UTo",
+        "peerId": "16Uiu2HAm1gk13fMSW7eKuDozaQfEpZ5xaTLXf3q4iQUhRttSUbfE",
+        "fingerprint": "f11b5622",
+        "authPublicKeyHex": "2967ced1299600604535a92865e8ff21e70cfd9b55091d43c9a29192dc48ffa6",
+        "authKeyId": "sha256:d1809e09af2a55be623e3d2dcb0702a012178fad47971dea830656b0328136f8",
+        "approvalPublicKeyHex": "b6eee58dca925872201f76ce10783d13d8eaeba68bf502cf017ab778d9cea819",
+        "approvalKeyId": "sha256:c78235491aa5d821a46858527c107848dd4cbe93cdc61d4cea3b6e2a432aa567",
+        "encryptionPublicKeyHex": "052889798f4abafaf8111bb1a3e4b407ceb438ab3a510057db8538a613aa7050",
+        "raw32PrimitiveSignatureHex": "8308abb0a54b7a6dd7c6784c38d50bd06fbf417c0aa712cfa976246ee854bb095854ec9ddedb6cc9d7e5157e840b79e4f1d2169b7535cc23705397605e551809"
+      }
+    ]
+  },
+  "legacySource": {
+    "repository": "https://github.com/DigitalArsenal/hd-wallet-wasm.git",
+    "tag": "v2.0.19",
+    "commit": "537ac9a08c12fb62a7152007bce9898efb6f9204",
+    "passwordKdfSource": "wallet-ui/src/app.js:382-403",
+    "loginCallbackSource": "wallet-ui/src/app.js:2635-2657",
+    "pathHelperSource": "wasm/src/index.mjs:4597-4666"
+  },
+  "legacyIdentities": [
+    {
+      "name": "legacy-fast-password",
+      "identityScheme": "sdn-fast-password-auth-v1-legacy",
+      "seedProfile": "password-fast-v1-legacy",
+      "source": {
+        "kind": "password",
+        "rawUsername": "fixture-legacy-user",
+        "rawUsernameUtf8Hex": "666978747572652d6c65676163792d75736572",
+        "password": "Fixture-Only-Legacy-Secret-0001!",
+        "passwordUtf8Hex": "466978747572652d4f6e6c792d4c65676163792d5365637265742d3030303121"
+      },
+      "seedHex": "ac83330e5389d0910c2684cc9840ff139f3d98b0a2b6092bc6a711dc349cc5a3dafef19a460d5c7d16788e8f06c1b79036bd23b68f7614cd17094a6a1ce204fe",
+      "rootPublicIdentity": {
+        "accountXpub": "xpub661MyMwAqRbcEfyzy7yani8iGiX4LEVVYDjA2na9Lo9mxsi1jLShZ5Z6wM5KaCWVZ1sUDR9m1qLU7QpehwBTRMQqgLRVZwCTMPfTihVSmHj",
+        "peerId": "16Uiu2HAmFp8YKnXBybMTpeRaxrVL8R6xu8nPTsigvijdCRwi4FsC",
+        "fingerprint": "21e59eba"
+      },
+      "accounts": [
+        {
+          "index": 0,
+          "historicalStatus": "released-v2.0.19",
+          "authentication": {
+            "path": "m/44'/0'/0'/0/0",
+            "publicKeyHex": "019a0da9799107657f72d4ae3d5e483b51e7b46b0428f8695fc5412efdb178b4",
+            "keyId": "sha256:0d5b0e5c9371eea56a7c20ff27e6c0759d93c26794a4cea91c25f0ffafc4c1da",
+            "rawChallengeBase64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+            "signatureHex": "16afa44dee296c85350922a10e64e7d8faeb3ad77747c050794140a08974df5af7bcee1bf27fbe8eb36bea25c9c3bc4470a03dd801b36d58edd64e6e45b93203"
+          }
+        },
+        {
+          "index": 1,
+          "historicalStatus": "specified-account-1-extension",
+          "authentication": {
+            "path": "m/44'/0'/1'/0/0",
+            "publicKeyHex": "9128643341847661c3f05bc20245a9719bc98b29ea784ebe512ca2636b0c744b",
+            "keyId": "sha256:f39aaef64b015de3c01bbfd6561c86ea5cb9d4a822b0c982093646da353aafd5",
+            "rawChallengeBase64url": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
+            "signatureHex": "67fdc308b5214ea4356268b61fd030eb31a2622cc15fa332c84eb5812283ae5ea1969320cb03f7e4243e60f6e6ccea7de117fab679a92a45ad36689ec0122e0b"
+          }
+        }
+      ]
+    },
+    {
+      "name": "legacy-bip39-mnemonic",
+      "identityScheme": "sdn-bip39-auth-v1-legacy",
+      "seedProfile": "bip39-mnemonic-v1-legacy",
+      "source": {
+        "kind": "mnemonic",
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "passphrase": ""
+      },
+      "seedHex": "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4",
+      "rootPublicIdentity": {
+        "accountXpub": "xpub661MyMwAqRbcFkPHucMnrGNzDwb6teAX1RbKQmqtEF8kK3Z7LZ59qafCjB9eCRLiTVG3uxBxgKvRgbubRhqSKXnGGb1aoaqLrpMBDrVxga8",
+        "peerId": "16Uiu2HAmTG7RvuHZSbFpFugPwQdSKG9weCGNvTaiJFbrUqiXZyMm",
+        "fingerprint": "73c5da0a"
+      },
+      "accounts": [
+        {
+          "index": 0,
+          "historicalStatus": "released-v2.0.19",
+          "authentication": {
+            "path": "m/44'/0'/0'/0/0",
+            "publicKeyHex": "3c35d187ea9428787cb3343d4a724fc961902012bbce5ce4f43369861e19127f",
+            "keyId": "sha256:840c4084865fc7153bcef07c5458e1bae11370539f3b9106542db552dcc10115",
+            "rawChallengeBase64url": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8",
+            "signatureHex": "542957a9ba75ca30e639637d79575ae8a6868e1a3923a3b2f9e4e91bf99cf8134f0b9ef90a224bca094efb8b264b6a75477433c5e835699c5e0aaf972f9bbf03"
+          }
+        },
+        {
+          "index": 1,
+          "historicalStatus": "specified-account-1-extension",
+          "authentication": {
+            "path": "m/44'/0'/1'/0/0",
+            "publicKeyHex": "3525c32858ce80473ee9bdc1d580fde43bd6e640b8c19583f9160b2efc116e91",
+            "keyId": "sha256:b8aece28623ce188040068c43558930c6fe4eee83c6730ea680831c64cfd1072",
+            "rawChallengeBase64url": "YGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8",
+            "signatureHex": "ea5c1aeb77a6201a49f8926cde019f5a8bfa3563b957184cc1d668f9edea3c98ac415b740dd48f6a651e2755ca637d9ecf875b059c2cc5543dbc8a7045f2f704"
+          }
+        }
+      ]
+    }
+  ],
+  "leadingZeroFingerprint": {
+    "accountIndex": 501,
+    "accountXpub": "xpub6D9SXNXfAWuAKZhu14UostmrUDJp9zrk9uPEd3Jm1E8e5XbdPidEWEButSeJ829RZbMiBc3v9rQEJ8xL45qZHcYjmo3nUcTpSB9N9Ls5hLe",
+    "peerId": "16Uiu2HAmJquqND17wV5bsc91L1rHjckRZwNj9YxxJDfPTKp9mT4S",
+    "fingerprint": "00611cc1"
+  },
+  "validationCases": {
+    "username": [
+      {
+        "name": "username-ascii-trim-case",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "2020414c4943455f30312020",
+        "accepted": true,
+        "canonicalUsername": "alice_01",
+        "error": null
+      },
+      {
+        "name": "username-min-length",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "616263",
+        "accepted": true,
+        "canonicalUsername": "abc",
+        "error": null
+      },
+      {
+        "name": "username-max-length",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "61616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161",
+        "accepted": true,
+        "canonicalUsername": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "error": null
+      },
+      {
+        "name": "username-too-short",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "6162",
+        "accepted": false,
+        "canonicalUsername": null,
+        "error": "username-format"
+      },
+      {
+        "name": "username-too-long",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161",
+        "accepted": false,
+        "canonicalUsername": null,
+        "error": "username-format"
+      },
+      {
+        "name": "username-raw-byte-limit",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "20202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202061616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161",
+        "accepted": true,
+        "canonicalUsername": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "error": null
+      },
+      {
+        "name": "username-raw-byte-over-limit",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "2020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202061616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161",
+        "accepted": false,
+        "canonicalUsername": null,
+        "error": "username-byte-length"
+      },
+      {
+        "name": "username-all-spaces",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "202020",
+        "accepted": false,
+        "canonicalUsername": null,
+        "error": "username-format"
+      },
+      {
+        "name": "username-leading-nbsp",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "c2a0616263",
+        "accepted": false,
+        "canonicalUsername": null,
+        "error": "username-format"
+      },
+      {
+        "name": "username-leading-tab",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "09616263",
+        "accepted": false,
+        "canonicalUsername": null,
+        "error": "username-format"
+      },
+      {
+        "name": "username-non-ascii",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "616cc3ad6365",
+        "accepted": false,
+        "canonicalUsername": null,
+        "error": "username-format"
+      },
+      {
+        "name": "username-invalid-utf8",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "c0af",
+        "accepted": false,
+        "canonicalUsername": null,
+        "error": "invalid-utf8"
+      },
+      {
+        "name": "username-lone-high-surrogate",
+        "inputEncoding": "utf16-code-units-be-hex",
+        "inputHex": "d800",
+        "accepted": false,
+        "canonicalUsername": null,
+        "error": "invalid-utf8"
+      },
+      {
+        "name": "username-lone-low-surrogate",
+        "inputEncoding": "utf16-code-units-be-hex",
+        "inputHex": "dc00",
+        "accepted": false,
+        "canonicalUsername": null,
+        "error": "invalid-utf8"
+      }
+    ],
+    "password": [
+      {
+        "name": "password-scalars-11",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "4121787878787878787878",
+        "accepted": false,
+        "seedHex": null,
+        "error": "password-length"
+      },
+      {
+        "name": "password-scalars-12",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "412178787878787878787878",
+        "accepted": true,
+        "seedHex": "2f45991bd2d206a37b4458fdfaf44fa140320739e2296b644efad831c7d1ebde646075b8df71f59d0329e1b0a03e6e1d369490744f660c768722e9ceedb00ecc",
+        "error": null
+      },
+      {
+        "name": "password-scalars-128",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "4121787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+        "accepted": true,
+        "seedHex": "00573087a154c2fe215e7ce4435ee81af25e5d68ba6de290558ff6b9125f85e180b43a04648ef232fcfe1179f2f3f0c66996baef3c769f75d9449be4b2e4d64b",
+        "error": null
+      },
+      {
+        "name": "password-scalars-129",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "412178787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+        "accepted": false,
+        "seedHex": null,
+        "error": "password-length"
+      },
+      {
+        "name": "password-bytes-255",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a921",
+        "accepted": true,
+        "seedHex": "b66b66970b8846600ad3d52e59e5ae00fe17eb034015ec17cf5fdef3f6a76e2a7af3ba2fc99b5491bb54887d7d422ddd25d48e0159196d20158316b13a1fa2a5",
+        "error": null
+      },
+      {
+        "name": "password-bytes-256",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9",
+        "accepted": true,
+        "seedHex": "ef2712f1cfe228bdf79de560e1318c0a3b6a1c20227893db3c10f9869e1aef596dd310990f8c73615fdc8a7df044f80ca466c88bac8ba0f84ed43a8442e27a95",
+        "error": null
+      },
+      {
+        "name": "password-bytes-257",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9e282ac",
+        "accepted": false,
+        "seedHex": null,
+        "error": "password-byte-length"
+      },
+      {
+        "name": "password-lone-high-surrogate",
+        "inputEncoding": "utf16-code-units-be-hex",
+        "inputHex": "00410021d800007800780078007800780078007800780078",
+        "accepted": false,
+        "seedHex": null,
+        "error": "invalid-utf8"
+      },
+      {
+        "name": "password-lone-low-surrogate",
+        "inputEncoding": "utf16-code-units-be-hex",
+        "inputHex": "00410021dc00007800780078007800780078007800780078",
+        "accepted": false,
+        "seedHex": null,
+        "error": "invalid-utf8"
+      },
+      {
+        "name": "password-invalid-utf8",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "4121c0af787878787878787878",
+        "accepted": false,
+        "seedHex": null,
+        "error": "invalid-utf8"
+      },
+      {
+        "name": "password-control-u0000",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "412100787878787878787878",
+        "accepted": false,
+        "seedHex": null,
+        "error": "invalid-password-scalar"
+      },
+      {
+        "name": "password-control-u0001",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "412101787878787878787878",
+        "accepted": false,
+        "seedHex": null,
+        "error": "invalid-password-scalar"
+      },
+      {
+        "name": "password-control-u001f",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "41211f787878787878787878",
+        "accepted": false,
+        "seedHex": null,
+        "error": "invalid-password-scalar"
+      },
+      {
+        "name": "password-control-u007f",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "41217f787878787878787878",
+        "accepted": false,
+        "seedHex": null,
+        "error": "invalid-password-scalar"
+      },
+      {
+        "name": "password-control-u0080",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "4121c280787878787878787878",
+        "accepted": false,
+        "seedHex": null,
+        "error": "invalid-password-scalar"
+      },
+      {
+        "name": "password-control-u009f",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "4121c29f787878787878787878",
+        "accepted": false,
+        "seedHex": null,
+        "error": "invalid-password-scalar"
+      },
+      {
+        "name": "password-whitespace-u0020",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "202020202020202020202020",
+        "accepted": false,
+        "seedHex": null,
+        "error": "password-all-whitespace"
+      },
+      {
+        "name": "password-whitespace-u00a0",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "c2a0c2a0c2a0c2a0c2a0c2a0c2a0c2a0c2a0c2a0c2a0c2a0",
+        "accepted": false,
+        "seedHex": null,
+        "error": "password-all-whitespace"
+      },
+      {
+        "name": "password-whitespace-u1680",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "e19a80e19a80e19a80e19a80e19a80e19a80e19a80e19a80e19a80e19a80e19a80e19a80",
+        "accepted": false,
+        "seedHex": null,
+        "error": "password-all-whitespace"
+      },
+      {
+        "name": "password-whitespace-u2000",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "e28080e28080e28080e28080e28080e28080e28080e28080e28080e28080e28080e28080",
+        "accepted": false,
+        "seedHex": null,
+        "error": "password-all-whitespace"
+      },
+      {
+        "name": "password-whitespace-u2001",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "e28081e28081e28081e28081e28081e28081e28081e28081e28081e28081e28081e28081",
+        "accepted": false,
+        "seedHex": null,
+        "error": "password-all-whitespace"
+      },
+      {
+        "name": "password-whitespace-u2002",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "e28082e28082e28082e28082e28082e28082e28082e28082e28082e28082e28082e28082",
+        "accepted": false,
+        "seedHex": null,
+        "error": "password-all-whitespace"
+      },
+      {
+        "name": "password-whitespace-u2003",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "e28083e28083e28083e28083e28083e28083e28083e28083e28083e28083e28083e28083",
+        "accepted": false,
+        "seedHex": null,
+        "error": "password-all-whitespace"
+      },
+      {
+        "name": "password-whitespace-u2004",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "e28084e28084e28084e28084e28084e28084e28084e28084e28084e28084e28084e28084",
+        "accepted": false,
+        "seedHex": null,
+        "error": "password-all-whitespace"
+      },
+      {
+        "name": "password-whitespace-u2005",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "e28085e28085e28085e28085e28085e28085e28085e28085e28085e28085e28085e28085",
+        "accepted": false,
+        "seedHex": null,
+        "error": "password-all-whitespace"
+      },
+      {
+        "name": "password-whitespace-u2006",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "e28086e28086e28086e28086e28086e28086e28086e28086e28086e28086e28086e28086",
+        "accepted": false,
+        "seedHex": null,
+        "error": "password-all-whitespace"
+      },
+      {
+        "name": "password-whitespace-u2007",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "e28087e28087e28087e28087e28087e28087e28087e28087e28087e28087e28087e28087",
+        "accepted": false,
+        "seedHex": null,
+        "error": "password-all-whitespace"
+      },
+      {
+        "name": "password-whitespace-u2008",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "e28088e28088e28088e28088e28088e28088e28088e28088e28088e28088e28088e28088",
+        "accepted": false,
+        "seedHex": null,
+        "error": "password-all-whitespace"
+      },
+      {
+        "name": "password-whitespace-u2009",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "e28089e28089e28089e28089e28089e28089e28089e28089e28089e28089e28089e28089",
+        "accepted": false,
+        "seedHex": null,
+        "error": "password-all-whitespace"
+      },
+      {
+        "name": "password-whitespace-u200a",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "e2808ae2808ae2808ae2808ae2808ae2808ae2808ae2808ae2808ae2808ae2808ae2808a",
+        "accepted": false,
+        "seedHex": null,
+        "error": "password-all-whitespace"
+      },
+      {
+        "name": "password-whitespace-u2028",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "e280a8e280a8e280a8e280a8e280a8e280a8e280a8e280a8e280a8e280a8e280a8e280a8",
+        "accepted": false,
+        "seedHex": null,
+        "error": "password-all-whitespace"
+      },
+      {
+        "name": "password-whitespace-u2029",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "e280a9e280a9e280a9e280a9e280a9e280a9e280a9e280a9e280a9e280a9e280a9e280a9",
+        "accepted": false,
+        "seedHex": null,
+        "error": "password-all-whitespace"
+      },
+      {
+        "name": "password-whitespace-u202f",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "e280afe280afe280afe280afe280afe280afe280afe280afe280afe280afe280afe280af",
+        "accepted": false,
+        "seedHex": null,
+        "error": "password-all-whitespace"
+      },
+      {
+        "name": "password-whitespace-u205f",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "e2819fe2819fe2819fe2819fe2819fe2819fe2819fe2819fe2819fe2819fe2819fe2819f",
+        "accepted": false,
+        "seedHex": null,
+        "error": "password-all-whitespace"
+      },
+      {
+        "name": "password-whitespace-u3000",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "e38080e38080e38080e38080e38080e38080e38080e38080e38080e38080e38080e38080",
+        "accepted": false,
+        "seedHex": null,
+        "error": "password-all-whitespace"
+      },
+      {
+        "name": "password-whitespace-mixed",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "20c2a0e19a80e28080e28081e28082e28083e28084e28085e28086e28087e28088e28089e2808ae280a8e280a9e280afe2819fe38080",
+        "accepted": false,
+        "seedHex": null,
+        "error": "password-all-whitespace"
+      },
+      {
+        "name": "password-common-ascii-fold",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "202050415353574f52442020",
+        "accepted": false,
+        "seedHex": null,
+        "error": "common-password"
+      },
+      {
+        "name": "password-noncommon-internal-spaces",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "2020436f727265637420486f727365204261747465727920537461706c65212020",
+        "accepted": true,
+        "seedHex": "5434a6eacf650e431f02a613457c23c4792d3ad09649f04d3b039f7806a48ff32608e40972afa95204ea1e5e7abbf65543cea8475129571dfd5d66e1d10ed903",
+        "error": null
+      },
+      {
+        "name": "password-decomposed",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "43616665cc812d4272696467652d3230323621f09f9a80",
+        "accepted": true,
+        "seedHex": "82a9851cafe5f364980fab1b4fbc6ed0160f788286200572e14a324ec404ebf1f84e68ca995d5bc04f540afaad67ceb5276fb754104aff574328cec200809939",
+        "error": null
+      },
+      {
+        "name": "password-composed",
+        "inputEncoding": "utf8-hex",
+        "inputHex": "436166c3a92d4272696467652d3230323621f09f9a80",
+        "accepted": true,
+        "seedHex": "fdb155a9da6f464fb5cfb58a5150cf4f9ea56dbb56c45e786ebacc6130089cfd6f62bba7a0eaa9b809a9a9eb9acb07bd697515dd5cf7b77f8099ddec598a845d",
+        "error": null
+      }
+    ],
+    "identityImport": [
+      {
+        "name": "identity-valid-new",
+        "identityScheme": "sdn-bip32-slip10-purpose-v1",
+        "seedProfile": "password-scrypt-v2",
+        "accountIndex": 0,
+        "accountPath": "m/44'/0'/0'",
+        "authenticationPath": "m/44'/0'/0'/0'/0'",
+        "contactEncryptionPath": "m/44'/0'/0'/1'/0'",
+        "assetReviewApprovalPath": "m/44'/0'/0'/2'/0'",
+        "signatureProfile": "ed25519-over-sha256-jcs-v1",
+        "accepted": true,
+        "error": null
+      },
+      {
+        "name": "identity-valid-legacy-fast",
+        "identityScheme": "sdn-fast-password-auth-v1-legacy",
+        "seedProfile": "password-fast-v1-legacy",
+        "accountIndex": 0,
+        "accountPath": "m",
+        "authenticationPath": "m/44'/0'/0'/0/0",
+        "contactEncryptionPath": null,
+        "assetReviewApprovalPath": null,
+        "signatureProfile": "ed25519-raw-32-v1",
+        "accepted": true,
+        "error": null
+      },
+      {
+        "name": "identity-valid-legacy-mnemonic",
+        "identityScheme": "sdn-bip39-auth-v1-legacy",
+        "seedProfile": "bip39-mnemonic-v1-legacy",
+        "accountIndex": 0,
+        "accountPath": "m",
+        "authenticationPath": "m/44'/0'/0'/0/0",
+        "contactEncryptionPath": null,
+        "assetReviewApprovalPath": null,
+        "signatureProfile": "ed25519-raw-32-v1",
+        "accepted": true,
+        "error": null
+      },
+      {
+        "name": "identity-account-2",
+        "identityScheme": "sdn-bip32-slip10-purpose-v1",
+        "seedProfile": "password-scrypt-v2",
+        "accountIndex": 2,
+        "accountPath": "m/44'/0'/2'",
+        "authenticationPath": "m/44'/0'/2'/0'/0'",
+        "contactEncryptionPath": "m/44'/0'/2'/1'/0'",
+        "assetReviewApprovalPath": "m/44'/0'/2'/2'/0'",
+        "signatureProfile": "ed25519-over-sha256-jcs-v1",
+        "accepted": false,
+        "error": "account-index"
+      },
+      {
+        "name": "identity-swapped-auth-approval",
+        "identityScheme": "sdn-bip32-slip10-purpose-v1",
+        "seedProfile": "password-scrypt-v2",
+        "accountIndex": 0,
+        "accountPath": "m/44'/0'/0'",
+        "authenticationPath": "m/44'/0'/0'/2'/0'",
+        "contactEncryptionPath": "m/44'/0'/0'/1'/0'",
+        "assetReviewApprovalPath": "m/44'/0'/0'/0'/0'",
+        "signatureProfile": "ed25519-over-sha256-jcs-v1",
+        "accepted": false,
+        "error": "path"
+      },
+      {
+        "name": "identity-nonhardened-slip10",
+        "identityScheme": "sdn-bip32-slip10-purpose-v1",
+        "seedProfile": "password-scrypt-v2",
+        "accountIndex": 0,
+        "accountPath": "m/44'/0'/0'",
+        "authenticationPath": "m/44'/0'/0'/0/0'",
+        "contactEncryptionPath": "m/44'/0'/0'/1'/0'",
+        "assetReviewApprovalPath": "m/44'/0'/0'/2'/0'",
+        "signatureProfile": "ed25519-over-sha256-jcs-v1",
+        "accepted": false,
+        "error": "path"
+      },
+      {
+        "name": "identity-unknown-scheme",
+        "identityScheme": "sdn-unknown-v1",
+        "seedProfile": "password-scrypt-v2",
+        "accountIndex": 0,
+        "accountPath": "m/44'/0'/0'",
+        "authenticationPath": "m/44'/0'/0'/0'/0'",
+        "contactEncryptionPath": "m/44'/0'/0'/1'/0'",
+        "assetReviewApprovalPath": "m/44'/0'/0'/2'/0'",
+        "signatureProfile": "ed25519-over-sha256-jcs-v1",
+        "accepted": false,
+        "error": "identity-pair"
+      },
+      {
+        "name": "identity-unknown-seed-profile",
+        "identityScheme": "sdn-bip32-slip10-purpose-v1",
+        "seedProfile": "password-unknown-v1",
+        "accountIndex": 0,
+        "accountPath": "m/44'/0'/0'",
+        "authenticationPath": "m/44'/0'/0'/0'/0'",
+        "contactEncryptionPath": "m/44'/0'/0'/1'/0'",
+        "assetReviewApprovalPath": "m/44'/0'/0'/2'/0'",
+        "signatureProfile": "ed25519-over-sha256-jcs-v1",
+        "accepted": false,
+        "error": "identity-pair"
+      },
+      {
+        "name": "identity-unknown-signature-profile",
+        "identityScheme": "sdn-bip32-slip10-purpose-v1",
+        "seedProfile": "password-scrypt-v2",
+        "accountIndex": 0,
+        "accountPath": "m/44'/0'/0'",
+        "authenticationPath": "m/44'/0'/0'/0'/0'",
+        "contactEncryptionPath": "m/44'/0'/0'/1'/0'",
+        "assetReviewApprovalPath": "m/44'/0'/0'/2'/0'",
+        "signatureProfile": "ed25519-unknown-v1",
+        "accepted": false,
+        "error": "signature-profile"
+      },
+      {
+        "name": "identity-mixed-new-fast",
+        "identityScheme": "sdn-bip32-slip10-purpose-v1",
+        "seedProfile": "password-fast-v1-legacy",
+        "accountIndex": 0,
+        "accountPath": "m/44'/0'/0'",
+        "authenticationPath": "m/44'/0'/0'/0'/0'",
+        "contactEncryptionPath": "m/44'/0'/0'/1'/0'",
+        "assetReviewApprovalPath": "m/44'/0'/0'/2'/0'",
+        "signatureProfile": "ed25519-over-sha256-jcs-v1",
+        "accepted": false,
+        "error": "identity-pair"
+      },
+      {
+        "name": "identity-mixed-new-mnemonic",
+        "identityScheme": "sdn-bip32-slip10-purpose-v1",
+        "seedProfile": "bip39-mnemonic-v1-legacy",
+        "accountIndex": 0,
+        "accountPath": "m/44'/0'/0'",
+        "authenticationPath": "m/44'/0'/0'/0'/0'",
+        "contactEncryptionPath": "m/44'/0'/0'/1'/0'",
+        "assetReviewApprovalPath": "m/44'/0'/0'/2'/0'",
+        "signatureProfile": "ed25519-over-sha256-jcs-v1",
+        "accepted": false,
+        "error": "identity-pair"
+      },
+      {
+        "name": "identity-mixed-fast-password-v2",
+        "identityScheme": "sdn-fast-password-auth-v1-legacy",
+        "seedProfile": "password-scrypt-v2",
+        "accountIndex": 0,
+        "accountPath": "m",
+        "authenticationPath": "m/44'/0'/0'/0/0",
+        "contactEncryptionPath": null,
+        "assetReviewApprovalPath": null,
+        "signatureProfile": "ed25519-raw-32-v1",
+        "accepted": false,
+        "error": "identity-pair"
+      },
+      {
+        "name": "identity-mixed-fast-mnemonic",
+        "identityScheme": "sdn-fast-password-auth-v1-legacy",
+        "seedProfile": "bip39-mnemonic-v1-legacy",
+        "accountIndex": 0,
+        "accountPath": "m",
+        "authenticationPath": "m/44'/0'/0'/0/0",
+        "contactEncryptionPath": null,
+        "assetReviewApprovalPath": null,
+        "signatureProfile": "ed25519-raw-32-v1",
+        "accepted": false,
+        "error": "identity-pair"
+      },
+      {
+        "name": "identity-mixed-mnemonic-password-v2",
+        "identityScheme": "sdn-bip39-auth-v1-legacy",
+        "seedProfile": "password-scrypt-v2",
+        "accountIndex": 0,
+        "accountPath": "m",
+        "authenticationPath": "m/44'/0'/0'/0/0",
+        "contactEncryptionPath": null,
+        "assetReviewApprovalPath": null,
+        "signatureProfile": "ed25519-raw-32-v1",
+        "accepted": false,
+        "error": "identity-pair"
+      },
+      {
+        "name": "identity-mixed-mnemonic-fast",
+        "identityScheme": "sdn-bip39-auth-v1-legacy",
+        "seedProfile": "password-fast-v1-legacy",
+        "accountIndex": 0,
+        "accountPath": "m",
+        "authenticationPath": "m/44'/0'/0'/0/0",
+        "contactEncryptionPath": null,
+        "assetReviewApprovalPath": null,
+        "signatureProfile": "ed25519-raw-32-v1",
+        "accepted": false,
+        "error": "identity-pair"
+      }
+    ]
+  },
+  "operationMatrix": [
+    {
+      "identityScheme": "sdn-bip32-slip10-purpose-v1",
+      "seedProfile": "password-scrypt-v2",
+      "rawV1": false,
+      "jcsV2": true,
+      "authorityActivation": true,
+      "decision": true
+    },
+    {
+      "identityScheme": "sdn-fast-password-auth-v1-legacy",
+      "seedProfile": "password-fast-v1-legacy",
+      "rawV1": true,
+      "jcsV2": false,
+      "authorityActivation": false,
+      "decision": false
+    },
+    {
+      "identityScheme": "sdn-bip39-auth-v1-legacy",
+      "seedProfile": "bip39-mnemonic-v1-legacy",
+      "rawV1": true,
+      "jcsV2": false,
+      "authorityActivation": false,
+      "decision": false
+    }
+  ]
+}

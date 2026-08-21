@@ -3,7 +3,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import postcss from 'postcss';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const MODULE_PATH = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(MODULE_PATH);
 const ROOT = path.resolve(__dirname, '..');
 
 const SOURCE_CSS = path.join(ROOT, 'styles', 'main.css');
@@ -12,6 +13,8 @@ const OUT_CSS = path.join(ROOT, 'styles', 'widget.css');
 // Scoped styles are applied only within this container.
 const NAMESPACE = '#hd-wallet-ui-container';
 const KEYFRAMES_PREFIX = 'hdw-';
+const RTL_HOST = 'html[dir="rtl"]';
+const RTL_HOST_PATTERN = /^html\s*\[\s*dir\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s\]]+))(?:\s+([is]))?\s*\](?=$|\s)/i;
 
 function escapeRegExp(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -30,10 +33,11 @@ function isInsideKeyframes(node) {
  * Prefix a selector list with the namespace, while handling a few special cases:
  * - `:root` -> namespace element (to scope CSS variables)
  * - `html` / `body` -> namespace element (avoid touching host page)
+ * - equivalent `html[dir="rtl"] ...` forms -> keep the host direction selector above the namespace
  * - `body:has(...)` -> keep `body` but scope the `:has()` and descendants to our container
  */
-function prefixSelector(selector) {
-  const parts = postcss.list.comma(selector);
+export function prefixSelector(selector) {
+  const parts = splitTopLevelComma(selector);
   const out = parts.map((part) => {
     const s = part.trim();
     if (!s) return s;
@@ -41,25 +45,37 @@ function prefixSelector(selector) {
     if (s === ':root') return NAMESPACE;
     if (s === 'html' || s === 'body') return NAMESPACE;
 
+    const rtlHostMatch = matchRtlHost(s);
+    if (rtlHostMatch) {
+      const tail = s.slice(rtlHostMatch[0].length).trim();
+      if (!tail) return `${RTL_HOST} ${NAMESPACE}`;
+      if (tail.startsWith(NAMESPACE)) return `${RTL_HOST} ${tail}`;
+      return `${RTL_HOST} ${NAMESPACE} ${tail}`;
+    }
+
     if (s.startsWith('body:has(')) {
       // Make sure :has() only triggers based on our UI subtree.
-      const scopedHas = s.replace(/body:has\(([^)]*)\)/g, (_m, inner) => {
-        const innerTrimmed = String(inner || '').trim();
-        if (!innerTrimmed) return `body:has(${NAMESPACE})`;
-        if (innerTrimmed.startsWith(NAMESPACE)) return `body:has(${innerTrimmed})`;
-        return `body:has(${NAMESPACE} ${innerTrimmed})`;
-      });
+      const openIndex = s.indexOf('(');
+      const closeIndex = findMatchingParen(s, openIndex);
+      if (closeIndex === -1) return `${NAMESPACE} ${s}`;
+
+      const inner = s.slice(openIndex + 1, closeIndex).trim();
+      const scopedInner = splitTopLevelComma(inner)
+        .map((branch) => {
+          const trimmed = branch.trim();
+          if (!trimmed) return NAMESPACE;
+          return trimmed.startsWith(NAMESPACE) ? trimmed : `${NAMESPACE} ${trimmed}`;
+        })
+        .join(', ');
+      const scopedHas = `${s.slice(0, openIndex + 1)}${scopedInner})`;
 
       // If there are descendant selectors after body:has(...), prefix them too.
       // Example: `body:has(.modal.active) .nav-bar` =>
       //          `body:has(#hd-wallet-ui-container .modal.active) #hd-wallet-ui-container .nav-bar`
-      const idx = scopedHas.indexOf(') ');
-      if (idx === -1) return scopedHas;
-      const head = scopedHas.slice(0, idx + 1);
-      const tail = scopedHas.slice(idx + 2).trim();
-      if (!tail) return head;
-      if (tail.startsWith(NAMESPACE)) return `${head} ${tail}`;
-      return `${head} ${NAMESPACE} ${tail}`;
+      const tail = s.slice(closeIndex + 1).trim();
+      if (!tail) return scopedHas;
+      if (tail.startsWith(NAMESPACE)) return `${scopedHas} ${tail}`;
+      return `${scopedHas} ${NAMESPACE} ${tail}`;
     }
 
     if (s.startsWith(NAMESPACE)) return s;
@@ -68,16 +84,98 @@ function prefixSelector(selector) {
   return out.join(', ');
 }
 
-async function main() {
-  let raw = await fs.readFile(SOURCE_CSS, 'utf8');
-  // Inline relative @imports (e.g. external-panel.css) so the widget build
-  // namespaces ONE flat sheet — a raw @import would ship an unresolved
-  // relative path inside the published widget.css.
-  for (const match of raw.matchAll(/@import\s+url\(\s*['"]?(\.\/[^'")]+)['"]?\s*\)\s*;/g)) {
-    const imported = await fs.readFile(path.join(ROOT, 'styles', match[1]), 'utf8');
-    raw = raw.replace(match[0], imported);
+function matchRtlHost(selector) {
+  const match = selector.match(RTL_HOST_PATTERN);
+  if (!match) return null;
+
+  const value = match[1] ?? match[2] ?? match[3] ?? '';
+  const modifier = String(match[4] || '').toLowerCase();
+  const matchesRtl = modifier === 's' ? value === 'rtl' : value.toLowerCase() === 'rtl';
+  return matchesRtl ? match : null;
+}
+
+function scanCss(value, onTopLevelComma, stopAtMatchingParen = false, openIndex = 0) {
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let quote = null;
+  let escaped = false;
+  let inComment = false;
+
+  for (let index = openIndex; index < value.length; index += 1) {
+    const char = value[index];
+    const next = value[index + 1];
+
+    if (inComment) {
+      if (char === '*' && next === '/') {
+        inComment = false;
+        index += 1;
+      }
+      continue;
+    }
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      inComment = true;
+      index += 1;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === '[') {
+      bracketDepth += 1;
+      continue;
+    }
+    if (char === ']' && bracketDepth > 0) {
+      bracketDepth -= 1;
+      continue;
+    }
+    if (bracketDepth > 0) continue;
+
+    if (char === '(') {
+      parenDepth += 1;
+      continue;
+    }
+    if (char === ')') {
+      if (parenDepth > 0) parenDepth -= 1;
+      if (stopAtMatchingParen && parenDepth === 0) return index;
+      continue;
+    }
+    if (char === ',' && parenDepth === 0) onTopLevelComma?.(index);
   }
-  const root = postcss.parse(raw, { from: SOURCE_CSS });
+
+  return -1;
+}
+
+function splitTopLevelComma(value) {
+  const parts = [];
+  let start = 0;
+  scanCss(value, (index) => {
+    parts.push(value.slice(start, index));
+    start = index + 1;
+  });
+  parts.push(value.slice(start));
+  return parts;
+}
+
+function findMatchingParen(value, openIndex) {
+  return scanCss(value, null, true, openIndex);
+}
+
+export async function buildWidgetCss({ sourcePath = SOURCE_CSS, outputPath = OUT_CSS } = {}) {
+  const raw = await fs.readFile(sourcePath, 'utf8');
+  const root = postcss.parse(raw, { from: sourcePath });
 
   // Rename keyframes to avoid global collisions.
   const keyframeMap = new Map();
@@ -119,10 +217,12 @@ async function main() {
     ` * Regenerate: npm run build:widget-css\n` +
     ` */\n\n`;
 
-  await fs.writeFile(OUT_CSS, banner + root.toString(), 'utf8');
+  await fs.writeFile(outputPath, banner + root.toString(), 'utf8');
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exitCode = 1;
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === MODULE_PATH) {
+  buildWidgetCss().catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  });
+}

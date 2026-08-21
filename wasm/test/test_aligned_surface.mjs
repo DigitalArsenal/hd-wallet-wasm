@@ -11,14 +11,8 @@
 import init from '../src/index.mjs';
 import { test, assert, assertEqual } from './test_all.mjs';
 
-let wallet;
-try {
-  wallet = await init();
-  wallet.injectEntropy(new Uint8Array(32).fill(5));
-} catch (error) {
-  console.log('  Skipping aligned surface tests: WASM module not available');
-  process.exit(0);
-}
+const wallet = await init();
+wallet.injectEntropy(new Uint8Array(32).fill(5));
 
 const master = wallet.hdkey.fromSeed(new Uint8Array(16).fill(1));
 

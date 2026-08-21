@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const artifactPath = join(__dirname, '../dist/hd-wallet.js');
@@ -20,6 +20,22 @@ for (const { name, pattern } of forbiddenPatterns) {
   if (pattern.test(source)) {
     throw new Error(`Browser compatibility regression in ${artifactPath}: found forbidden ${name}`);
   }
+}
+
+if (!source.includes('data:application/octet-stream;base64,AGFzbQE')) {
+  throw new Error(`Package entrypoint is not self-contained: ${artifactPath}`);
+}
+if (/new URL\(["']hd-wallet\.wasm["']/.test(source)) {
+  throw new Error(`Package entrypoint still loads a sibling WASM file: ${artifactPath}`);
+}
+
+const artifact = await import(pathToFileURL(artifactPath).href);
+if (typeof artifact.default !== 'function') {
+  throw new Error(`Package entrypoint does not export a WASM factory: ${artifactPath}`);
+}
+const wallet = await artifact.default();
+if (!wallet || typeof wallet.ccall !== 'function') {
+  throw new Error(`Package entrypoint did not initialize in Node: ${artifactPath}`);
 }
 
 if (!existsSync(wasiArtifactPath)) {

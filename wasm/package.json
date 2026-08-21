@@ -1,45 +1,39 @@
 {
   "name": "hd-wallet-wasm",
-  "version": "2.0.9",
+  "version": "2.0.30",
   "description": "Comprehensive HD Wallet implementation in WebAssembly - BIP-32/39/44, multi-curve, multi-chain support",
   "type": "module",
-  "main": "src/index.mjs",
-  "module": "src/index.mjs",
-  "types": "src/index.d.ts",
+  "main": "./dist/runtime/index.mjs",
+  "module": "./dist/runtime/index.mjs",
+  "types": "./dist/runtime/index.d.ts",
   "sideEffects": false,
   "exports": {
     ".": {
-      "types": "./src/index.d.ts",
-      "import": "./src/index.mjs"
+      "types": "./dist/runtime/index.d.ts",
+      "import": "./dist/runtime/index.mjs"
     },
     "./aligned": {
-      "types": "./src/aligned.d.ts",
-      "import": "./src/aligned.mjs"
+      "types": "./dist/runtime/aligned.d.ts",
+      "import": "./dist/runtime/aligned.mjs"
     },
     "./attestation": {
-      "import": "./src/epm-attestation.mjs"
+      "types": "./dist/runtime/epm-attestation.d.ts",
+      "import": "./dist/runtime/epm-attestation.mjs"
     },
     "./wasm": {
-      "types": "./dist/index.d.ts",
+      "types": "./dist/wasm-loader.d.ts",
       "import": "./dist/hd-wallet.js"
     },
     "./wasi.wasm": "./dist/hd-wallet-wasi.wasm",
     "./dist/hd-wallet-wasi.wasm": "./dist/hd-wallet-wasi.wasm"
   },
   "files": [
-    "src/index.mjs",
-    "src/index.d.ts",
-    "src/sdn-plugin.mjs",
-    "src/sdn-plugin-manifest-source.mjs",
-    "src/epm-attestation.mjs",
-    "src/aligned.mjs",
-    "src/aligned.d.ts",
-    "src/generated/",
+    "dist/runtime/",
     "dist/hd-wallet.js",
-    "dist/hd-wallet.wasm",
     "dist/hd-wallet-wasi.wasm",
-    "dist/index.d.ts",
-    "README.md"
+    "dist/wasm-loader.d.ts",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "generate": "npm run generate:sdn-plugin",
@@ -93,7 +87,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "flatbuffers": "^25.2.10"
+    "flatbuffers": "25.9.23"
   },
   "devDependencies": {
     "@types/node": "^20.0.0"

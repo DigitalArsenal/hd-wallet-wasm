@@ -1,0 +1,52 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { describe, expect, it } from 'vitest';
+
+const ROOT = resolve(import.meta.dirname, '..');
+
+function read(relativePath) {
+  return readFileSync(resolve(ROOT, relativePath), 'utf8');
+}
+
+describe('selected wallet vCard identity', () => {
+  it('exports keys from the currently selected wallet', () => {
+    const app = read('src/app.js');
+
+    expect(app).toContain('getCurrentWalletIdentity()');
+    expect(app).toContain('getCurrentWalletSigningAccounts()');
+    expect(app).toContain('identity.xpub');
+    expect(app).not.toContain('state.activeAccounts\n        .filter(a => a.active && isSigningAccount(a))');
+  });
+
+  it('signs vCards with the selected wallet Solana signing key path', () => {
+    const app = read('src/app.js');
+    const signing = read('src/vcard-signing.js');
+
+    expect(app).toContain('withSelectedWalletSigningKey(');
+    expect(signing).toContain('withDerivedPrivateKey(');
+    expect(app).toContain('signatureKey.accountIndex');
+    expect(app).not.toContain('function getCurrentWalletSignatureKey(');
+    expect(app).not.toContain('const sigValue = `${sigB64}:501:0:0`;');
+  });
+
+  it('scopes selected wallet identity handles while copying public strings', () => {
+    const app = read('src/app.js');
+
+    expect(app).toContain('return withDerivedHandle(');
+    expect(app).toContain("xpub: accountKey?.toXpub?.() || ''");
+    expect(app).toContain("peerId: accountKey?.peerIdString?.() || ''");
+  });
+
+  it('guards signing and export state before showing a successful result', () => {
+    const app = read('src/app.js');
+    const handlerStart = app.indexOf("$('generate-vcard')?.addEventListener('click'");
+    const handlerEnd = app.indexOf('// Toggle QR / Raw', handlerStart);
+    const handler = app.slice(handlerStart, handlerEnd);
+
+    expect(handler.indexOf('try {')).toBeLessThan(handler.indexOf('createSignedVCardArtifacts('));
+    expect(handler.indexOf('createSignedVCardArtifacts(')).toBeLessThan(handler.indexOf('state._exportedVCard = vcard'));
+    expect(handler).toContain('updateVCardSignatureBadge(sigBadge, vcard)');
+    expect(handler).toContain("alert('Error generating vCard: ' + err.message)");
+    expect(handler).not.toContain('state.wallet?.ed25519?.privateKey');
+  });
+});

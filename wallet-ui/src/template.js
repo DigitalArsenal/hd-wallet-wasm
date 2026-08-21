@@ -3,67 +3,25 @@ export function getModalHTML() {
   <!-- Keys Modal -->
   <div id="keys-modal" class="modal">
   <div class="modal-glass modal-wide">
-      <div class="modal-header"><div class="account-header-info"><div class="account-header-top"><h3>Account</h3><h3 class="account-total-value" id="account-total-value"></h3></div><div class="account-address-row"><span class="account-address-label">xpub</span><code class="account-address-display" id="account-address-display"></code><button class="account-address-copy" id="account-address-copy" title="Copy xpub"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div><div class="account-address-row" id="account-peerid-row" style="display:none"><span class="account-address-label">PeerID</span><code class="account-address-display" id="account-peerid-display"></code><button class="account-address-copy" id="account-peerid-copy" title="Copy PeerID"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div></div><button class="modal-close">&times;</button></div>
+      <div class="modal-header account-modal-header"><div class="account-header-info"><div class="account-wallet-row"><select id="account-wallet-select" class="glass-input compact account-wallet-select" aria-label="Select wallet"></select></div><div class="account-wallet-summary"><div class="account-wallet-balance-line"><div class="ph-portfolio-value" id="wallet-bond-value">$0.00</div><div class="ph-portfolio-label">Bond</div></div></div></div><button class="modal-close account-modal-close" type="button" aria-label="Close"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
       <div class="modal-tabs">
         <button class="modal-tab active" data-modal-tab="vcard-tab-content">Identity</button>
         <button class="modal-tab" data-modal-tab="trust-tab-content">Trust Map</button>
         <button class="modal-tab" data-modal-tab="messaging-tab-content">Messaging</button>
         <button class="modal-tab" data-modal-tab="wallet-tab-content">Wallet</button>
+        <button class="modal-tab" id="wallet-manage-tab" type="button">Manage</button>
       </div>
       <div class="modal-body">
         <!-- Wallet Tab -->
         <div id="wallet-tab-content" class="modal-tab-content">
           <!-- Main Wallet View -->
           <div id="wallet-main-view">
-            <!-- Portfolio Value (Phantom-style hero) -->
-            <div class="ph-portfolio">
-              <div class="ph-portfolio-value" id="wallet-bond-value">$0.00</div>
-              <div class="ph-portfolio-label">Total Balance</div>
-              <div class="ph-portfolio-xpub">
-                <code id="wallet-tab-xpub" class="ph-xpub-text truncate"></code>
-                <button class="ph-xpub-copy copy-key-btn" data-copy="wallet-tab-xpub" title="Copy xPub"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
-              </div>
-              <div class="ph-portfolio-xpub" id="ph-portfolio-peerid-row" style="display:none">
-                <code id="wallet-tab-peerid" class="ph-xpub-text truncate"></code>
-                <button class="ph-xpub-copy copy-key-btn" data-copy="wallet-tab-peerid" title="Copy PeerID"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
-              </div>
-            </div>
-
-            <div class="wallet-selector-row">
-              <div class="wallet-selector-control">
-                <select id="wallet-active-select" class="glass-input compact wallet-selector-input"></select>
-                <button id="wallet-manage-btn" class="glass-btn small">Manage</button>
-              </div>
-            </div>
-
             <!-- Action Buttons Row -->
             <div class="ph-actions">
               <button class="ph-action-btn" id="wallet-scan-btn">
                 <div class="ph-action-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></div>
                 <span>Scan</span>
               </button>
-              <div class="ph-action-wrap" id="wallet-send-action">
-                <button class="ph-action-btn" id="wallet-send-btn">
-                  <div class="ph-action-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></div>
-                  <span>Send</span>
-                </button>
-                <div class="ph-action-menu" id="wallet-send-menu">
-                  <button class="ph-action-menu-item" type="button" data-chain="BTC">Bitcoin (BTC)</button>
-                  <button class="ph-action-menu-item" type="button" data-chain="ETH">Ethereum (ETH)</button>
-                  <button class="ph-action-menu-item" type="button" data-chain="SOL">Solana (SOL)</button>
-                </div>
-              </div>
-              <div class="ph-action-wrap" id="wallet-receive-action">
-                <button class="ph-action-btn" id="wallet-receive-btn-main">
-                  <div class="ph-action-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg></div>
-                  <span>Receive</span>
-                </button>
-                <div class="ph-action-menu" id="wallet-receive-menu">
-                  <button class="ph-action-menu-item" type="button" data-chain="BTC">Bitcoin (BTC)</button>
-                  <button class="ph-action-menu-item" type="button" data-chain="ETH">Ethereum (ETH)</button>
-                  <button class="ph-action-menu-item" type="button" data-chain="SOL">Solana (SOL)</button>
-                </div>
-              </div>
               <button class="ph-action-btn" id="wallet-export-btn-main">
                 <div class="ph-action-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></div>
                 <span>Export</span>
@@ -87,6 +45,22 @@ export function getModalHTML() {
                 </svg>
                 <p>No tokens yet</p>
                 <p class="ph-token-empty-sub">Log in and tap Scan to discover your accounts</p>
+              </div>
+            </div>
+            <div id="wallet-asset-action-overlay" class="wallet-asset-action-overlay" style="display:none;">
+              <div class="wallet-asset-action-card">
+                <div class="wallet-asset-action-header">
+                  <div>
+                    <h4 id="wallet-asset-action-title"></h4>
+                    <div id="wallet-asset-action-path" class="wallet-asset-action-path"></div>
+                  </div>
+                  <button id="wallet-asset-action-close" class="modal-close" type="button" aria-label="Close"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                </div>
+                <code id="wallet-asset-action-address" class="wallet-asset-action-address"></code>
+                <div class="wallet-asset-action-buttons">
+                  <button id="wallet-asset-send" class="glass-btn primary">Send</button>
+                  <button id="wallet-asset-receive" class="glass-btn">Receive</button>
+                </div>
               </div>
             </div>
           </div>
@@ -217,7 +191,7 @@ export function getModalHTML() {
                   <video id="vcard-camera-video" autoplay playsinline style="display:none;width:100%;height:100%;object-fit:contain;"></video>
                   <div id="vcard-photo-actions" class="photo-actions">
                     <label class="glass-btn small" for="vcard-photo-input">Upload</label>
-                    <button id="vcard-camera-btn" class="glass-btn small" style="display:none;">Take Photo</button>
+                    <button id="vcard-camera-btn" class="glass-btn small" style="display:none;">Use Camera</button>
                     <button id="vcard-camera-capture" class="glass-btn small primary" style="display:none;">Capture</button>
                     <button id="vcard-camera-cancel" class="glass-btn small" style="display:none;">Cancel</button>
                     <button id="vcard-photo-remove" class="glass-btn small" style="display:none;">Remove</button>
@@ -238,6 +212,19 @@ export function getModalHTML() {
                 <div class="identity-card-detail" id="identity-card-org"></div>
                 <div class="identity-card-detail" id="identity-card-email"></div>
                 <div class="identity-card-detail" id="identity-card-phone"></div>
+              </div>
+            </div>
+
+            <div class="identity-wallet-keys">
+              <div class="identity-wallet-key-row">
+                <span class="identity-wallet-key-label">XPUB</span>
+                <code id="identity-wallet-xpub" class="identity-wallet-key-value truncate"></code>
+                <button class="identity-wallet-copy copy-key-btn" data-copy="identity-wallet-xpub" title="Copy XPUB"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+              </div>
+              <div class="identity-wallet-key-row">
+                <span class="identity-wallet-key-label">PeerID</span>
+                <code id="identity-wallet-peerid" class="identity-wallet-key-value truncate"></code>
+                <button class="identity-wallet-copy copy-key-btn" data-copy="identity-wallet-peerid" title="Copy PeerID"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
               </div>
             </div>
 
@@ -556,9 +543,9 @@ export function getModalHTML() {
   <!-- Login Modal -->
   <div id="login-modal" class="modal">
     <div class="modal-glass login-modal-content">
-      <div class="modal-header"><h3>Login</h3><button class="modal-close">&times;</button></div>
+      <div class="modal-header"><h3>Login</h3><button class="modal-close" type="button" aria-label="Close"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
       <div id="wallet-info-box" class="wallet-info-box">
-        <div id="wallet-info-expanded" class="wallet-info-expanded"><div class="wallet-info-content"><strong>Decentralized Wallet</strong> — Your credentials never leave your browser.</div><button class="wallet-info-close" id="wallet-info-dismiss" title="Dismiss">&times;</button></div>
+        <div id="wallet-info-expanded" class="wallet-info-expanded"><div class="wallet-info-content"><strong>Decentralized Wallet</strong> — Your credentials never leave your browser.</div><button class="wallet-info-close" id="wallet-info-dismiss" title="Dismiss" aria-label="Dismiss"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
         <div id="wallet-info-collapsed" class="wallet-info-collapsed" style="display:none"><span>Decentralized Wallet</span><div class="wallet-info-icon-wrap"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="0.75"/><text x="8" y="8" text-anchor="middle" dominant-baseline="central" font-size="11" fill="currentColor">i</text></svg></div></div>
       </div>
       <div class="modal-body">
@@ -566,7 +553,6 @@ export function getModalHTML() {
           <button class="method-tab active" data-method="external">External Wallet</button>
           <button class="method-tab" data-method="password">Password</button>
           <button class="method-tab" data-method="seed">Seed Phrase</button>
-          <button class="method-tab" data-method="stored" id="stored-tab" style="display: none;">Stored</button>
         </div>
         <div id="external-method" class="method-content active">
           <div id="external-wallet-mount"></div>
@@ -578,34 +564,16 @@ export function getModalHTML() {
             <div class="entropy-bar"><div class="entropy-fill" id="strength-fill"></div><div class="entropy-threshold"></div></div>
             <span class="entropy-label"><span id="entropy-bits">0</span> bits entropy</span>
           </div>
-          <div class="remember-wallet-group">
-            <label class="glass-checkbox"><input type="checkbox" id="remember-wallet-password"><span class="checkmark"></span><span>Remember wallet</span></label>
-            <div class="remember-options" id="remember-options-password" style="display: none;">
-              <div class="remember-method-selector"><button type="button" class="remember-method-btn" data-method="pin" data-target="password">PIN</button><button type="button" class="remember-method-btn active" data-method="passkey" data-target="password" id="passkey-btn-password">Passkey</button></div>
-              <div class="pin-input-group" id="pin-group-password" style="display: none;"><input type="password" id="pin-input-password" class="glass-input pin-input" placeholder="6-digit PIN" maxlength="6" inputmode="numeric" pattern="[0-9]*"></div>
-              <div class="passkey-info" id="passkey-info-password"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a5 5 0 0 1 5 5v3H7V7a5 5 0 0 1 5-5z"/><rect x="3" y="10" width="18" height="12" rx="2"/><circle cx="12" cy="16" r="1"/></svg><span>Use Face ID, Touch ID, or device PIN</span></div>
-            </div>
-          </div>
           <button id="derive-from-password" class="glass-btn primary full-width" disabled type="button">Login</button>
         </form>
         <div id="seed-method" class="method-content">
           <div class="glass-input-group"><textarea id="seed-phrase" class="glass-input glass-textarea" rows="3" placeholder="Enter 12 or 24 word seed phrase..."></textarea><div class="seed-actions"><button id="generate-seed" class="glass-btn small">Generate</button><button id="validate-seed" class="glass-btn small">Validate</button></div></div>
-          <div class="remember-wallet-group">
-            <label class="glass-checkbox"><input type="checkbox" id="remember-wallet-seed"><span class="checkmark"></span><span>Remember wallet</span></label>
-            <div class="remember-options" id="remember-options-seed" style="display: none;">
-              <div class="remember-method-selector"><button type="button" class="remember-method-btn" data-method="pin" data-target="seed">PIN</button><button type="button" class="remember-method-btn active" data-method="passkey" data-target="seed" id="passkey-btn-seed">Passkey</button></div>
-              <div class="pin-input-group" id="pin-group-seed" style="display: none;"><input type="password" id="pin-input-seed" class="glass-input pin-input" placeholder="6-digit PIN" maxlength="6" inputmode="numeric" pattern="[0-9]*"></div>
-              <div class="passkey-info" id="passkey-info-seed"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a5 5 0 0 1 5 5v3H7V7a5 5 0 0 1 5-5z"/><rect x="3" y="10" width="18" height="12" rx="2"/><circle cx="12" cy="16" r="1"/></svg><span>Use Face ID, Touch ID, or device PIN</span></div>
-            </div>
-          </div>
           <button id="derive-from-seed" class="glass-btn primary full-width" disabled>Login</button>
         </div>
-        <div id="stored-method" class="method-content">
-          <div class="stored-wallet-info"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><p>Encrypted wallet found</p><span class="stored-wallet-date" id="stored-wallet-date"></span></div>
-          <div id="stored-pin-section"><div class="glass-input-group"><input type="password" id="pin-input-unlock" class="glass-input pin-input-large" placeholder="Enter 6-digit PIN" maxlength="6" inputmode="numeric" pattern="[0-9]*"></div><button id="unlock-stored-wallet" class="glass-btn primary full-width" disabled>Unlock with PIN</button></div>
-          <div id="stored-passkey-section" style="display: none;"><button id="unlock-with-passkey" class="glass-btn primary full-width passkey-unlock-btn"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a5 5 0 0 1 5 5v3H7V7a5 5 0 0 1 5-5z"/><rect x="3" y="10" width="18" height="12" rx="2"/><circle cx="12" cy="16" r="1"/></svg> Unlock with Passkey</button></div>
-          <div class="stored-divider" id="stored-divider" style="display: none;"><span>or</span></div>
-          <button id="forget-stored-wallet" class="glass-btn secondary full-width">Forget Wallet</button>
+        <div id="legacy-wallet-quarantine" class="stored-wallet-info" style="display:none;">
+          <p>Legacy saved-wallet data is quarantined and will not be unlocked automatically.</p>
+          <div id="legacy-wallet-quarantine-list"></div>
+          <span id="legacy-wallet-quarantine-status" class="stored-wallet-date" aria-live="polite"></span>
         </div>
       </div>
     </div>

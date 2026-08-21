@@ -8,15 +8,8 @@
 import init from '../src/index.mjs';
 import { test, testAsync, assert, assertEqual, bytesToHex, hexToBytes } from './test_all.mjs';
 
-// Initialize WASM module
-let wallet;
-
-try {
-  wallet = await init();
-} catch (error) {
-  console.log('  Skipping test vectors: WASM module not available');
-  process.exit(0);
-}
+// Initialize WASM module. Failure is fatal because this suite requires it.
+const wallet = await init();
 
 // BIP-39 Test Vectors (subset from official vectors)
 // Password: "TREZOR"

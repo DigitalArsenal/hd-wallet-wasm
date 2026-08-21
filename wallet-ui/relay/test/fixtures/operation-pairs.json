@@ -1,0 +1,200 @@
+{
+  "schemaVersion": 1,
+  "pairs": [
+    {
+      "name": "connect",
+      "clientId": "sdn-landing-web-v1",
+      "origin": "https://spacedatanetwork.org",
+      "operation": "sdn.wallet.connect.v1",
+      "request": {},
+      "result": {
+        "connectionExpiresAt": "2026-07-20T20:05:00.000Z",
+        "event": "connected",
+        "identity": {
+          "accountFingerprint": "9b582711",
+          "accountIndex": 0,
+          "accountLabel": null,
+          "accountPeerId": "16Uiu2HAkzgWPa6HTtNTU8WQi1kppaRsYUDBxNKygQNYUk7N73CMA",
+          "accountXpub": "xpub6D9SXNXfAWtnHw8uWqUwMCBFh4R5bvzzWWemXtzwNhojQnYXyQARwhphkvtN4AJ93QFhzzHQZHj7MYQ7KuQ8vsXiTEwUq6MiF7iaLXTPFRT",
+          "identityScheme": "sdn-bip32-slip10-purpose-v1",
+          "keys": [
+            {
+              "bip32Fingerprint": null,
+              "curve": "ed25519",
+              "derivation": "slip10",
+              "encoding": "raw",
+              "identityScheme": "sdn-bip32-slip10-purpose-v1",
+              "keyId": "sha256:150b5f54946e1a16d50eaadaaa5f6f12611a19bfbfcbec03157bdcebd4b2e27d",
+              "path": "m/44'/0'/0'/2'/0'",
+              "publicKeyHex": "9210df41afc82babe9f512d781d6d7a8452060515117c00a28a12ce85ae1c6ff",
+              "purpose": "asset-review-approval",
+              "seedProfile": "password-scrypt-v2",
+              "signatureProfile": "ed25519-over-sha256-jcs-v1"
+            },
+            {
+              "bip32Fingerprint": null,
+              "curve": "x25519",
+              "derivation": "slip10",
+              "encoding": "raw",
+              "identityScheme": "sdn-bip32-slip10-purpose-v1",
+              "keyId": "sha256:289fa9392a192258ac096b8596d8625d5824b5e5b5368072a5adf5d31c369e2b",
+              "path": "m/44'/0'/0'/1'/0'",
+              "publicKeyHex": "1349c6136a8765e4b2a8795037cc6233e22d31a08c76e328ad247daf836c6c0c",
+              "purpose": "contact-encryption",
+              "seedProfile": "password-scrypt-v2",
+              "signatureProfile": null
+            },
+            {
+              "bip32Fingerprint": null,
+              "curve": "ed25519",
+              "derivation": "slip10",
+              "encoding": "raw",
+              "identityScheme": "sdn-bip32-slip10-purpose-v1",
+              "keyId": "sha256:d997ad2bf7dbf21c490695eba54d3054628d7f7fb9037fb8145ea32b4e384b7c",
+              "path": "m/44'/0'/0'/0'/0'",
+              "publicKeyHex": "f5b8e91319472049d552f37d58f528eecefd68cfc4c462c6fcff279c76afb319",
+              "purpose": "sdn-authentication",
+              "seedProfile": "password-scrypt-v2",
+              "signatureProfile": "ed25519-over-sha256-jcs-v1"
+            }
+          ],
+          "schemaVersion": 1,
+          "seedProfile": "password-scrypt-v2"
+        },
+        "schemaVersion": 1
+      }
+    },
+    {
+      "name": "account",
+      "clientId": "sdn-landing-web-v1",
+      "origin": "https://spacedatanetwork.org",
+      "operation": "sdn.wallet.account.v1",
+      "request": {},
+      "result": {
+        "connectionExpiresAt": null,
+        "event": "disconnected",
+        "identity": null,
+        "schemaVersion": 1
+      }
+    },
+    {
+      "name": "sdn-v1",
+      "clientId": "sdn-node-console-v1",
+      "origin": "https://sdn.spaceaware.io",
+      "operation": "sdn.auth.raw-challenge.v1",
+      "request": {
+        "challengeBase64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "protocolVersion": 1
+      },
+      "result": {
+        "algorithm": "ed25519",
+        "encoding": "raw",
+        "identityScheme": "sdn-fast-password-auth-v1-legacy",
+        "keyId": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "schemaVersion": 1,
+        "signatureHex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "signatureProfile": "ed25519-raw-32-v1"
+      }
+    },
+    {
+      "name": "sdn-v2",
+      "clientId": "sdn-node-console-v1",
+      "origin": "https://sdn.spaceaware.io",
+      "operation": "sdn.auth.jcs-envelope.v2",
+      "request": {
+        "audience": "sdn-login:sdn.spaceaware.io",
+        "challengeBase64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "expiresAt": "2026-07-20T20:05:00.000Z",
+        "issuedAt": "2026-07-20T20:00:00.000Z",
+        "nonce": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "protocolVersion": 2
+      },
+      "result": {
+        "algorithm": "ed25519",
+        "canonicalEnvelope": "{\"audience\":\"sdn-login:sdn.spaceaware.io\",\"challengeSha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"clientId\":\"sdn-node-console-v1\",\"expiresAt\":\"2026-07-20T20:05:00.000Z\",\"identityScheme\":\"sdn-bip32-slip10-purpose-v1\",\"issuedAt\":\"2026-07-20T20:00:00.000Z\",\"keyId\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"kind\":\"sdn-login\",\"nonce\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"protocolVersion\":2,\"requestOrigin\":\"https://sdn.spaceaware.io\",\"signatureProfile\":\"ed25519-over-sha256-jcs-v1\"}",
+        "encoding": "raw",
+        "identityScheme": "sdn-bip32-slip10-purpose-v1",
+        "keyId": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "schemaVersion": 1,
+        "signatureHex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "signatureProfile": "ed25519-over-sha256-jcs-v1",
+        "signedDigestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "authority-activation",
+      "clientId": "sdn-asset-review-v1",
+      "origin": "https://review.spacedatanetwork.org",
+      "operation": "sdn.asset-review.authority-activation.v1",
+      "request": {
+        "audience": "asset-review-authority:assets.ipfs.01",
+        "clientId": "sdn-asset-review-v1",
+        "expiresAt": "2026-07-20T22:05:00.000Z",
+        "identityScheme": "sdn-bip32-slip10-purpose-v1",
+        "issuedAt": "2026-07-20T22:00:00.000Z",
+        "keyId": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "nonce": "0000000000000000000000000000000000000000000000000000000000000000",
+        "protocolVersion": 1,
+        "publicKeyHex": "1111111111111111111111111111111111111111111111111111111111111111",
+        "purpose": "asset-review-authority-activation",
+        "requestOrigin": "https://review.spacedatanetwork.org",
+        "serviceInstance": "assets.ipfs.01/asset-review-attestation",
+        "signatureProfile": "ed25519-over-sha256-jcs-v1"
+      },
+      "result": {
+        "algorithm": "ed25519",
+        "canonicalEnvelope": "{\"audience\":\"asset-review-authority:assets.ipfs.01\",\"clientId\":\"sdn-asset-review-v1\",\"expiresAt\":\"2026-07-20T22:05:00.000Z\",\"identityScheme\":\"sdn-bip32-slip10-purpose-v1\",\"issuedAt\":\"2026-07-20T22:00:00.000Z\",\"keyId\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"kind\":\"asset-review-authority-activation\",\"nonce\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"protocolVersion\":1,\"publicKeyHex\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"purpose\":\"asset-review-authority-activation\",\"requestOrigin\":\"https://review.spacedatanetwork.org\",\"serviceInstance\":\"assets.ipfs.01/asset-review-attestation\",\"signatureProfile\":\"ed25519-over-sha256-jcs-v1\"}",
+        "encoding": "raw",
+        "identityScheme": "sdn-bip32-slip10-purpose-v1",
+        "keyId": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "schemaVersion": 1,
+        "signatureHex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "signatureProfile": "ed25519-over-sha256-jcs-v1",
+        "signedDigestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "asset-decision",
+      "clientId": "sdn-asset-review-v1",
+      "origin": "https://review.spacedatanetwork.org",
+      "operation": "sdn.asset-review.decision.v1",
+      "request": {
+        "audience": "asset-review:assets.ipfs.01",
+        "candidateKey": "asset-review:spacecraft/example:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "challengeId": "2222222222222222222222222222222222222222222222222222222222222222",
+        "clientId": "sdn-asset-review-v1",
+        "decision": "approve",
+        "expiresAt": "2026-07-20T23:05:00.000Z",
+        "issuedAt": "2026-07-20T23:00:00.000Z",
+        "metadataSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "modelBytes": 12345,
+        "modelCid": "bafkreifkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvi",
+        "modelSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "nonce": "4444444444444444444444444444444444444444444444444444444444444444",
+        "note": "Synthetic fixture approval.",
+        "previousDecisionHead": null,
+        "protocolVersion": 1,
+        "requestOrigin": "https://review.spacedatanetwork.org",
+        "reviewedTransform": {
+          "metersPerSourceUnit": 1,
+          "rotation": [0, 0, 0, 1],
+          "scale": [1, 1, 1],
+          "sourceUnits": "m",
+          "translation": [0, 0, 0],
+          "upAxis": "Y_UP"
+        }
+      },
+      "result": {
+        "algorithm": "ed25519",
+        "canonicalEnvelope": "{\"audience\":\"asset-review:assets.ipfs.01\",\"candidateKey\":\"asset-review:spacecraft/example:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"challengeId\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"clientId\":\"sdn-asset-review-v1\",\"decision\":\"approve\",\"expiresAt\":\"2026-07-20T23:05:00.000Z\",\"identityScheme\":\"sdn-bip32-slip10-purpose-v1\",\"issuedAt\":\"2026-07-20T23:00:00.000Z\",\"keyId\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"kind\":\"asset-review-attestation\",\"metadataSha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"modelBytes\":12345,\"modelCid\":\"bafkreifkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvi\",\"modelSha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"nonce\":\"4444444444444444444444444444444444444444444444444444444444444444\",\"note\":\"Synthetic fixture approval.\",\"previousDecisionHead\":null,\"protocolVersion\":1,\"purpose\":\"asset-review-approval\",\"requestOrigin\":\"https://review.spacedatanetwork.org\",\"reviewedTransform\":{\"metersPerSourceUnit\":1,\"rotation\":[0,0,0,1],\"scale\":[1,1,1],\"sourceUnits\":\"m\",\"translation\":[0,0,0],\"upAxis\":\"Y_UP\"},\"signatureProfile\":\"ed25519-over-sha256-jcs-v1\"}",
+        "encoding": "raw",
+        "identityScheme": "sdn-bip32-slip10-purpose-v1",
+        "keyId": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "schemaVersion": 1,
+        "signatureHex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "signatureProfile": "ed25519-over-sha256-jcs-v1",
+        "signedDigestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    }
+  ]
+}
