@@ -152,12 +152,28 @@ export function createExternalWalletPanel({
     return row;
   }
 
+  /*
+   * A provider that never answers must not leave the row saying CONNECTING…
+   * forever — Coinbase's extension does exactly that when its popup is
+   * suppressed. The row recovers with a plain message; a wallet that answers
+   * later is simply re-picked by the user.
+   */
+  const CONNECT_TIMEOUT_MS = 45_000;
+
   async function pick(key, connect) {
     connecting = key;
     notice = '';
     render();
     try {
-      const account = await connect();
+      const account = await Promise.race([
+        connect(),
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error('The wallet did not answer. Open the wallet extension and try again.')),
+            CONNECT_TIMEOUT_MS,
+          ),
+        ),
+      ]);
       if (!account) {
         notice = COPY.emptyAccount;
         return;
