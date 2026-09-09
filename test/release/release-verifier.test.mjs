@@ -1,11 +1,17 @@
 import assert from 'node:assert/strict';
-import { readFile, stat } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import {
   assertCleanStatus,
   assertExactToolchain,
   assertOutputOutsideSource,
+  assertPackedArchiveInventories,
+  assertManifestContracts,
   canonicalJson,
   parseArguments,
   validateBuildWorkflow,
@@ -22,6 +28,7 @@ import {
   validateReleaseRecord,
 } from '../../scripts/write-release-record.mjs';
 import { validateProvenanceTrustPolicy } from '../../scripts/verify-provenance-evidence.mjs';
+import { packWorkspaceReleaseSubject } from '../../scripts/pack-release-subject.mjs';
 
 const SHA_A = 'a'.repeat(64);
 const SHA_B = 'b'.repeat(64);
@@ -32,6 +39,56 @@ const SHA_F = 'f'.repeat(64);
 const SHA512_A = 'a'.repeat(128);
 const SHA512_B = 'b'.repeat(128);
 const COMMIT = '0123456789abcdef0123456789abcdef01234567';
+
+test('packed account files are required and do not permit extra package files', async (t) => {
+  const temporary = await mkdtemp(join(tmpdir(), 'wallet-account-release-test-'));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const root = fileURLToPath(new URL('../..', import.meta.url));
+  const core = await packWorkspaceReleaseSubject({
+    destination: temporary, sourceCommit: COMMIT, workspaceDirectory: join(root, 'wasm'),
+  });
+  const ui = await packWorkspaceReleaseSubject({
+    destination: temporary, sourceCommit: COMMIT, workspaceDirectory: join(root, 'wallet-ui'),
+  });
+  assert.doesNotThrow(() => assertPackedArchiveInventories(core.archivePath, ui.archivePath));
+
+  const unpacked = join(temporary, 'unpacked');
+  await mkdir(unpacked);
+  execFileSync('tar', ['-xzf', ui.archivePath, '-C', unpacked], { stdio: 'pipe' });
+  const altered = join(temporary, 'altered.tgz');
+  function checkAltered() {
+    execFileSync('tar', ['-czf', altered, '-C', unpacked, 'package'], { stdio: 'pipe' });
+    assert.throws(
+      () => assertPackedArchiveInventories(core.archivePath, altered),
+      /UI archive package file inventory mismatch/u,
+    );
+  }
+  for (const name of ['index.js', 'index.d.ts']) {
+    const target = join(unpacked, 'package/dist/account', name);
+    const saved = join(temporary, name);
+    await rename(target, saved);
+    checkAltered();
+    await rename(saved, target);
+  }
+  await writeFile(join(unpacked, 'package/dist/account/extra.js'), 'export const extra = true;\n');
+  checkAltered();
+});
+
+test('packed account export is exact and rejects missing, additional or rebound entries', async () => {
+  const core = { ...JSON.parse(await readFile(new URL('../../wasm/package.json', import.meta.url))), gitHead: COMMIT };
+  const ui = { ...JSON.parse(await readFile(new URL('../../wallet-ui/package.json', import.meta.url))), gitHead: COMMIT };
+  const check = (value) => assertManifestContracts(core, value, ui.version, COMMIT);
+  assert.doesNotThrow(() => check(ui));
+  const missing = structuredClone(ui);
+  delete missing.exports['./account'];
+  assert.throws(() => check(missing), /UI package exports drifted/u);
+  const additional = structuredClone(ui);
+  additional.exports['./account/extra'] = './dist/account/index.js';
+  assert.throws(() => check(additional), /UI package exports drifted/u);
+  const rebound = structuredClone(ui);
+  rebound.exports['./account'].import = './dist/wallet-origin/index.js';
+  assert.throws(() => check(rebound), /account export drifted/u);
+});
 
 const EXPECTED_TOOLCHAIN = {
   schemaVersion: 1,

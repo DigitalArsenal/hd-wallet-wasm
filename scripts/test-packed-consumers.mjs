@@ -55,6 +55,8 @@ const UI_FIXED_FILES = Object.freeze([
   'README.md',
   'data/common-passwords-sdn-v1.source.json',
   'data/common-passwords-sdn-v1.txt',
+  'dist/account/index.d.ts',
+  'dist/account/index.js',
   'dist/browser/sdn-wallet-callback.js',
   'dist/browser/sdn-wallet-public-client.js',
   'dist/browser/wallet-callback.html',

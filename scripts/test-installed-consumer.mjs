@@ -95,6 +95,7 @@ try {
     'hd-wallet-wasm/wasi.wasm',
     'hd-wallet-wasm/dist/hd-wallet-wasi.wasm',
     'hd-wallet-ui',
+    'hd-wallet-ui/account',
     'hd-wallet-ui/client',
     'hd-wallet-ui/client/sdn',
     'hd-wallet-ui/client/asset-review',
@@ -122,12 +123,13 @@ try {
       import(resolved.get('hd-wallet-ui/client/asset-review').resolvedUrl),
       import(resolved.get('hd-wallet-ui/client/callback').resolvedUrl),
       import(resolved.get('hd-wallet-ui/wallet-origin').resolvedUrl),
+      import(resolved.get('hd-wallet-ui/account').resolvedUrl),
     ]);
   } finally {
     instrumentation.restore();
   }
   assert.deepEqual(instrumentation.records, [], 'every UI export must be browser-global inert');
-  const [compat, client, sdn, review, callback, origin] = uiModules;
+  const [compat, client, sdn, review, callback, origin, account] = uiModules;
   exactExports(compat, [
     'createWalletUI',
     'init',
@@ -150,6 +152,7 @@ try {
   exactExports(review, ['createAssetReviewWalletClient'], 'UI review client');
   exactExports(callback, ['completeWalletCallbackV1'], 'UI callback');
   exactExports(origin, ['createWalletOriginApp', 'mountWalletOriginApp'], 'UI wallet origin');
+  exactExports(account, ['createAccountView', 'mountAccountView', 'DEFAULT_ACCOUNT_TABS'], 'UI account');
 
   const publicClient = client.createWalletClient({ clientId: 'sdn-landing-web-v1' });
   assert.deepEqual(publicClient.getSnapshot(), { identity: null, status: 'dormant' });
@@ -173,6 +176,7 @@ import { AlignedAPI } from 'hd-wallet-wasm/aligned';
 import { buildCanonicalPayload, type EpmSignatureOptions } from 'hd-wallet-wasm/attestation';
 import initializeRaw, { type HDWalletWasmModule } from 'hd-wallet-wasm/wasm';
 import { createWalletUI } from 'hd-wallet-ui';
+import { createAccountView, type AccountView, type AccountViewOptions } from 'hd-wallet-ui/account';
 import { createWalletClient } from 'hd-wallet-ui/client';
 import { createSdnWalletClient } from 'hd-wallet-ui/client/sdn';
 import { createAssetReviewWalletClient } from 'hd-wallet-ui/client/asset-review';
@@ -187,6 +191,10 @@ const sdn = createSdnWalletClient();
 const review = createAssetReviewWalletClient();
 const compatibilityController = createWalletUI({ wasm: {} });
 const originApplication = createWalletOriginApp({ wasm: {} });
+const accountOptions: AccountViewOptions = { title: 'Public account', identity: { fields: [] } };
+const accountView: AccountView = createAccountView(accountOptions);
+accountView.update({ title: 'Updated account' });
+accountView.destroy();
 completeWalletCallbackV1(
   { hash: '', pathname: '/wallet-callback.html', search: '' },
   { setItem(_key: string, _value: string) {} },
@@ -225,7 +233,8 @@ void second; void raw; void publicClient; void sdn; void review; void options; v
 import { createWalletClient } from 'hd-wallet-ui/client';
 import { createSdnWalletClient } from 'hd-wallet-ui/client/sdn';
 import { createAssetReviewWalletClient } from 'hd-wallet-ui/client/asset-review';
-export { createWalletClient, createSdnWalletClient, createAssetReviewWalletClient };
+import { createAccountView } from 'hd-wallet-ui/account';
+export { createWalletClient, createSdnWalletClient, createAssetReviewWalletClient, createAccountView };
 `);
   execFileSync(esbuildExecutable, [
     bundleEntry,

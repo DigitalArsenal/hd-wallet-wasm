@@ -52,6 +52,8 @@ const UI_FIXED_FILES = Object.freeze([
   'README.md',
   'data/common-passwords-sdn-v1.source.json',
   'data/common-passwords-sdn-v1.txt',
+  'dist/account/index.d.ts',
+  'dist/account/index.js',
   'dist/browser/sdn-wallet-callback.js',
   'dist/browser/sdn-wallet-public-client.js',
   'dist/browser/wallet-callback.html',
@@ -880,7 +882,7 @@ function packedArchiveFiles(archivePath) {
     .map((path) => path.slice('package/'.length)).sort();
 }
 
-function assertPackedArchiveInventories(corePath, uiPath) {
+export function assertPackedArchiveInventories(corePath, uiPath) {
   const coreFiles = packedArchiveFiles(corePath);
   const uiFiles = packedArchiveFiles(uiPath);
   const uiHostAssets = uiFiles.filter((path) => path.startsWith(
@@ -910,7 +912,7 @@ async function packageDigestRecord(path, artifactPath) {
   };
 }
 
-function assertManifestContracts(core, ui, version, sourceCommit) {
+export function assertManifestContracts(core, ui, version, sourceCommit) {
   if (!HEX_40.test(sourceCommit) || core.gitHead !== sourceCommit || ui.gitHead !== sourceCommit) {
     fail('packed package manifests must bind the exact source commit');
   }
@@ -926,9 +928,13 @@ function assertManifestContracts(core, ui, version, sourceCommit) {
     fail('UI package entrypoint/type/license contract drifted');
   }
   if (canonicalJson(Object.keys(ui.exports ?? {}).sort()) !== canonicalJson([
-    '.', './client', './client/asset-review', './client/callback', './client/sdn',
+    '.', './account', './client', './client/asset-review', './client/callback', './client/sdn',
     './styles', './wallet-origin',
   ].sort())) fail('UI package exports drifted');
+  if (canonicalJson(ui.exports['./account']) !== canonicalJson({
+    types: './dist/account/index.d.ts',
+    import: './dist/account/index.js',
+  })) fail('UI account export drifted');
   exactDependency(ui, version, 'packed UI');
 }
 
