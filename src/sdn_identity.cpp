@@ -47,7 +47,7 @@ struct RegistryRow {
     uint32_t maximum_lifetime_seconds;
 };
 
-constexpr std::array<RegistryRow, 3> kRegistryRows = {{
+constexpr std::array<RegistryRow, 4> kRegistryRows = {{
     {RegistryRowId::SdnNodeConsoleV2, RegisteredOperation::SdnLoginV2,
      "sdn-node-console-v1", "https://sdn.spaceaware.io",
      "sdn-login:sdn.spaceaware.io", "", 300},
@@ -60,6 +60,8 @@ constexpr std::array<RegistryRow, 3> kRegistryRows = {{
      RegisteredOperation::AssetReviewDecision,
      "sdn-asset-review-v1", "https://review.spacedatanetwork.org",
      "asset-review:assets.ipfs.01", "", 300},
+    {RegistryRowId::SpaceAwarePublishRequest, RegisteredOperation::SdnPublishRequest,
+     "spaceaware-web-v1", "https://spaceaware.io", "", "", 300},
 }};
 
 const RegistryRow* registryRow(RegistryRowId id) {
@@ -296,6 +298,67 @@ bool isLowerHex(std::string_view value, size_t size) {
 
 bool validString(std::string_view value) {
     return jcs::valid_ijson_string(value);
+}
+
+bool validPublishText(std::string_view value) {
+    return !value.empty() && value.size() <= 256 && validString(value) &&
+           std::none_of(value.begin(), value.end(), [](unsigned char c) {
+               return c < 0x20 || c == 0x7f;
+           });
+}
+
+// Deliberately bounded origin grammar: canonical DNS/punycode or dotted IPv4.
+// IPv6 literals and URL spellings that browsers normalize are not accepted.
+bool validPublishOrigin(std::string_view origin) {
+    if (!origin.starts_with("https://") || origin.size() > 269) return false;
+    auto authority = origin.substr(8);
+    auto host = authority;
+    const auto colon = authority.find(':');
+    if (colon != std::string_view::npos) {
+        host = authority.substr(0, colon);
+        const auto port = authority.substr(colon + 1);
+        if (port.empty() || port.size() > 5 || port.front() == '0') return false;
+        unsigned value = 0;
+        for (char c : port) {
+            if (c < '0' || c > '9') return false;
+            value = value * 10 + static_cast<unsigned>(c - '0');
+        }
+        if (value == 0 || value > 65535 || value == 443) return false;
+    }
+    if (host.empty() || host.size() > 253 || host.back() == '.') return false;
+    size_t start = 0;
+    size_t labels = 0;
+    bool all_numeric = true;
+    bool last_numeric = false;
+    bool valid_ipv4 = true;
+    while (start < host.size()) {
+        const auto end = host.find('.', start);
+        const auto label = host.substr(start, end == std::string_view::npos
+                                                ? host.size() - start : end - start);
+        if (label.empty() || label.size() > 63 || label.front() == '-' ||
+            label.back() == '-') return false;
+        bool numeric = true;
+        unsigned value = 0;
+        for (char c : label) {
+            if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-')) {
+                return false;
+            }
+            if (c < '0' || c > '9') numeric = false;
+            else if (value <= 255) value = value * 10 + static_cast<unsigned>(c - '0');
+        }
+        valid_ipv4 = valid_ipv4 && numeric && value <= 255 &&
+                     (label.size() == 1 || label.front() != '0');
+        all_numeric = all_numeric && numeric;
+        const bool hexadecimal = label.starts_with("0x") &&
+            std::all_of(label.begin() + 2, label.end(), [](char c) {
+                return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+            });
+        last_numeric = numeric || hexadecimal;
+        ++labels;
+        if (end == std::string_view::npos) break;
+        start = end + 1;
+    }
+    return all_numeric ? labels == 4 && valid_ipv4 : !last_numeric;
 }
 
 bool digit(char value) { return value >= '0' && value <= '9'; }
@@ -993,6 +1056,56 @@ IdentityOutcome<CanonicalSignature> sign_sdn_login_v2(
         }
         return signCanonical(*record, false,
                              std::get<std::string>(std::move(canonical)));
+    });
+#endif
+}
+
+IdentityOutcome<SdnPublishSignature> sign_sdn_publish_request(
+    IdentityHandle handle, const SdnPublishRequestFields& request,
+    RegistryRowId registry_row) {
+#if HD_WALLET_FIPS_MODE
+    (void)handle;
+    (void)request;
+    (void)registry_row;
+    return IdentityError::FipsNotAllowed;
+#else
+    return safeOutcome<SdnPublishSignature>([&]() -> IdentityOutcome<SdnPublishSignature> {
+        std::lock_guard lock(g_slots_mutex);
+        auto* record = lookupLocked(handle);
+        if (!record) return IdentityError::StaleHandle;
+        const RegistryRow* row = registryRow(registry_row);
+        if (record->material.kind != IdentityKind::PasswordV2 || row == nullptr ||
+            row->operation != RegisteredOperation::SdnPublishRequest) {
+            return IdentityError::OperationNotAllowed;
+        }
+        const std::string single = "/api/v1/data/publish/" + request.schema;
+        const std::string batch = "/api/v1/data/publish/batch/" + request.schema;
+        if (request.protocol_version != 1 || request.method != "POST" ||
+            !validPublishOrigin(request.provider_origin) ||
+            (request.schema != "CZM" && request.schema != "ETM") ||
+            (request.request_uri != single && request.request_uri != single + ".fbs" &&
+             request.request_uri != batch && request.request_uri != batch + ".fbs") ||
+            !isLowerHex(request.body_sha256, 64) ||
+            request.body_bytes == 0 || request.body_bytes > 1048576 ||
+            !isLowerHex(request.challenge_id, 32) ||
+            !validPublishText(request.entity_id) || !validPublishText(request.entity_name) ||
+            request.document_count == 0 || request.document_count > 100000) {
+            return IdentityError::InvalidRequest;
+        }
+        const std::string canonical = "SDN-SIGNED-REQUEST/v2\n" + request.provider_origin +
+                                      "\nPOST\n" + request.request_uri + "\n" + request.body_sha256;
+        const auto digest = internal::sha256_public(bytes(canonical));
+        std::array<uint8_t, 64> message{};
+        std::copy(request.challenge.begin(), request.challenge.end(), message.begin());
+        std::copy(digest.begin(), digest.end(), message.begin() + 32);
+        const auto signature = internal::sign_ed25519(
+            std::span<const uint8_t, 32>(record->material.authentication_private.data(), 32),
+            message);
+        const auto& auth = record->public_identity.keys[2];
+        SdnPublishSignature result{1, auth.key_id, auth.identity_scheme, "ed25519",
+            KeyEncoding::Raw, "ed25519-sdn-signed-request-v2", {}, signature, digest};
+        std::copy_n(auth.public_key.begin(), 32, result.public_key.begin());
+        return result;
     });
 #endif
 }

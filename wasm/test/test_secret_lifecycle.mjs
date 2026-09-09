@@ -107,6 +107,13 @@ const canonicalSignature = {
   signedDigestSha256: 'aa'.repeat(32),
   signatureHex: 'bb'.repeat(64),
 };
+const publishSignature = {
+  schemaVersion: 1, keyId: validIdentity.keys[2].keyId,
+  identityScheme: validIdentity.identityScheme, algorithm: 'ed25519', encoding: 'raw',
+  signatureProfile: 'ed25519-sdn-signed-request-v2',
+  publicKeyHex: validIdentity.keys[2].publicKeyHex,
+  signatureHex: 'bb'.repeat(64), requestDigestSha256: 'aa'.repeat(32),
+};
 
 const modernAccountOneIdentity = {
   ...validIdentity,
@@ -247,6 +254,13 @@ function makeFake(options = {}) {
       writeJson(options.canonicalSignature ?? canonicalSignature, outJson, outCapacity, outRequired);
       return options.signStatus ?? 0;
     },
+    _hd_sdn_sign_publish_request(
+      _handle, _input, _length, _row, outJson, outCapacity, outRequired,
+    ) {
+      state.rawCalls += 1;
+      writeJson(options.publishSignature ?? publishSignature, outJson, outCapacity, outRequired);
+      return options.signStatus ?? 0;
+    },
     _hd_sdn_sign_asset_review_authority_activation(
       _handle, _input, _length, _row, outJson, outCapacity, outRequired,
     ) {
@@ -362,6 +376,7 @@ test('every sign and seal capability establishes handle authority before other v
   const cases = [
     () => sdn.signSdnLoginV1(forged, new Uint8Array(1)),
     () => sdn.signSdnLoginV2(forged, { value: 1n }, 'wrong-row'),
+    () => sdn.signSdnPublishRequest(forged, throwingInput, 'wrong-row'),
     () => sdn.signAssetReviewAuthorityActivation(forged, {}, 'wrong-row'),
     () => sdn.signAssetReviewDecision(forged, {}, 'wrong-row'),
     () => sdn.sealRememberedIdentity(forged, {}),
@@ -642,6 +657,10 @@ test('every wrapper allocation position fails before its raw capability call', a
       ),
     },
     {
+      name: 'sign publish', setup: 5, allocations: 3,
+      invoke: (sdn, handle) => sdn.signSdnPublishRequest(handle, {}, 'spaceaware-publish-request-v1'),
+    },
+    {
       name: 'sign decision', setup: 5, allocations: 3,
       invoke: (sdn, handle) => sdn.signAssetReviewDecision(
         handle, {}, 'asset-review-decision-v1',
@@ -734,6 +753,18 @@ test('malformed success metadata and identity JSON roll back a pending handle ex
 
 test('sign and seal wrappers reject malformed success metadata without publishing results', async () => {
   const signCases = [
+    ...[
+      { ...publishSignature, extra: true },
+      { ...publishSignature, identityScheme: 'sdn-fast-password-auth-v1-legacy' },
+      { ...publishSignature, signatureProfile: 'ed25519-raw-32-v1' },
+      { ...publishSignature, signatureProfile: 'ed25519-sdn-signed-request-v1' },
+      { ...publishSignature, publicKeyHex: 'bad' },
+      { ...publishSignature, requestDigestSha256: 'A'.repeat(64) },
+    ].map((value, index) => ({
+      name: `publish malformed DTO ${index}`,
+      configure: (options) => { options.publishSignature = value; },
+      invoke: (sdn, handle) => sdn.signSdnPublishRequest(handle, {}, 'spaceaware-publish-request-v1'),
+    })),
     {
       name: 'raw required zero',
       configure: (options) => { options.required = 0; },
@@ -1113,6 +1144,7 @@ test('the real C ABI reports required capacity, publishes no handle, and wipes c
     '_hd_sdn_import_remembered_identity',
     '_hd_sdn_sign_login_v1',
     '_hd_sdn_sign_login_v2',
+    '_hd_sdn_sign_publish_request',
     '_hd_sdn_sign_asset_review_authority_activation',
     '_hd_sdn_sign_asset_review_decision',
     '_hd_sdn_seal_remembered_identity',

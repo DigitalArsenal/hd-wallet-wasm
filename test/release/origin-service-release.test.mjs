@@ -65,6 +65,7 @@ const EXPECTED_RUNTIME_DEPENDENCY_FILES = Object.freeze([
   'node_modules/file-uri-to-path/index.js',
   'node_modules/file-uri-to-path/package.json',
 ].sort());
+const WALLET_CSP = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob:; connect-src 'self' https:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; worker-src 'none'; manifest-src 'self'";
 const HASHED_ASSET = /^wallet-origin\.([0-9a-f]{64})\.(css|js|wasm)$/u;
 
 function sha256(bytes) {
@@ -171,6 +172,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
     wireSourcePath,
   });
   const compiledServer = await readFile(resolve(root, 'service/server.mjs'), 'utf8');
+  assert.equal(compiledServer.includes(WALLET_CSP), true);
   assert.equal(compiledServer.includes('../../../client/wire.mjs'), false);
   assert.equal(compiledServer.includes('new URL("../../../client/wire.mjs"'), false);
 
@@ -384,6 +386,33 @@ test('verifies exact bytes and starts the archived service against only a tempor
   assert.equal(await lstat(fixture.root).then(() => true), true);
   for (const forbidden of ['relay.sqlite', 'relay.sqlite-shm', 'relay.sqlite-wal']) {
     await assert.rejects(lstat(resolve(fixture.root, forbidden)), { code: 'ENOENT' });
+  }
+});
+
+test('refuses archived service CSP that blocks confirmed providers or broadens other permissions', async (t) => {
+  const parent = await mkdtemp(join(tmpdir(), 'sdn-origin-release-csp-'));
+  t.after(() => rm(parent, { force: true, recursive: true }));
+  const policies = [
+    WALLET_CSP.replace("connect-src 'self' https:;", "connect-src 'self';"),
+    WALLET_CSP.replace("connect-src 'self' https:;", "connect-src 'self' https: http:;"),
+    WALLET_CSP.replace("script-src 'self' 'wasm-unsafe-eval';", "script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline';"),
+  ];
+  for (const [index, policy] of policies.entries()) {
+    const fixture = await createFixtureTree(parent, `-${index}`);
+    const serverPath = resolve(fixture.root, 'service/server.mjs');
+    const source = await readFile(serverPath, 'utf8');
+    assert.equal(source.includes(WALLET_CSP), true);
+    await writeFile(serverPath, source.replace(WALLET_CSP, policy));
+    const archive = await buildOriginServiceArchive({
+      sourceDirectory: fixture.root,
+      outputDirectory: join(parent, `output-${index}`),
+      runtime: FIXTURE_RUNTIME,
+      version: ORIGIN_SERVICE_VERSION,
+    });
+    await assert.rejects(verifyOriginServiceRelease({
+      archivePath: archive.archivePath,
+      observedRuntime: OBSERVED_RUNTIME,
+    }), /archived service shell CSP contract is invalid/u);
   }
 });
 

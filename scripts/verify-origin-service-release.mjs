@@ -27,6 +27,7 @@ import {
   validateWalletOriginAssetClosure,
 } from './build-origin-service-release.mjs';
 
+const EXPECTED_WALLET_CSP = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob:; connect-src 'self' https:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; worker-src 'none'; manifest-src 'self'";
 const MAX_ARCHIVE_BYTES = 32 * 1024 * 1024;
 const MAX_UNCOMPRESSED_BYTES = 128 * 1024 * 1024;
 const NORMALIZED_MODE = 0o644;
@@ -659,6 +660,9 @@ async function runHealthCheck(directory, indexBytes, executable) {
       localGet(port, `/transaction/${transactionId}`),
     ]);
     for (const response of [rootShell, transactionShell]) {
+      if (response.headers['content-security-policy'] !== EXPECTED_WALLET_CSP) {
+        fail('archived service shell CSP contract is invalid');
+      }
       if (response.status !== 200
           || response.headers['content-type'] !== 'text/html; charset=utf-8'
           || !response.body.equals(indexBytes)) {

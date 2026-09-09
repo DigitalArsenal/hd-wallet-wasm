@@ -295,7 +295,7 @@ async function buildWalletOriginHost() {
     await writeFile(resolve(assetDirectory, cssName), css);
     await writeFile(resolve(assetDirectory, javascriptName), javascriptBytes);
 
-    const csp = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; worker-src 'none'; manifest-src 'self'";
+    const csp = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob:; connect-src 'self' https:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; worker-src 'none'; manifest-src 'self'";
     const html = '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">\n'
       + `<meta http-equiv="Content-Security-Policy" content="${csp}">\n`
       + '<meta name="referrer" content="no-referrer">\n'

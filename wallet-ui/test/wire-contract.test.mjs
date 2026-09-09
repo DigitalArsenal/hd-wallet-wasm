@@ -1,4 +1,5 @@
 import { runInNewContext } from 'node:vm';
+import { readFileSync } from 'node:fs';
 
 import { describe, expect, test } from 'vitest';
 
@@ -48,6 +49,8 @@ const EXPECTED_EXPORTS = [
   'buildSdnLoginV1Result',
   'buildSdnLoginV2Request',
   'buildSdnLoginV2Result',
+  'buildSdnPublishRequest',
+  'buildSdnPublishResult',
   'buildWalletAccountRequest',
   'buildWalletAccountResult',
   'buildWalletConnectRequest',
@@ -60,6 +63,8 @@ const EXPECTED_EXPORTS = [
   'parseSdnLoginV1Result',
   'parseSdnLoginV2Request',
   'parseSdnLoginV2Result',
+  'parseSdnPublishRequest',
+  'parseSdnPublishResult',
   'parseWalletAccountRequest',
   'parseWalletAccountResult',
   'parseWalletConnectRequest',
@@ -676,5 +681,50 @@ describe('defensive public results', () => {
     expect(built.reviewedTransform.translation).toEqual([0, 0, 0]);
     expect(built.reviewedTransform.rotation).toEqual([0, 0, 0, 1]);
     expectDeepFrozen(built);
+  });
+});
+
+
+describe('purpose-specific publication wire', () => {
+  const fixture = JSON.parse(readFileSync(new URL('../../test/fixtures/sdn-publish-request-v1.json', import.meta.url), 'utf8'));
+  const { challengeId, challengeBase64url, ...request } = fixture.request;
+  const result = { ...fixture.result, challengeId, challengeBase64url };
+  test('copies exactly the public ten fields and eleven result fields from the frozen native vector', () => {
+    const built = wire.buildSdnPublishRequest(request);
+    expect(Object.keys(built)).toHaveLength(10);
+    expect(built).toEqual(request);
+    expect(Object.isFrozen(built)).toBe(true);
+    expect(wire.parseSdnPublishRequest(JSON.stringify(built))).toEqual(built);
+    const signed = wire.buildSdnPublishResult(result);
+    expect(Object.keys(signed)).toHaveLength(11);
+    expect(Object.isFrozen(signed)).toBe(true);
+    expect(wire.parseSdnPublishResult(JSON.stringify(signed))).toEqual(signed);
+    expect(() => wire.buildSdnPublishRequest(fixture.request)).toThrow(/field/iu);
+    expect(() => wire.buildSdnPublishResult(fixture.result)).toThrow(/field/iu);
+  });
+  test.each([
+    { providerOrigin: 'http://provider.example' }, { providerOrigin: 'https://provider.example/' },
+    { providerOrigin: 'https://PROVIDER.example' }, { providerOrigin: 'https://provider.example:443' },
+    { providerOrigin: 'https://provider.example:0' },
+    { providerOrigin: 'https://provider.example.' }, { providerOrigin: 'https://user:pass@provider.example' },
+    { providerOrigin: 'https://[::1]' }, { providerOrigin: 'https://provider.example?x=1' },
+    { method: 'DELETE' }, { requestUri: '/api/v1/data/publish/CZM?x=1' }, { requestUri: '/api/v1/assets/pin' },
+    { schema: 'OMM' }, { bodyBytes: 1048577 }, { bodyBytes: 0 }, { documentCount: 100001 },
+    { entityName: 'bad\u0000name' }, { entityName: 'é'.repeat(129) }, { bodySha256: 'A'.repeat(64) },
+    { challengeId }, { challengeBase64url }, { keyId: result.keyId },
+  ])('refuses unsupported publication input %j', patch => {
+    expect(() => wire.buildSdnPublishRequest({ ...request, ...patch })).toThrow();
+  });
+  test('refuses getters, hidden fields, duplicate JSON keys and signature/profile confusion', () => {
+    const accessor = { ...request }; let called = false;
+    Object.defineProperty(accessor, 'providerOrigin', { enumerable: true, get: () => { called = true; return request.providerOrigin; } });
+    expect(() => wire.buildSdnPublishRequest(accessor)).toThrow(); expect(called).toBe(false);
+    const hidden = { ...request }; Object.defineProperty(hidden, 'challengeId', { value: challengeId });
+    expect(() => wire.buildSdnPublishRequest(hidden)).toThrow();
+    expect(() => wire.parseSdnPublishRequest(JSON.stringify(request).replace('{', '{"protocolVersion":1,'))).toThrow(/duplicate/iu);
+    for (const patch of [{ identityScheme: 'sdn-fast-password-auth-v1-legacy' }, { signatureProfile: 'ed25519-over-sha256-jcs-v1' },
+      { signatureProfile: 'ed25519-sdn-signed-request-v1' }, { challengeBase64url: challengeBase64url + '=' }, { challengeId: 'a'.repeat(64) }, { privateKey: 'forbidden' }]) {
+      expect(() => wire.buildSdnPublishResult({ ...result, ...patch })).toThrow();
+    }
   });
 });

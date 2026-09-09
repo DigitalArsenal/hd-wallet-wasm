@@ -157,6 +157,13 @@ void assertCanonical(const CanonicalSignature& signature,
     ASSERT_STR_EQ(expectedHex, test::bytesToHex(signature.signature));
 }
 
+SdnPublishRequestFields publishRequest() {
+    return {1, "https://provider.example:8443", "POST", "/api/v1/data/publish/CZM",
+        "0b3bad14ab6a66d51ab7749884c72b8e1a9a185b16dfde9fbf8f366ed5c934af", 90,
+        "00112233445566778899aabbccddeeff", sequence(0), "CZM", "fixture:ground:1",
+        "Fixture ground site", 2};
+}
+
 SdnLoginV2Fields loginRequest(uint32_t account) {
     return SdnLoginV2Fields{
         2,
@@ -317,6 +324,9 @@ TEST_CASE(SdnSigning, LegacyRawV1SignaturesMatchAllFourFrozenCases) {
 TEST_CASE(SdnSigning, FipsRejectsEveryTypedSigningCapabilityBeforeLookup) {
 #if HD_WALLET_FIPS_MODE
     assertError(IdentityError::FipsNotAllowed,
+                sign_sdn_publish_request(0, publishRequest(),
+                                         RegistryRowId::SpaceAwarePublishRequest));
+    assertError(IdentityError::FipsNotAllowed,
                 sign_sdn_login_v1(0, sequence(0)));
     assertError(IdentityError::FipsNotAllowed,
                 sign_sdn_login_v2(0, loginRequest(0),
@@ -328,6 +338,107 @@ TEST_CASE(SdnSigning, FipsRejectsEveryTypedSigningCapabilityBeforeLookup) {
     assertError(IdentityError::FipsNotAllowed,
                 sign_asset_review_decision(
                     0, approveRequest(), RegistryRowId::AssetReviewDecision));
+#endif
+}
+
+TEST_CASE(SdnSigning, PublishBindsBodyPathAndChallengeWithModernAuthenticationKey) {
+#if !HD_WALLET_FIPS_MODE
+    const auto handle = deriveNew();
+    const auto request = publishRequest();
+    const auto result = take(sign_sdn_publish_request(handle, request,
+                                                     RegistryRowId::SpaceAwarePublishRequest));
+    const auto identity = take(describe_identity(handle));
+    ASSERT_STR_EQ(identity.keys[2].key_id, result.key_id);
+    ASSERT_STR_EQ(test::bytesToHex(identity.keys[2].public_key),
+                  test::bytesToHex(result.public_key));
+    ASSERT_STR_EQ("ed25519-sdn-signed-request-v2", result.signature_profile);
+    ASSERT_STR_EQ("a11e2bdf1915d0b8878aada79490d55f2ec76b854ade4b897a98819b6058450c8f1005550d09b44aee3e8d627102c16da0c3a6e38e841fb4948335571362200e",
+                  test::bytesToHex(result.signature));
+    const auto fixture = readFixture("sdn-publish-request-v1.json");
+    ASSERT_TRUE(fixture.find(test::bytesToHex(result.signature)) != std::string::npos);
+    ASSERT_STR_EQ("72d09e2e8e1984929db68b3bc9fe2340649914aa3f97ded55467fd70fd6716ef",
+                  test::bytesToHex(result.request_digest));
+    auto changed = request;
+    changed.provider_origin = "https://other-provider.example:8443";
+    const auto different_provider = take(sign_sdn_publish_request(handle, changed,
+        RegistryRowId::SpaceAwarePublishRequest));
+    ASSERT_TRUE(different_provider.request_digest != result.request_digest);
+    ASSERT_TRUE(different_provider.signature != result.signature);
+    ASSERT_STR_EQ("527845b74133b4e6d844753a226c014c058a968f807ae37e1b950814929588e3",
+                  test::bytesToHex(different_provider.request_digest));
+    ASSERT_STR_EQ("1abc62e171ee3d14117e28d1679f7f1c9299070ac9e4e884aaec65332269e4567bfc7f35b3b59815615c976f592fe603eab00b8c4a1625d0019077bdecf11900",
+                  test::bytesToHex(different_provider.signature));
+    changed = request;
+    changed.body_sha256[0] = '1';
+    const auto different_body = take(sign_sdn_publish_request(handle, changed,
+        RegistryRowId::SpaceAwarePublishRequest));
+    ASSERT_TRUE(different_body.signature != result.signature);
+    changed = request;
+    changed.request_uri += ".fbs";
+    ASSERT_TRUE(take(sign_sdn_publish_request(handle, changed,
+        RegistryRowId::SpaceAwarePublishRequest)).signature != result.signature);
+    changed = request;
+    changed.challenge[0] ^= 1;
+    const auto different_challenge = take(sign_sdn_publish_request(handle, changed,
+        RegistryRowId::SpaceAwarePublishRequest));
+    ASSERT_TRUE(different_challenge.signature != result.signature);
+    ASSERT_TRUE(different_challenge.request_digest == result.request_digest);
+    destroy_identity(handle);
+    assertError(IdentityError::StaleHandle, sign_sdn_publish_request(handle, request,
+        RegistryRowId::SpaceAwarePublishRequest));
+#endif
+}
+
+TEST_CASE(SdnSigning, PublishRefusesLegacyWrongRegistryAndInvalidRequests) {
+#if !HD_WALLET_FIPS_MODE
+    const auto request = publishRequest();
+    for (auto handle : {deriveLegacy(), deriveMnemonic()}) {
+        assertError(IdentityError::OperationNotAllowed, sign_sdn_publish_request(
+            handle, request, RegistryRowId::SpaceAwarePublishRequest));
+        destroy_identity(handle);
+    }
+    const auto handle = deriveNew();
+    assertError(IdentityError::OperationNotAllowed, sign_sdn_publish_request(
+        handle, request, RegistryRowId::SdnNodeConsoleV2));
+    for (const std::string origin : {"http://provider.example", "https://provider.example/",
+            "https://user@provider.example", "https://provider.example?query", "https://provider.example#hash",
+            "https://PROVIDER.example", "https://provider.example:443", "https://provider.example:0",
+            "https://provider.example:65536", "https://provider.example:0443", "https://127.1",
+            "https://127.000.0.1", "https://0x7f000001", "https://256.0.0.1", "https://[::1]",
+            "https://provider.example.", "https://-provider.example", "https://provider..example"}) {
+        auto changed = request;
+        changed.provider_origin = origin;
+        assertError(IdentityError::InvalidRequest, sign_sdn_publish_request(handle, changed,
+            RegistryRowId::SpaceAwarePublishRequest));
+    }
+    for (const std::string origin : {"https://provider.example", "https://127.0.0.1:8443",
+                                    "https://home", "https://xn--bcher-kva.example"}) {
+        auto changed = request;
+        changed.provider_origin = origin;
+        (void)take(sign_sdn_publish_request(handle, changed, RegistryRowId::SpaceAwarePublishRequest));
+    }
+    std::vector<SdnPublishRequestFields> invalid;
+    auto changed = request; changed.protocol_version = 2; invalid.push_back(changed);
+    changed = request; changed.method = "GET"; invalid.push_back(changed);
+    changed = request; changed.schema = "OMM"; invalid.push_back(changed);
+    changed = request; changed.schema = "ETM"; invalid.push_back(changed);
+    changed = request; changed.request_uri += "?x=1"; invalid.push_back(changed);
+    changed = request; changed.request_uri = "/api/v1/data/publish/%43ZM"; invalid.push_back(changed);
+    changed = request; changed.body_bytes = 0; invalid.push_back(changed);
+    changed = request; changed.body_bytes = 1048577; invalid.push_back(changed);
+    changed = request; changed.body_sha256[0] = 'A'; invalid.push_back(changed);
+    changed = request; changed.challenge_id[0] = 'A'; invalid.push_back(changed);
+    changed = request; changed.entity_name = std::string(257, 'a'); invalid.push_back(changed);
+    changed = request; changed.entity_name = "bad\nname"; invalid.push_back(changed);
+    changed = request; changed.entity_id.clear(); invalid.push_back(changed);
+    changed = request; changed.entity_id = std::string("\xc0\xaf", 2); invalid.push_back(changed);
+    changed = request; changed.document_count = 0; invalid.push_back(changed);
+    changed = request; changed.document_count = 100001; invalid.push_back(changed);
+    for (const auto& bad : invalid) {
+        assertError(IdentityError::InvalidRequest, sign_sdn_publish_request(handle, bad,
+            RegistryRowId::SpaceAwarePublishRequest));
+    }
+    destroy_identity(handle);
 #endif
 }
 

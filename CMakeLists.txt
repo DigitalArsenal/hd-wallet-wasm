@@ -649,6 +649,7 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       "_hd_sdn_import_remembered_identity"
       "_hd_sdn_sign_login_v1"
       "_hd_sdn_sign_login_v2"
+      "_hd_sdn_sign_publish_request"
       "_hd_sdn_sign_asset_review_authority_activation"
       "_hd_sdn_sign_asset_review_decision"
       "_hd_sdn_seal_remembered_identity"
@@ -1279,6 +1280,12 @@ if(HD_WALLET_BUILD_TESTS AND NOT EMSCRIPTEN)
   configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/sdn-operation-wire-v1.json
     ${CMAKE_BINARY_DIR}/test_data/sdn-operation-wire-v1.json
+    COPYONLY
+  )
+
+  configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/sdn-publish-request-v1.json
+    ${CMAKE_BINARY_DIR}/test_data/sdn-publish-request-v1.json
     COPYONLY
   )
 

@@ -12,6 +12,7 @@ const PUBLIC_OPERATIONS = [
   'sdn.wallet.account.v1',
   'sdn.wallet.connect.v1',
 ];
+const PUBLISH_OPERATIONS = ['sdn.auth.publish-request.v1', ...PUBLIC_OPERATIONS];
 const SDN_OPERATIONS = [
   'sdn.auth.jcs-envelope.v2',
   'sdn.auth.raw-challenge.v1',
@@ -34,7 +35,7 @@ const EXPECTED_CLIENTS = [
   ['sdn-flatbuffers-pages-v1', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/flatbuffers/wallet-callback.html', PUBLIC_OPERATIONS, []],
   ['sdn-flatsql-pages-v1', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/flatsql/wallet-callback.html', PUBLIC_OPERATIONS, []],
   ['sdn-module-sdk-pages-v1', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/space-data-module-sdk/wallet-callback.html', PUBLIC_OPERATIONS, []],
-  ['spaceaware-web-v1', 'https://spaceaware.io', 'https://spaceaware.io/wallet/callback', PUBLIC_OPERATIONS, []],
+  ['spaceaware-web-v1', 'https://spaceaware.io', 'https://spaceaware.io/wallet/callback', PUBLISH_OPERATIONS, []],
   ['sdn-node-console-v1', 'https://sdn.spaceaware.io', 'https://sdn.spaceaware.io/wallet/callback', SDN_OPERATIONS, SDN_AUDIENCES],
   ['orbpro-pages-v1', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/OrbPro/wallet-callback.html', PUBLIC_OPERATIONS, []],
   ['sdn-asset-models-pages-v1', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/asset-models/wallet-callback.html', PUBLIC_OPERATIONS, []],
@@ -162,8 +163,11 @@ describe('committed wallet client registry', () => {
     expect(() => resolveRegistryBinding(symbol)).toThrow(/field/iu);
   });
 
-  test('projects the three canonical signing rows exactly onto the compiled native registry', () => {
+  test('projects the four canonical signing rows exactly onto the compiled native registry', () => {
     const expected = [
+      { clientId: 'spaceaware-web-v1', requestOrigin: 'https://spaceaware.io',
+        operation: 'sdn.auth.publish-request.v1', audience: null, registryRow: 'spaceaware-publish-request-v1',
+        serviceInstance: null, serviceActivationState: null },
       {
         clientId: 'sdn-node-console-v1',
         requestOrigin: 'https://sdn.spaceaware.io',
@@ -245,4 +249,13 @@ describe('committed wallet client registry', () => {
     expect(second).not.toBe(first);
     expect(second.audience).toBe('asset-review:assets.ipfs.01');
   });
+});
+
+
+test('publication is bound only to the SpaceAware purpose row', () => {
+  expect(resolveRegistryBinding({ clientId: 'spaceaware-web-v1', requestOrigin: 'https://spaceaware.io', operation: 'sdn.auth.publish-request.v1' }))
+    .toMatchObject({ registryRow: 'spaceaware-publish-request-v1', audience: null, maxLifetimeSeconds: 300 });
+  for (const [clientId, requestOrigin] of [['sdn-node-console-v1', 'https://sdn.spaceaware.io'], ['orbpro-pages-v1', 'https://digitalarsenal.github.io'], ['spaceaware-web-v1', 'https://spaceaware.io.evil.test']]) {
+    expect(() => resolveRegistryBinding({ clientId, requestOrigin, operation: 'sdn.auth.publish-request.v1' })).toThrow();
+  }
 });

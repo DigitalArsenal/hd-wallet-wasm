@@ -237,7 +237,7 @@ function recordBrowserProbe(request, entry) {
   ledger.browserProbes.push(entry);
   return true;
 }
-const WALLET_CSP = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; worker-src 'none'; manifest-src 'self'";
+const WALLET_CSP = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob:; connect-src 'self' https:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; worker-src 'none'; manifest-src 'self'";
 const WALLET_SECURITY_HEADERS = Object.freeze({
   'Content-Security-Policy': WALLET_CSP,
   'Cross-Origin-Embedder-Policy': 'require-corp',

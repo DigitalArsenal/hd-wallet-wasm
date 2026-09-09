@@ -36,6 +36,7 @@ const INTEGRITY_PATH = 'test/fixtures/fixture-integrity.json';
 const INTEGRITY_PATHS = [
   'release/protocol/asset-review-v1.json',
   'test/fixtures/sdn-operation-wire-v1.json',
+  'test/fixtures/sdn-publish-request-v1.json',
   'test/fixtures/sdn-remember-wallet-v2.json',
   'test/fixtures/sdn-wallet-vectors.v1.json',
   'test/fixtures/trezor-bip39-vectors.json',
@@ -1819,6 +1820,59 @@ function verifyProtocol() {
   return protocol;
 }
 
+function verifyPublishRequest(vectors) {
+  const fixture = parseJsonFixture('test/fixtures/sdn-publish-request-v1.json');
+  exactKeys(fixture, ['fixtureVersion', 'operation', 'registryRow', 'identityFixture',
+    'accountIndex', 'bodyUtf8', 'request', 'canonicalRequest', 'signingMessageHex', 'result', 'crossProvider'],
+  'publish fixture');
+  assert.equal(fixture.fixtureVersion, 1);
+  assert.equal(fixture.operation, 'sdn.auth.publish-request.v1');
+  assert.equal(fixture.registryRow, 'spaceaware-publish-request-v1');
+  assert.equal(fixture.identityFixture, 'sdn-wallet-vectors.v1.json:newIdentity.passwordVectors[0]');
+  assert.equal(fixture.accountIndex, 0);
+  const request = fixture.request;
+  exactKeys(request, ['protocolVersion', 'providerOrigin', 'method', 'requestUri',
+    'bodySha256', 'bodyBytes', 'challengeId', 'challengeBase64url', 'schema', 'entityId',
+    'entityName', 'documentCount'], 'native publish request');
+  assert.deepEqual(request, {
+    protocolVersion: 1, providerOrigin: 'https://provider.example:8443', method: 'POST',
+    requestUri: '/api/v1/data/publish/CZM', bodySha256: sha256Hex(utf8(fixture.bodyUtf8)),
+    bodyBytes: utf8(fixture.bodyUtf8).byteLength, challengeId: '00112233445566778899aabbccddeeff',
+    challengeBase64url: range(0).toString('base64url'), schema: 'CZM',
+    entityId: 'fixture:ground:1', entityName: 'Fixture ground site', documentCount: 2,
+  });
+  const canonical = `SDN-SIGNED-REQUEST/v2\n${request.providerOrigin}\nPOST\n${request.requestUri}\n${request.bodySha256}`;
+  assert.equal(fixture.canonicalRequest, canonical);
+  const digest = sha256(utf8(canonical));
+  const message = Buffer.concat([range(0), digest]);
+  assert.equal(fixture.signingMessageHex, hex(message));
+  const auth = vectors.newIdentity.accounts[0].authentication;
+  const result = fixture.result;
+  exactKeys(result, ['schemaVersion', 'keyId', 'identityScheme', 'algorithm', 'encoding',
+    'signatureProfile', 'publicKeyHex', 'signatureHex', 'requestDigestSha256'], 'publish result');
+  assert.deepEqual(result, {
+    schemaVersion: 1, keyId: auth.keyId, identityScheme: IDENTITY_SCHEME,
+    algorithm: 'ed25519', encoding: 'raw', signatureProfile: 'ed25519-sdn-signed-request-v2',
+    publicKeyHex: auth.publicKeyHex,
+    signatureHex: 'a11e2bdf1915d0b8878aada79490d55f2ec76b854ade4b897a98819b6058450c8f1005550d09b44aee3e8d627102c16da0c3a6e38e841fb4948335571362200e',
+    requestDigestSha256: hex(digest),
+  });
+  assertEd25519(unhex(auth.publicKeyHex), message, result.signatureHex, 'publish request');
+  exactKeys(fixture.crossProvider, ['providerOrigin', 'requestDigestSha256', 'signatureHex'], 'cross-provider publish fixture');
+  assert.equal(fixture.crossProvider.providerOrigin, 'https://other-provider.example:8443');
+  const otherDigest = sha256(utf8(canonical.replace(request.providerOrigin, fixture.crossProvider.providerOrigin)));
+  const otherMessage = Buffer.concat([range(0), otherDigest]);
+  assert.equal(fixture.crossProvider.requestDigestSha256, hex(otherDigest));
+  assertEd25519(unhex(auth.publicKeyHex), otherMessage, fixture.crossProvider.signatureHex, 'other provider publish request');
+  assert.equal(verifySignature(null, otherMessage, ed25519PublicKey(unhex(auth.publicKeyHex)),
+    unhex(result.signatureHex)), false, 'publish signature rejects the same nonce at another provider');
+  assert.equal(verifySignature(null, message, ed25519PublicKey(unhex(auth.publicKeyHex)),
+    unhex(fixture.crossProvider.signatureHex)), false, 'other provider signature cannot return to the first provider');
+  message[0] ^= 1;
+  assert.equal(verifySignature(null, message, ed25519PublicKey(unhex(auth.publicKeyHex)),
+    unhex(result.signatureHex)), false, 'publish signature rejects a different provider challenge');
+}
+
 try {
   verifyNoncharacterRejection();
   verifyIntegrity();
@@ -1826,9 +1880,10 @@ try {
   const vectors = verifyWalletVectors();
   verifyRememberWallet(vectors);
   verifyOperationWire(vectors);
+  verifyPublishRequest(vectors);
   verifyProtocol();
   console.log(
-    'PASS: eight immutable fixture entries, 14/40/15 validation rows, one remembered-wallet KAT, and 6+1+2 operation cases verified',
+    'PASS: nine immutable fixture entries, 14/40/15 validation rows, one remembered-wallet KAT, 6+1+2 operation cases, and one publish request verified',
   );
 } catch (error) {
   console.error(`FAIL: ${error.message}`);

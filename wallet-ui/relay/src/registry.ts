@@ -39,13 +39,19 @@ const BINDING_FIELDS = [
   'serviceActivationState',
   'serviceInstance',
 ] as const;
-const EXPECTED_RELEASE_SHA256 = 'e1ce6fe903c9700484a8a87d96581c8cad97063dabf63030b4518a31a3bdaa93';
+const EXPECTED_RELEASE_SHA256 = '7674bfb019753eee8387f064467c0f6f2ff6babd1ecabbd70dc585afc31fbc1a';
 const OPERATION_POLICY: Readonly<Record<string, Readonly<{
   audience: string | null;
   registryRow: string | null;
   serviceActivationState: string | null;
   serviceInstance: string | null;
 }>>> = Object.freeze({
+  'sdn.auth.publish-request.v1': Object.freeze({
+    audience: null,
+    registryRow: 'spaceaware-publish-request-v1',
+    serviceActivationState: null,
+    serviceInstance: null,
+  }),
   'sdn.asset-review.authority-activation.v1': Object.freeze({
     audience: 'asset-review-authority:assets.ipfs.01',
     registryRow: 'asset-review-authority-activation-v1',

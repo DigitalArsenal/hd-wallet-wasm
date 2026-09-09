@@ -179,6 +179,7 @@ export interface SdnWasmPublicIdentity {
 
 export type SdnRegistryRowId =
   | 'sdn-node-console-v2'
+  | 'spaceaware-publish-request-v1'
   | 'asset-review-authority-activation-v1'
   | 'asset-review-decision-v1';
 
@@ -211,6 +212,34 @@ export interface SdnLoginV2WireRequest {
   issuedAt: string;
   nonce: string;
   protocolVersion: 2;
+}
+
+/** Internal wallet-origin request; the wallet obtains the provider challenge. */
+export interface SdnPublishRequest {
+  protocolVersion: 1;
+  providerOrigin: string;
+  method: 'POST';
+  requestUri: string;
+  bodySha256: string;
+  bodyBytes: number;
+  challengeId: string;
+  challengeBase64url: string;
+  schema: 'CZM' | 'ETM';
+  entityId: string;
+  entityName: string;
+  documentCount: number;
+}
+
+export interface SdnPublishSignature {
+  schemaVersion: 1;
+  keyId: `sha256:${string}`;
+  identityScheme: 'sdn-bip32-slip10-purpose-v1';
+  algorithm: 'ed25519';
+  encoding: 'raw';
+  signatureProfile: 'ed25519-sdn-signed-request-v2';
+  publicKeyHex: string;
+  signatureHex: string;
+  requestDigestSha256: string;
 }
 
 export interface ReviewedTransform {
@@ -307,6 +336,11 @@ export interface SdnIdentityCapabilities {
     request: SdnLoginV2WireRequest,
     registryRow: 'sdn-node-console-v2',
   ): CanonicalWalletSignature;
+  signSdnPublishRequest(
+    handle: SdnIdentityHandle,
+    request: SdnPublishRequest,
+    registryRow: 'spaceaware-publish-request-v1',
+  ): SdnPublishSignature;
   signAssetReviewAuthorityActivation(
     handle: SdnIdentityHandle,
     request: AssetReviewAuthorityActivationRequest,

@@ -33,6 +33,7 @@ const RAW_ENTRYPOINTS = Object.freeze([
   '_hd_sdn_import_remembered_identity',
   '_hd_sdn_sign_login_v1',
   '_hd_sdn_sign_login_v2',
+  '_hd_sdn_sign_publish_request',
   '_hd_sdn_sign_asset_review_authority_activation',
   '_hd_sdn_sign_asset_review_decision',
   '_hd_sdn_seal_remembered_identity',
@@ -347,6 +348,17 @@ function parseIdentity(bytes) {
 }
 
 function copySignature(value, canonical) {
+  if (canonical === 'publish') {
+    if (!exactKeys(value, ['schemaVersion', 'keyId', 'identityScheme', 'algorithm',
+      'encoding', 'signatureProfile', 'publicKeyHex', 'signatureHex', 'requestDigestSha256']) ||
+        value.schemaVersion !== 1 || !validKeyId(value.keyId) ||
+        value.identityScheme !== 'sdn-bip32-slip10-purpose-v1' ||
+        value.algorithm !== 'ed25519' || value.encoding !== 'raw' ||
+        value.signatureProfile !== 'ed25519-sdn-signed-request-v2' ||
+        !validLowerHex(value.publicKeyHex, 64) || !validLowerHex(value.signatureHex, 128) ||
+        !validLowerHex(value.requestDigestSha256, 64)) fail('CRYPTO_FAILURE');
+    return Object.freeze({ ...value });
+  }
   const common = [
     'schemaVersion', 'keyId', 'identityScheme', 'algorithm', 'encoding',
     'signatureProfile', 'signatureHex',
@@ -792,6 +804,19 @@ export function createSdnTypedCapabilities(wasm) {
           native, input, length, 1, output, MAX_OUTPUT_BYTES, required,
         ],
         true,
+      );
+    },
+
+    signSdnPublishRequest(handle, request, registryRow) {
+      const record = recordFor(handle);
+      if (registryRow !== 'spaceaware-publish-request-v1') fail('INVALID_REQUEST');
+      const requestBytes = encodeRequest(request);
+      return invokeSign(
+        '_hd_sdn_sign_publish_request', record, requestBytes,
+        (native, input, length, output, required) => [
+          native, input, length, 4, output, MAX_OUTPUT_BYTES, required,
+        ],
+        'publish',
       );
     },
 

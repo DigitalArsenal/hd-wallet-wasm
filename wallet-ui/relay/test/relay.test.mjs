@@ -590,7 +590,7 @@ test('requires an exact registered origin, client, operation, and operation-spec
   assert.ok(!rejectedResult.text.includes('seedBase64url'));
 });
 
-test('dispatches each of the six committed request/result fixture pairs to only its registered operation', async (t) => {
+test('dispatches each of the seven committed request/result fixture pairs to only its registered operation', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   assert.equal(operationPairs.schemaVersion, 1);
@@ -598,6 +598,7 @@ test('dispatches each of the six committed request/result fixture pairs to only 
     'sdn.asset-review.authority-activation.v1',
     'sdn.asset-review.decision.v1',
     'sdn.auth.jcs-envelope.v2',
+    'sdn.auth.publish-request.v1',
     'sdn.auth.raw-challenge.v1',
     'sdn.wallet.account.v1',
     'sdn.wallet.connect.v1',

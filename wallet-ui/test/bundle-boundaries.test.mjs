@@ -356,7 +356,7 @@ describe('release bundle isolation', () => {
 
     const html = await readFile(join(hostDirectory, 'index.html'), 'utf8');
     const css = await readFile(join(hostDirectory, assets.find((path) => path.endsWith('.css'))), 'utf8');
-    const csp = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; worker-src 'none'; manifest-src 'self'";
+    const csp = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob:; connect-src 'self' https:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; worker-src 'none'; manifest-src 'self'";
     expect(html).toContain(`<meta http-equiv="Content-Security-Policy" content="${csp}">`);
     expect(html).not.toMatch(/<(?:script|img|link)[^>]+(?:src|href)=["']https?:/iu);
     expect(html).not.toMatch(/<link[^>]+rel=["'](?:preload|prefetch)["']/iu);

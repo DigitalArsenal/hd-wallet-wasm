@@ -1322,6 +1322,24 @@ StringOutcome serializeCanonicalSignature(const CanonicalSignature& signature) {
     return serializeValue(Value(std::move(value)));
 }
 
+StringOutcome serializePublishSignature(const SdnPublishSignature& signature) {
+    if (signature.schema_version != 1 || signature.identity_scheme != kIdentityScheme ||
+        !validKeyId(signature.key_id) || signature.algorithm != "ed25519" ||
+        signature.encoding != KeyEncoding::Raw ||
+        signature.signature_profile != "ed25519-sdn-signed-request-v2") {
+        return IdentityError::CryptoFailure;
+    }
+    return serializeValue(Value(Value::Members{
+        {"schemaVersion", 1.0}, {"keyId", signature.key_id},
+        {"identityScheme", signature.identity_scheme},
+        {"algorithm", signature.algorithm}, {"encoding", std::string("raw")},
+        {"signatureProfile", signature.signature_profile},
+        {"publicKeyHex", hex(signature.public_key)},
+        {"signatureHex", hex(signature.signature)},
+        {"requestDigestSha256", hex(signature.request_digest)},
+    }));
+}
+
 uint16_t copyTextResult(const StringOutcome& outcome, uint8_t* output,
                         uint32_t capacity, uint32_t* out_required) {
     if (std::holds_alternative<IdentityError>(outcome)) {
@@ -1547,6 +1565,36 @@ bool numberArray(const Value& object, std::string_view name,
     return true;
 }
 
+std::variant<SdnPublishRequestFields, IdentityError> parsePublishRequest(
+    const uint8_t* bytes, uint32_t length) {
+    auto parsed = parseRequest(bytes, length);
+    if (std::holds_alternative<IdentityError>(parsed)) {
+        return std::get<IdentityError>(parsed);
+    }
+    const Value& value = std::get<Value>(parsed);
+    SdnPublishRequestFields result{};
+    std::string challenge;
+    if (!exactMembers(value, {"protocolVersion", "providerOrigin", "method",
+            "requestUri", "bodySha256", "bodyBytes", "challengeId",
+            "challengeBase64url", "schema", "entityId", "entityName", "documentCount"}) ||
+        !uint32Member(value, "protocolVersion", result.protocol_version) ||
+        !stringMember(value, "providerOrigin", result.provider_origin) ||
+        !stringMember(value, "method", result.method) ||
+        !stringMember(value, "requestUri", result.request_uri) ||
+        !stringMember(value, "bodySha256", result.body_sha256) ||
+        !uint32Member(value, "bodyBytes", result.body_bytes) ||
+        !stringMember(value, "challengeId", result.challenge_id) ||
+        !stringMember(value, "challengeBase64url", challenge) ||
+        !decodeBase64Url32(challenge, result.challenge) ||
+        !stringMember(value, "schema", result.schema) ||
+        !stringMember(value, "entityId", result.entity_id) ||
+        !stringMember(value, "entityName", result.entity_name) ||
+        !uint32Member(value, "documentCount", result.document_count)) {
+        return IdentityError::InvalidRequest;
+    }
+    return result;
+}
+
 bool parseTransform(const Value& value, ReviewedTransform& result) {
     return exactMembers(value, {"translation", "rotation", "scale", "upAxis",
                                 "sourceUnits", "metersPerSourceUnit"}) &&
@@ -1626,6 +1674,16 @@ uint16_t finishRawSignature(IdentityOutcome<RawSignature>&& outcome,
         return status(std::get<IdentityError>(outcome));
     }
     return copyTextResult(serializeRawSignature(std::get<RawSignature>(outcome)),
+                          output, capacity, out_required);
+}
+
+uint16_t finishPublishSignature(
+    IdentityOutcome<SdnPublishSignature>&& outcome, uint8_t* output,
+    uint32_t capacity, uint32_t* out_required) {
+    if (std::holds_alternative<IdentityError>(outcome)) {
+        return status(std::get<IdentityError>(outcome));
+    }
+    return copyTextResult(serializePublishSignature(std::get<SdnPublishSignature>(outcome)),
                           output, capacity, out_required);
 }
 
@@ -1818,6 +1876,29 @@ uint16_t hd_sdn_sign_login_v2(
                 handle, std::get<SdnLoginV2Fields>(parsed),
                 RegistryRowId::SdnNodeConsoleV2),
             out_json, out_capacity, out_required);
+    });
+}
+
+extern "C" HD_WALLET_EXPORT
+uint16_t hd_sdn_sign_publish_request(
+    uint64_t handle, const uint8_t* request_json, uint32_t request_len,
+    uint8_t registry_row, uint8_t* out_json, uint32_t out_capacity,
+    uint32_t* out_required) {
+    return guarded([&] {
+        if (!prepareOutput(out_json, out_capacity, out_required) ||
+            !validRange(request_json, request_len) || request_len > kMaximumOutputBytes) {
+            return status(IdentityError::InvalidRequest);
+        }
+        if (registry_row != static_cast<uint8_t>(RegistryRowId::SpaceAwarePublishRequest)) {
+            return status(IdentityError::OperationNotAllowed);
+        }
+        auto parsed = parsePublishRequest(request_json, request_len);
+        if (std::holds_alternative<IdentityError>(parsed)) {
+            return status(std::get<IdentityError>(parsed));
+        }
+        return finishPublishSignature(sign_sdn_publish_request(
+            handle, std::get<SdnPublishRequestFields>(parsed),
+            RegistryRowId::SpaceAwarePublishRequest), out_json, out_capacity, out_required);
     });
 }
 

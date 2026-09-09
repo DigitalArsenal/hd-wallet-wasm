@@ -3,6 +3,7 @@ export type WalletRelayOperation =
   | 'sdn.wallet.account.v1'
   | 'sdn.auth.raw-challenge.v1'
   | 'sdn.auth.jcs-envelope.v2'
+  | 'sdn.auth.publish-request.v1'
   | 'sdn.asset-review.authority-activation.v1'
   | 'sdn.asset-review.decision.v1';
 
@@ -229,6 +230,38 @@ export interface SdnWalletClient extends WalletPublicClient {
   requestSdnLoginV2(value: SdnLoginV2Request): Promise<CanonicalWalletSignature>;
 }
 
+export interface SdnPublishRequest {
+  readonly protocolVersion: 1;
+  readonly providerOrigin: string;
+  readonly method: 'POST';
+  readonly requestUri: string;
+  readonly bodySha256: string;
+  readonly bodyBytes: number;
+  readonly schema: 'CZM' | 'ETM';
+  /** Application-supplied descriptions, not certified payload contents. */
+  readonly entityId: string;
+  readonly entityName: string;
+  readonly documentCount: number;
+}
+
+export interface SdnPublishSignature {
+  readonly schemaVersion: 1;
+  readonly keyId: Sha256KeyId;
+  readonly identityScheme: SdnIdentityScheme;
+  readonly algorithm: 'ed25519';
+  readonly encoding: 'raw';
+  readonly signatureProfile: 'ed25519-sdn-signed-request-v2';
+  readonly publicKeyHex: string;
+  readonly signatureHex: string;
+  readonly requestDigestSha256: string;
+  readonly challengeId: string;
+  readonly challengeBase64url: string;
+}
+
+export interface SpaceAwarePublishWalletClient extends WalletPublicClient {
+  requestSdnPublish(value: SdnPublishRequest): Promise<SdnPublishSignature>;
+}
+
 export interface AssetReviewWalletClient extends WalletPublicClient {
   requestAuthorityActivation(value: AssetReviewAuthorityActivationRequest):
     Promise<CanonicalWalletSignature>;
@@ -248,6 +281,7 @@ export interface RegistryOperationBinding {
     | 'sdn-node-console-v2'
     | 'asset-review-authority-activation-v1'
     | 'asset-review-decision-v1'
+    | 'spaceaware-publish-request-v1'
     | null;
   readonly serviceInstance: 'assets.ipfs.01/asset-review-attestation' | null;
   readonly serviceActivationState: 'activated' | 'unactivated' | null;

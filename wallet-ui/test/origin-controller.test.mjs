@@ -3361,3 +3361,126 @@ describe('standalone wallet-origin application', () => {
     expect(test.destroyed).toContain('late-persistent-legacy');
   });
 });
+
+const publishVector = JSON.parse(await readFile(new URL('../../test/fixtures/sdn-publish-request-v1.json', import.meta.url), 'utf8'));
+function publicationFixture() {
+  const document = new FakeDocument(), window = fakeWindow(document), currentIdentity = identity();
+  const { challengeId, challengeBase64url, ...request } = publishVector.request;
+  const nativeCalls = [], destroyed = [], published = [];
+  const auth = currentIdentity.keys.find(key => key.purpose === 'sdn-authentication');
+  const handle = Object.freeze({ testHandle: 'publication' });
+  const wasm = {
+    derivePasswordIdentity: async () => ({ handle, identity: currentIdentity }),
+    destroySdnIdentity: candidate => destroyed.push(candidate),
+    sha256: () => new Uint8Array(32).fill(0xbb),
+    signSdnPublishRequest(candidate, input, row) {
+      nativeCalls.push({ candidate, input, row });
+      return { ...publishVector.result, publicKeyHex: auth.publicKeyHex, keyId: auth.keyId };
+    },
+  };
+  const controller = new WalletOriginController({ document, window, wasm,
+    registry: { resolveRegistryBinding },
+    relay: { fetchTransaction: async value => value, publishResult: async (_transaction, result) => { published.push(result); } },
+  });
+  const value = { ...transaction(), clientId: 'spaceaware-web-v1', clientDisplayName: 'SpaceAware',
+    callbackUri: 'https://spaceaware.io/wallet/callback', requestOrigin: 'https://spaceaware.io',
+    operation: 'sdn.auth.publish-request.v1', request };
+  const response = () => Response.json({ challenge_id: challengeId,
+    challenge: challengeBase64url.replace(/-/gu, '+').replace(/_/gu, '/'), expires_at: Math.floor(Date.now() / 1000) + 60 });
+  return { controller, document, window, auth, handle, nativeCalls, destroyed, published, value, response, wasm };
+}
+
+describe('isolated purpose-specific publication', () => {
+  test('contacts only the displayed provider after trusted confirmation and signs with the captured key', async () => {
+    const test = publicationFixture(), fetch = vi.fn(async () => test.response());
+    vi.stubGlobal('fetch', fetch);
+    try {
+      await test.controller.unlockPassword(approvalControls());
+      const execution = test.controller.execute(test.value);
+      const confirm = await until(() => test.document.findAction('confirm'));
+      expect(fetch).not.toHaveBeenCalled();
+      expect(test.document.body.textContent).toContain(test.value.request.providerOrigin);
+      expect(test.document.body.textContent).toContain(test.value.request.bodySha256);
+      expect(test.document.body.textContent).toContain('does not inspect or certify');
+      expect(test.document.body.textContent).toContain(test.auth.keyId);
+      confirm.dispatch('click', { isTrusted: false });
+      expect(fetch).not.toHaveBeenCalled();
+      confirm.dispatch('click', { isTrusted: true });
+      await execution;
+      expect(fetch).toHaveBeenCalledTimes(1);
+      const [url, options] = fetch.mock.calls[0];
+      expect(url).toBe(test.value.request.providerOrigin + '/api/auth/challenge');
+      expect(options).toMatchObject({ method: 'POST', credentials: 'omit', redirect: 'error', cache: 'no-store', referrerPolicy: 'no-referrer' });
+      expect(JSON.parse(options.body)).toEqual({ client_pubkey_hex: test.auth.publicKeyHex, ts: expect.any(Number) });
+      expect(test.nativeCalls).toEqual([{ candidate: test.handle, input: publishVector.request, row: 'spaceaware-publish-request-v1' }]);
+      expect(test.published[0]).toMatchObject({ publicKeyHex: test.auth.publicKeyHex, keyId: test.auth.keyId,
+        challengeId: publishVector.request.challengeId, challengeBase64url: publishVector.request.challengeBase64url });
+      expect(Object.keys(test.published[0])).toHaveLength(11);
+      expect(test.destroyed).toEqual([test.handle]);
+    } finally { test.controller.destroy(); vi.unstubAllGlobals(); }
+  });
+
+  test('cancel makes no challenge request or signature and retires the captured handle', async () => {
+    const test = publicationFixture(), fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+    try {
+      await test.controller.unlockPassword(approvalControls());
+      const execution = test.controller.execute(test.value); execution.catch(() => {});
+      const cancel = await until(() => test.document.findAction('cancel'));
+      cancel.dispatch('click', { isTrusted: true });
+      await expect(execution).rejects.toMatchObject({ code: 'USER_CANCELLED' });
+      expect(fetch).not.toHaveBeenCalled(); expect(test.nativeCalls).toEqual([]); expect(test.published).toEqual([]);
+      expect(test.destroyed).toEqual([test.handle]);
+    } finally { test.controller.destroy(); vi.unstubAllGlobals(); }
+  });
+
+  test('logout during provider challenge refuses the late reply and never signs or publishes', async () => {
+    const test = publicationFixture(), response = deferred(), fetch = vi.fn(() => response.promise); vi.stubGlobal('fetch', fetch);
+    try {
+      await test.controller.unlockPassword(approvalControls());
+      const execution = test.controller.execute(test.value); execution.catch(() => {});
+      (await until(() => test.document.findAction('confirm'))).dispatch('click', { isTrusted: true });
+      await until(() => fetch.mock.calls.length);
+      await test.controller.logout();
+      expect(test.destroyed).toContain(test.handle);
+      response.resolve(test.response());
+      await expect(execution).rejects.toMatchObject({ code: 'STALE_CONTROLLER' });
+      expect(test.nativeCalls).toEqual([]); expect(test.published).toEqual([]);
+    } finally { test.controller.destroy(); vi.unstubAllGlobals(); }
+  });
+
+  test.each(['expired', 'unknown fields', 'oversize', 'wrong encoding', 'wrong final origin'])(
+    'refuses %s challenge before native signing', async failure => {
+      const test = publicationFixture();
+      const fetch = vi.fn(async () => {
+        if (failure === 'oversize') return new Response(' '.repeat(4097));
+        if (failure === 'wrong final origin') { const response = test.response(); Object.defineProperty(response, 'url', { value: 'https://other.example/api/auth/challenge' }); return response; }
+        const challenge = await test.response().json();
+        if (failure === 'expired') challenge.expires_at = Math.floor(Date.now() / 1000) - 1;
+        if (failure === 'unknown fields') challenge.privateKey = 'forbidden';
+        if (failure === 'wrong encoding') challenge.challenge += '=';
+        return Response.json(challenge);
+      });
+      vi.stubGlobal('fetch', fetch);
+      try {
+        await test.controller.unlockPassword(approvalControls());
+        const execution = test.controller.execute(test.value); execution.catch(() => {});
+        (await until(() => test.document.findAction('confirm'))).dispatch('click', { isTrusted: true });
+        await expect(execution).rejects.toMatchObject({ code: 'PROVIDER_CHALLENGE_FAILED' });
+        expect(test.nativeCalls).toEqual([]); expect(test.published).toEqual([]);
+        expect(test.destroyed).toEqual([test.handle]);
+      } finally { test.controller.destroy(); vi.unstubAllGlobals(); }
+    },
+  );
+
+  test('refuses a signature from a different key instead of exposing it to the application', async () => {
+    const test = publicationFixture(); vi.stubGlobal('fetch', async () => test.response());
+    test.wasm.signSdnPublishRequest = () => publishVector.result;
+    try {
+      await test.controller.unlockPassword(approvalControls());
+      const execution = test.controller.execute(test.value); execution.catch(() => {});
+      (await until(() => test.document.findAction('confirm'))).dispatch('click', { isTrusted: true });
+      await expect(execution).rejects.toMatchObject({ code: 'INVALID_WALLET_RESULT' });
+      expect(test.published).toEqual([]); expect(test.destroyed).toEqual([test.handle]);
+    } finally { test.controller.destroy(); vi.unstubAllGlobals(); }
+  });
+});

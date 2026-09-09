@@ -4,6 +4,7 @@ import {
 } from 'hd-wallet-ui/client';
 import {
   createSdnWalletClient,
+  createSpaceAwarePublishWalletClient,
   WALLET_CLIENT_ERRORS as sdnErrors,
 } from 'hd-wallet-ui/client/sdn';
 import {
@@ -64,3 +65,12 @@ import { createWalletClient as invalidReviewExport } from 'hd-wallet-ui/client/a
 import { createWalletClient as invalidCallbackExport } from 'hd-wallet-ui/client/callback';
 
 void [invalidBaseExport, invalidSdnExport, invalidReviewExport, invalidCallbackExport];
+
+const publication = createSpaceAwarePublishWalletClient();
+void publication.requestSdnPublish({ protocolVersion: 1, providerOrigin: 'https://provider.example', method: 'POST',
+  requestUri: '/api/v1/data/publish/CZM', bodySha256: 'a'.repeat(64), bodyBytes: 20,
+  schema: 'CZM', entityId: 'fixture:1', entityName: 'Fixture', documentCount: 1 });
+// @ts-expect-error publication is not a node-login capability.
+publication.requestSdnLoginV1({ challenge: new Uint8Array(32), protocolVersion: 1 });
+// @ts-expect-error the application must not supply the provider nonce.
+void publication.requestSdnPublish({ protocolVersion: 1, providerOrigin: 'https://provider.example', method: 'POST', requestUri: '/api/v1/data/publish/CZM', bodySha256: 'a'.repeat(64), bodyBytes: 20, schema: 'CZM', entityId: 'fixture:1', entityName: 'Fixture', documentCount: 1, challengeId: 'a'.repeat(32) });

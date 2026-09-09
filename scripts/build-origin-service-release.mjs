@@ -841,7 +841,7 @@ import { createRelayServer } from ${JSON.stringify(relaySourcePath)};
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const contentTypes = Object.freeze(${JSON.stringify(contentTypes)});
 const shellPattern = /^\\/transaction\\/[0-9a-f]{64}$/u;
-const csp = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; worker-src 'none'; manifest-src 'self'";
+const csp = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob:; connect-src 'self' https:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; worker-src 'none'; manifest-src 'self'";
 const databasePath = process.env.SDN_WALLET_RELAY_DATABASE_PATH ?? '/run/sdn-wallet-relay/relay.sqlite';
 const host = process.env.SDN_WALLET_RELAY_HOST ?? '127.0.0.1';
 const portText = process.env.SDN_WALLET_RELAY_PORT ?? '8787';

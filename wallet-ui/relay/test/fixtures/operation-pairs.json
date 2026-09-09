@@ -177,10 +177,23 @@
         "requestOrigin": "https://review.spacedatanetwork.org",
         "reviewedTransform": {
           "metersPerSourceUnit": 1,
-          "rotation": [0, 0, 0, 1],
-          "scale": [1, 1, 1],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
           "sourceUnits": "m",
-          "translation": [0, 0, 0],
+          "translation": [
+            0,
+            0,
+            0
+          ],
           "upAxis": "Y_UP"
         }
       },
@@ -194,6 +207,37 @@
         "signatureHex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "signatureProfile": "ed25519-over-sha256-jcs-v1",
         "signedDigestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "sdn-publish",
+      "clientId": "spaceaware-web-v1",
+      "origin": "https://spaceaware.io",
+      "operation": "sdn.auth.publish-request.v1",
+      "request": {
+        "protocolVersion": 1,
+        "providerOrigin": "https://provider.example:8443",
+        "method": "POST",
+        "requestUri": "/api/v1/data/publish/CZM",
+        "bodySha256": "0b3bad14ab6a66d51ab7749884c72b8e1a9a185b16dfde9fbf8f366ed5c934af",
+        "bodyBytes": 90,
+        "schema": "CZM",
+        "entityId": "fixture:ground:1",
+        "entityName": "Fixture ground site",
+        "documentCount": 2
+      },
+      "result": {
+        "schemaVersion": 1,
+        "keyId": "sha256:d997ad2bf7dbf21c490695eba54d3054628d7f7fb9037fb8145ea32b4e384b7c",
+        "identityScheme": "sdn-bip32-slip10-purpose-v1",
+        "algorithm": "ed25519",
+        "encoding": "raw",
+        "signatureProfile": "ed25519-sdn-signed-request-v2",
+        "publicKeyHex": "f5b8e91319472049d552f37d58f528eecefd68cfc4c462c6fcff279c76afb319",
+        "signatureHex": "a11e2bdf1915d0b8878aada79490d55f2ec76b854ade4b897a98819b6058450c8f1005550d09b44aee3e8d627102c16da0c3a6e38e841fb4948335571362200e",
+        "requestDigestSha256": "72d09e2e8e1984929db68b3bc9fe2340649914aa3f97ded55467fd70fd6716ef",
+        "challengeId": "00112233445566778899aabbccddeeff",
+        "challengeBase64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
       }
     }
   ]

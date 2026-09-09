@@ -13,6 +13,9 @@ const IDENTITY_SCHEME = 'sdn-bip32-slip10-purpose-v1';
 const SEED_PROFILE = 'password-scrypt-v2';
 const JCS_SIGNATURE_PROFILE = 'ed25519-over-sha256-jcs-v1';
 const RAW_SIGNATURE_PROFILE = 'ed25519-raw-32-v1';
+const PUBLISH_SIGNATURE_PROFILE = 'ed25519-sdn-signed-request-v2';
+const PUBLISH_REQUEST_FIELDS = ['protocolVersion', 'providerOrigin', 'method', 'requestUri', 'bodySha256', 'bodyBytes', 'schema', 'entityId', 'entityName', 'documentCount'];
+const PUBLISH_RESULT_FIELDS = ['schemaVersion', 'keyId', 'identityScheme', 'algorithm', 'encoding', 'signatureProfile', 'publicKeyHex', 'signatureHex', 'requestDigestSha256', 'challengeId', 'challengeBase64url'];
 const REVIEW_ORIGIN = 'https://review.spacedatanetwork.org';
 const REVIEW_CLIENT_ID = 'sdn-asset-review-v1';
 const REVIEW_AUDIENCE = 'asset-review:assets.ipfs.01';
@@ -782,6 +785,50 @@ function validateSdnLoginV1Wire(input) {
   ]);
 }
 
+function validateSdnPublishRequest(input) {
+  const value = exactRecord(input, PUBLISH_REQUEST_FIELDS, 'SDN publication request');
+  exactLiteral(value.protocolVersion, 1, 'publication protocolVersion');
+  exactLiteral(value.method, 'POST', 'publication method');
+  exactOneOf(value.schema, ['CZM', 'ETM'], 'publication schema');
+  validateUnicodeScalarString(value.providerOrigin, 'providerOrigin');
+  let provider;
+  try { provider = new URL(value.providerOrigin); } catch { fail('providerOrigin must be canonical HTTPS'); }
+  if (provider.protocol !== 'https:' || value.providerOrigin !== provider.origin || provider.username || provider.password || provider.port === '0'
+      || provider.pathname !== '/' || provider.search || provider.hash || provider.hostname.length > 253
+      || provider.hostname.split('.').some(label => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(label))) {
+    fail('providerOrigin must be a canonical HTTPS DNS or IPv4 origin');
+  }
+  const route = `/api/v1/data/publish/${value.schema}`;
+  const batch = `/api/v1/data/publish/batch/${value.schema}`;
+  exactOneOf(value.requestUri, [route, `${route}.fbs`, batch, `${batch}.fbs`], 'publication requestUri');
+  exactPattern(value.bodySha256, LOWER_HEX_32, 'publication bodySha256');
+  for (const [field, maximum] of [['bodyBytes', 1048576], ['documentCount', 100000]]) {
+    if (!Number.isInteger(value[field]) || value[field] < 1 || value[field] > maximum) fail(`publication ${field} is outside its bounds`);
+  }
+  for (const field of ['entityId', 'entityName']) {
+    validateUnicodeScalarString(value[field], field);
+    const length = textEncoder.encode(value[field]).byteLength;
+    if (length < 1 || length > 256 || /[\u0000-\u001f\u007f]/u.test(value[field])) fail(`${field} must contain 1..256 UTF-8 bytes without controls`);
+  }
+  return frozenRecord(PUBLISH_REQUEST_FIELDS.map(field => [field, value[field]]));
+}
+
+function validateSdnPublishResult(input) {
+  const value = exactRecord(input, PUBLISH_RESULT_FIELDS, 'SDN publication signature');
+  exactLiteral(value.schemaVersion, 1, 'publication signature schemaVersion');
+  exactLiteral(value.identityScheme, IDENTITY_SCHEME, 'publication identityScheme');
+  exactLiteral(value.algorithm, 'ed25519', 'publication algorithm');
+  exactLiteral(value.encoding, 'raw', 'publication encoding');
+  exactLiteral(value.signatureProfile, PUBLISH_SIGNATURE_PROFILE, 'publication signatureProfile');
+  exactPattern(value.keyId, KEY_ID, 'publication keyId');
+  exactPattern(value.publicKeyHex, LOWER_HEX_32, 'publication publicKeyHex');
+  exactPattern(value.signatureHex, LOWER_HEX_64, 'publication signatureHex');
+  exactPattern(value.requestDigestSha256, LOWER_HEX_32, 'publication requestDigestSha256');
+  exactPattern(value.challengeId, /^[0-9a-f]{32}$/u, 'publication challengeId');
+  validateBase64url32(value.challengeBase64url, 'publication challengeBase64url');
+  return frozenRecord(PUBLISH_RESULT_FIELDS.map(field => [field, value[field]]));
+}
+
 function validateSdnLoginV2Wire(input) {
   const value = exactRecord(input, [
     'audience',
@@ -1032,6 +1079,11 @@ export function buildSdnLoginV2Result(value) {
 export function parseSdnLoginV2Result(value) {
   return validateCanonicalSignature(value, 'sdn-login');
 }
+
+export function buildSdnPublishRequest(value) { return validateSdnPublishRequest(value); }
+export function parseSdnPublishRequest(value) { return validateSdnPublishRequest(value); }
+export function buildSdnPublishResult(value) { return validateSdnPublishResult(value); }
+export function parseSdnPublishResult(value) { return validateSdnPublishResult(value); }
 
 export function buildAssetReviewAuthorityActivationRequest(value) {
   return validateActivation(value);

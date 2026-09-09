@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { createWalletClient as createProductionWalletClient } from '../client/index.mjs';
-import { createSdnWalletClient as createProductionSdnWalletClient } from '../client/sdn.mjs';
+import { createSdnWalletClient as createProductionSdnWalletClient, createSpaceAwarePublishWalletClient } from '../client/sdn.mjs';
 import {
   createAssetReviewWalletClient as createProductionAssetReviewWalletClient,
 } from '../client/asset-review.mjs';
@@ -649,9 +649,15 @@ describe('public client factories and launch contract', () => {
     const base = createProductionWalletClient({ clientId: 'sdn-asset-models-pages-v1' });
     const sdn = createProductionSdnWalletClient();
     const review = createProductionAssetReviewWalletClient();
+    const publish = createSpaceAwarePublishWalletClient();
+    expect(Object.keys(publish).sort()).toEqual([...CLIENT_METHODS, 'requestSdnPublish'].sort());
+    expect(Object.isFrozen(publish)).toBe(true);
+    expect(publish).not.toHaveProperty('sign');
+    expect(publish).not.toHaveProperty('requestSdnLoginV1');
+    expect(() => createSpaceAwarePublishWalletClient({ clientId: 'other' })).toThrow();
 
     expect(Object.keys(publicModule).sort()).toEqual(['WALLET_CLIENT_ERRORS', 'createWalletClient']);
-    expect(Object.keys(sdnModule).sort()).toEqual(['WALLET_CLIENT_ERRORS', 'createSdnWalletClient']);
+    expect(Object.keys(sdnModule).sort()).toEqual(['WALLET_CLIENT_ERRORS', 'createSdnWalletClient', 'createSpaceAwarePublishWalletClient']);
     expect(Object.keys(reviewModule).sort()).toEqual([
       'WALLET_CLIENT_ERRORS',
       'createAssetReviewWalletClient',
@@ -2474,4 +2480,28 @@ describe('strict relay response handling', () => {
     await waitForLength(harness.cancellations, 1);
     await client.destroy();
   });
+});
+
+test('the public SpaceAware factory sends only the immutable publication request and accepts its eleven-field result', async () => {
+  const harness = createHarness();
+  harness.window.localStorage = harness.storage;
+  vi.stubGlobal('window', harness.window);
+  vi.stubGlobal('crypto', harness.crypto);
+  vi.stubGlobal('fetch', harness.fetch);
+  const client = createSpaceAwarePublishWalletClient();
+  const fixture = JSON.parse(await readFile(new URL('../../test/fixtures/sdn-publish-request-v1.json', import.meta.url), 'utf8'));
+  const { challengeId, challengeBase64url, ...request } = fixture.request;
+  const expectedRequest = { ...request };
+  try {
+    const pending = client.requestSdnPublish(request);
+    request.providerOrigin = 'https://different.example'; request.bodySha256 = 'f'.repeat(64);
+    await waitForLength(harness.registrations, 1);
+    expect(harness.registrations[0]).toMatchObject({ clientId: 'spaceaware-web-v1', operation: 'sdn.auth.publish-request.v1', request: expectedRequest });
+    expect(Object.keys(harness.registrations[0].request)).toHaveLength(10);
+    expect(harness.requests.every(row => new URL(row.url).origin === 'https://wallet.spacedatanetwork.org')).toBe(true);
+    harness.useRedeemResult({ ...fixture.result, challengeId, challengeBase64url });
+    harness.emitCallback();
+    await expect(pending).resolves.toEqual({ ...fixture.result, challengeId, challengeBase64url });
+    await expect(client.requestSdnPublish({ ...expectedRequest, challengeId })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+  } finally { await client.destroy(); vi.unstubAllGlobals(); }
 });

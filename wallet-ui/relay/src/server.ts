@@ -27,6 +27,8 @@ interface WireModule {
   parseSdnLoginV1Result(value: unknown): unknown;
   parseSdnLoginV2Request(value: unknown): unknown;
   parseSdnLoginV2Result(value: unknown): unknown;
+  parseSdnPublishRequest(value: unknown): unknown;
+  parseSdnPublishResult(value: unknown): unknown;
   parseWalletAccountRequest(value: unknown): unknown;
   parseWalletAccountResult(value: unknown): unknown;
   parseWalletConnectRequest(value: unknown): unknown;
@@ -36,6 +38,7 @@ interface WireModule {
 const wire = await import(new URL('../../../client/wire.mjs', import.meta.url).href) as WireModule;
 
 const requestParsers: Readonly<Record<string, (value: unknown) => unknown>> = Object.freeze({
+  'sdn.auth.publish-request.v1': wire.parseSdnPublishRequest,
   'sdn.asset-review.authority-activation.v1': wire.parseAssetReviewAuthorityActivationRequest,
   'sdn.asset-review.decision.v1': wire.parseAssetReviewDecisionRequest,
   'sdn.auth.jcs-envelope.v2': wire.parseSdnLoginV2Request,
@@ -45,6 +48,7 @@ const requestParsers: Readonly<Record<string, (value: unknown) => unknown>> = Ob
 });
 
 const resultParsers: Readonly<Record<string, (value: unknown) => unknown>> = Object.freeze({
+  'sdn.auth.publish-request.v1': wire.parseSdnPublishResult,
   'sdn.asset-review.authority-activation.v1': wire.parseAssetReviewAuthorityActivationResult,
   'sdn.asset-review.decision.v1': wire.parseAssetReviewDecisionResult,
   'sdn.auth.jcs-envelope.v2': wire.parseSdnLoginV2Result,

@@ -45,12 +45,14 @@ enum class RegisteredOperation : uint8_t {
     SdnLoginV2 = 1,
     AssetReviewAuthorityActivation = 2,
     AssetReviewDecision = 3,
+    SdnPublishRequest = 4,
 };
 
 enum class RegistryRowId : uint8_t {
     SdnNodeConsoleV2 = 1,
     AssetReviewAuthorityActivation = 2,
     AssetReviewDecision = 3,
+    SpaceAwarePublishRequest = 4,
 };
 
 enum class ReviewDecision : uint8_t {
@@ -154,6 +156,35 @@ struct SdnLoginV2Fields {
     std::string expires_at;
 };
 
+// The isolated wallet obtains the challenge from the confirmed provider.
+// Metadata is confirmation text, not an assertion about the hashed body.
+struct SdnPublishRequestFields {
+    uint32_t protocol_version;
+    std::string provider_origin;
+    std::string method;
+    std::string request_uri;
+    std::string body_sha256;
+    uint32_t body_bytes;
+    std::string challenge_id;
+    std::array<uint8_t, 32> challenge;
+    std::string schema;
+    std::string entity_id;
+    std::string entity_name;
+    uint32_t document_count;
+};
+
+struct SdnPublishSignature {
+    uint32_t schema_version;
+    std::string key_id;
+    std::string identity_scheme;
+    std::string algorithm;
+    KeyEncoding encoding;
+    std::string signature_profile;
+    std::array<uint8_t, 32> public_key;
+    std::array<uint8_t, 64> signature;
+    std::array<uint8_t, 32> request_digest;
+};
+
 struct AuthorityActivationFields {
     uint32_t protocol_version;
     std::string audience;
@@ -223,6 +254,11 @@ IdentityOutcome<RawSignature> sign_sdn_login_v1(
 IdentityOutcome<CanonicalSignature> sign_sdn_login_v2(
     IdentityHandle handle,
     const SdnLoginV2Fields& request,
+    RegistryRowId registry_row);
+
+IdentityOutcome<SdnPublishSignature> sign_sdn_publish_request(
+    IdentityHandle handle,
+    const SdnPublishRequestFields& request,
     RegistryRowId registry_row);
 
 IdentityOutcome<CanonicalSignature> sign_asset_review_authority_activation(

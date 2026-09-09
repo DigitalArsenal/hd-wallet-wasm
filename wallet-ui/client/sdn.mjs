@@ -3,6 +3,8 @@ import {
   buildSdnLoginV1Result,
   buildSdnLoginV2Request,
   buildSdnLoginV2Result,
+  buildSdnPublishRequest,
+  buildSdnPublishResult,
   buildWalletAccountRequest,
   buildWalletAccountResult,
   buildWalletConnectRequest,
@@ -58,4 +60,17 @@ export function createSdnWalletClient() {
     requestSdnLoginV1: 'sdnLoginV1',
     requestSdnLoginV2: 'sdnLoginV2',
   });
+}
+
+/** Publication is registered for SpaceAware, separately from node login. */
+export function createSpaceAwarePublishWalletClient() {
+  if (arguments.length !== 0) throw walletClientError('INVALID_REQUEST');
+  const core = createInternalWalletClient({
+    adapters: Object.freeze({ ...BASE_ADAPTERS, publish: Object.freeze({
+      buildRequest: buildSdnPublishRequest, kind: 'typed',
+      operation: 'sdn.auth.publish-request.v1', parseResult: buildSdnPublishResult,
+    }) }),
+    clientId: 'spaceaware-web-v1',
+  });
+  return createPublicApi(core, { requestSdnPublish: 'publish' });
 }

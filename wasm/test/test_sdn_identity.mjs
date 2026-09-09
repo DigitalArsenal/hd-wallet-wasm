@@ -18,6 +18,7 @@ const CAPABILITY_METHODS = [
   'importRememberedIdentity',
   'signSdnLoginV1',
   'signSdnLoginV2',
+  'signSdnPublishRequest',
   'signAssetReviewAuthorityActivation',
   'signAssetReviewDecision',
   'sealRememberedIdentity',

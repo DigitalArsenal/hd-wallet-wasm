@@ -5,6 +5,12 @@ const RELEASE_SHA256 = /^[0-9a-f]{64}$/u;
 const CLIENT_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 
 const OPERATION_POLICY = Object.freeze({
+  'sdn.auth.publish-request.v1': Object.freeze({
+    audience: null,
+    registryRow: 'spaceaware-publish-request-v1',
+    serviceActivationState: null,
+    serviceInstance: null,
+  }),
   'sdn.wallet.account.v1': Object.freeze({
     audience: null,
     registryRow: null,
@@ -52,6 +58,7 @@ const SDN_OPERATIONS = Object.freeze([
   'sdn.auth.raw-challenge.v1',
   ...PUBLIC_OPERATIONS,
 ]);
+const PUBLISH_OPERATIONS = Object.freeze(['sdn.auth.publish-request.v1', ...PUBLIC_OPERATIONS]);
 const REVIEW_OPERATIONS = Object.freeze([
   'sdn.asset-review.authority-activation.v1',
   'sdn.asset-review.decision.v1',
@@ -64,7 +71,7 @@ const EXPECTED_CLIENTS = Object.freeze([
   Object.freeze(['sdn-flatbuffers-pages-v1', 'FlatBuffers Documentation', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/flatbuffers/wallet-callback.html', PUBLIC_OPERATIONS]),
   Object.freeze(['sdn-flatsql-pages-v1', 'FlatSQL Documentation', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/flatsql/wallet-callback.html', PUBLIC_OPERATIONS]),
   Object.freeze(['sdn-module-sdk-pages-v1', 'Space Data Module SDK', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/space-data-module-sdk/wallet-callback.html', PUBLIC_OPERATIONS]),
-  Object.freeze(['spaceaware-web-v1', 'SpaceAware', 'https://spaceaware.io', 'https://spaceaware.io/wallet/callback', PUBLIC_OPERATIONS]),
+  Object.freeze(['spaceaware-web-v1', 'SpaceAware', 'https://spaceaware.io', 'https://spaceaware.io/wallet/callback', PUBLISH_OPERATIONS]),
   Object.freeze(['sdn-node-console-v1', 'SDN Node Console', 'https://sdn.spaceaware.io', 'https://sdn.spaceaware.io/wallet/callback', SDN_OPERATIONS]),
   Object.freeze(['orbpro-pages-v1', 'OrbPro', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/OrbPro/wallet-callback.html', PUBLIC_OPERATIONS]),
   Object.freeze(['sdn-asset-models-pages-v1', 'SDN Asset Models', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/asset-models/wallet-callback.html', PUBLIC_OPERATIONS]),
@@ -72,6 +79,16 @@ const EXPECTED_CLIENTS = Object.freeze([
 ]);
 
 const COMPILED_SIGNING_ROWS = Object.freeze([
+  Object.freeze({
+    audience: null,
+    clientId: 'spaceaware-web-v1',
+    maxLifetimeSeconds: 300,
+    operation: 'sdn.auth.publish-request.v1',
+    requestOrigin: 'https://spaceaware.io',
+    registryRow: 'spaceaware-publish-request-v1',
+    serviceActivationState: null,
+    serviceInstance: null,
+  }),
   Object.freeze({
     audience: 'sdn-login:sdn.spaceaware.io',
     clientId: 'sdn-node-console-v1',

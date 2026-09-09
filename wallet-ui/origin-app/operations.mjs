@@ -3,12 +3,14 @@ import {
   buildAssetReviewDecisionResult,
   buildSdnLoginV1Result,
   buildSdnLoginV2Result,
+  buildSdnPublishResult,
   buildWalletAccountResult,
   buildWalletConnectResult,
   parseAssetReviewAuthorityActivationRequest,
   parseAssetReviewDecisionRequest,
   parseSdnLoginV1Request,
   parseSdnLoginV2Request,
+  parseSdnPublishRequest,
   parseWalletAccountRequest,
   parseWalletConnectRequest,
 } from '../client/wire.mjs';
@@ -34,6 +36,11 @@ const RFC3339_MILLISECONDS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 const textEncoder = new TextEncoder();
 
 const OPERATIONS = Object.freeze({
+  'sdn.auth.publish-request.v1': Object.freeze({
+    parseRequest: parseSdnPublishRequest,
+    buildResult: buildSdnPublishResult,
+    publish: true,
+  }),
   'sdn.auth.jcs-envelope.v2': Object.freeze({
     parseRequest: parseSdnLoginV2Request,
     buildResult: buildSdnLoginV2Result,
@@ -316,8 +323,81 @@ export function renderTransactionConfirmation(container, {
     ? identity.keys.find((candidate) => candidate?.purpose === purpose)
     : null;
   if (key?.keyId) appendRow(document, container, 'Signing key ID', key.keyId);
+  if (binding.operation === 'sdn.auth.publish-request.v1') {
+    appendRow(document, container, 'Action', 'Publish this exact payload to the provider shown below. This grants no session or future write permission.');
+    appendRow(document, container, 'Descriptions', 'Entity name, ID, schema and document count are supplied by the requesting application; the wallet does not inspect or certify the payload.');
+  }
   for (const field of Object.keys(request).sort()) appendRow(document, container, field, request[field]);
   return container;
+}
+
+async function signPublication({ assertCurrent, binding, capabilities, handle, identity, transaction }) {
+  const request = parseSdnPublishRequest(transaction.request);
+  if (binding.clientId !== 'spaceaware-web-v1' || binding.requestOrigin !== 'https://spaceaware.io'
+      || binding.registryRow !== 'spaceaware-publish-request-v1'
+      || typeof capabilities.signSdnPublishRequest !== 'function'
+      || identity?.identityScheme !== 'sdn-bip32-slip10-purpose-v1' || identity?.seedProfile !== 'password-scrypt-v2') {
+    fail('OPERATION_NOT_ALLOWED');
+  }
+  const keys = identity.keys?.filter(key => key?.purpose === 'sdn-authentication') ?? [];
+  if (keys.length !== 1 || keys[0].identityScheme !== identity.identityScheme
+      || keys[0].seedProfile !== identity.seedProfile || keys[0].curve !== 'ed25519'
+      || !LOWER_HEX_32.test(keys[0].publicKeyHex) || !/^sha256:[0-9a-f]{64}$/u.test(keys[0].keyId)) fail('OPERATION_NOT_ALLOWED');
+  const { publicKeyHex, keyId } = keys[0];
+  const endpoint = `${request.providerOrigin}/api/auth/challenge`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  let challenge;
+  try {
+    assertCurrent();
+    if (Date.now() >= exactTimestamp(transaction.expiresAt)) fail('TRANSACTION_EXPIRED');
+    // executePrepared calls this only after its trusted confirmation and a
+    // second registry/transaction check. The application never supplies a nonce.
+    const response = await globalThis.fetch(endpoint, {
+      method: 'POST', credentials: 'omit', redirect: 'error', cache: 'no-store', referrerPolicy: 'no-referrer',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ client_pubkey_hex: publicKeyHex, ts: Math.floor(Date.now() / 1000) }),
+      signal: controller.signal,
+    });
+    assertCurrent();
+    if (!response.ok || response.redirected || (response.url && response.url !== endpoint)) fail('PROVIDER_CHALLENGE_FAILED');
+    const reader = response.body?.getReader();
+    if (!reader) fail('PROVIDER_CHALLENGE_FAILED');
+    const chunks = []; let length = 0;
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        assertCurrent();
+        if (done) break;
+        length += value.byteLength;
+        if (length > 4096) fail('PROVIDER_CHALLENGE_FAILED');
+        chunks.push(value);
+      }
+    } finally { await reader.cancel().catch(() => {}); }
+    const bytes = new Uint8Array(length); let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    challenge = exactRecord(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)), ['challenge_id', 'challenge', 'expires_at'], 'PROVIDER_CHALLENGE_FAILED');
+    if (!/^[0-9a-f]{32}$/u.test(challenge.challenge_id) || !/^[A-Za-z0-9+/]{43}$/u.test(challenge.challenge)
+        || !Number.isSafeInteger(challenge.expires_at) || challenge.expires_at * 1000 <= Date.now()
+        || challenge.expires_at * 1000 - Date.now() > 300000) fail('PROVIDER_CHALLENGE_FAILED');
+    const binary = globalThis.atob(`${challenge.challenge}=`);
+    if (binary.length !== 32 || globalThis.btoa(binary).replace(/=+$/u, '') !== challenge.challenge) fail('PROVIDER_CHALLENGE_FAILED');
+  } catch (error) {
+    assertCurrent();
+    if (error instanceof WalletOperationError) throw error;
+    fail('PROVIDER_CHALLENGE_FAILED');
+  } finally { clearTimeout(timer); }
+  const challengeBase64url = challenge.challenge.replace(/\+/gu, '-').replace(/\//gu, '_').replace(/=+$/u, '');
+  assertCurrent();
+  if (Date.now() >= exactTimestamp(transaction.expiresAt) || challenge.expires_at * 1000 <= Date.now()) fail('TRANSACTION_EXPIRED');
+  const raw = await capabilities.signSdnPublishRequest(handle, {
+    ...request, challengeId: challenge.challenge_id, challengeBase64url,
+  }, binding.registryRow);
+  assertCurrent();
+  if (Date.now() >= exactTimestamp(transaction.expiresAt) || challenge.expires_at * 1000 <= Date.now()) fail('TRANSACTION_EXPIRED');
+  const signed = exactRecord(raw, ['schemaVersion', 'keyId', 'identityScheme', 'algorithm', 'encoding', 'signatureProfile', 'publicKeyHex', 'signatureHex', 'requestDigestSha256'], 'INVALID_WALLET_RESULT');
+  if (signed.keyId !== keyId || signed.publicKeyHex !== publicKeyHex) fail('INVALID_WALLET_RESULT');
+  return buildSdnPublishResult({ ...signed, challengeId: challenge.challenge_id, challengeBase64url });
 }
 
 export function requestTrustedConfirmation({ binding, document, identity = null, request, transaction = null }) {
@@ -421,6 +501,7 @@ export async function executeWalletOperation({
   const capabilities = wasm?.sdn ?? wasm;
   const operation = OPERATIONS[transaction.operation];
   if (!operation || !capabilities) fail('OPERATION_NOT_ALLOWED');
+  if (operation.publish) return signPublication({ assertCurrent, binding, capabilities, handle, identity, transaction });
   if (operation.connect) {
     return operation.buildResult({
       connectionExpiresAt: transaction.expiresAt,

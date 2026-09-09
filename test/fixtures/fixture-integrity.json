@@ -13,6 +13,11 @@
       "sha256": "f81924055c9b64d839c702257215c5a77861843388327deeddd5929c31e7cc46"
     },
     {
+      "path": "test/fixtures/sdn-publish-request-v1.json",
+      "bytes": 2164,
+      "sha256": "63af415d26b0f120984a1e0a5476954ec201e7348344edbb9a6fe71da49bf647"
+    },
+    {
       "path": "test/fixtures/sdn-remember-wallet-v2.json",
       "bytes": 1864,
       "sha256": "1fb4cdea378b180765fd09ee0912026cef38f1e7504568131eccb9f7f1063a69"
