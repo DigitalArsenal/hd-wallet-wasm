@@ -47,7 +47,7 @@ struct RegistryRow {
     uint32_t maximum_lifetime_seconds;
 };
 
-constexpr std::array<RegistryRow, 4> kRegistryRows = {{
+constexpr std::array<RegistryRow, 5> kRegistryRows = {{
     {RegistryRowId::SdnNodeConsoleV2, RegisteredOperation::SdnLoginV2,
      "sdn-node-console-v1", "https://sdn.spaceaware.io",
      "sdn-login:sdn.spaceaware.io", "", 300},
@@ -61,6 +61,8 @@ constexpr std::array<RegistryRow, 4> kRegistryRows = {{
      "sdn-asset-review-v1", "https://review.spacedatanetwork.org",
      "asset-review:assets.ipfs.01", "", 300},
     {RegistryRowId::SpaceAwarePublishRequest, RegisteredOperation::SdnPublishRequest,
+     "spaceaware-web-v1", "https://spaceaware.io", "", "", 300},
+    {RegistryRowId::SpaceAwareModuleDeliveryKey, RegisteredOperation::ModuleDeliveryKey,
      "spaceaware-web-v1", "https://spaceaware.io", "", "", 300},
 }};
 
@@ -1105,6 +1107,54 @@ IdentityOutcome<SdnPublishSignature> sign_sdn_publish_request(
         SdnPublishSignature result{1, auth.key_id, auth.identity_scheme, "ed25519",
             KeyEncoding::Raw, "ed25519-sdn-signed-request-v2", {}, signature, digest};
         std::copy_n(auth.public_key.begin(), 32, result.public_key.begin());
+        return result;
+    });
+#endif
+}
+
+IdentityOutcome<ModuleDeliveryKeyProof> sign_module_delivery_key(
+    IdentityHandle handle, const ModuleDeliveryKeyFields& request,
+    RegistryRowId registry_row) {
+#if HD_WALLET_FIPS_MODE
+    (void)handle;
+    (void)request;
+    (void)registry_row;
+    return IdentityError::FipsNotAllowed;
+#else
+    return safeOutcome<ModuleDeliveryKeyProof>([&]() -> IdentityOutcome<ModuleDeliveryKeyProof> {
+        std::lock_guard lock(g_slots_mutex);
+        auto* record = lookupLocked(handle);
+        if (!record) return IdentityError::StaleHandle;
+        const RegistryRow* row = registryRow(registry_row);
+        if (record->material.kind != IdentityKind::PasswordV2 || row == nullptr ||
+            row->operation != RegisteredOperation::ModuleDeliveryKey) {
+            return IdentityError::OperationNotAllowed;
+        }
+        // The key server refuses a statement valid for more than 31 days; the
+        // wallet bounds it the same way against absurd values (no trusted clock).
+        if (request.protocol_version != 1 || !validPublishOrigin(request.origin) ||
+            request.expires_at == 0 || request.expires_at > (uint64_t{1} << 40)) {
+            return IdentityError::InvalidRequest;
+        }
+        static constexpr char kHex[] = "0123456789abcdef";
+        std::string session_hex;
+        for (const uint8_t b : request.session_public) {
+            session_hex.push_back(kHex[b >> 4]);
+            session_hex.push_back(kHex[b & 0x0f]);
+        }
+        const std::string statement = std::string("sdn-module-delivery-key/1\n") +
+            "ed25519:" + session_hex + "\n" +
+            "xpub:" + record->material.account_xpub + "\n" +
+            "origin:" + request.origin + "\n" +
+            "expires:" + std::to_string(request.expires_at) + "\n";
+        ModuleDeliveryKeyProof result{
+            1,
+            "m/44'/0'/" + std::to_string(record->material.account_index) + "'",
+            record->material.account_xpub,
+            record->material.account_public,
+            statement,
+            internal::sign_account_secp256k1_der(record->material, bytes(statement)),
+        };
         return result;
     });
 #endif

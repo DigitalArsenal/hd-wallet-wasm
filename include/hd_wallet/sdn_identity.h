@@ -46,6 +46,7 @@ enum class RegisteredOperation : uint8_t {
     AssetReviewAuthorityActivation = 2,
     AssetReviewDecision = 3,
     SdnPublishRequest = 4,
+    ModuleDeliveryKey = 5,
 };
 
 enum class RegistryRowId : uint8_t {
@@ -53,6 +54,7 @@ enum class RegistryRowId : uint8_t {
     AssetReviewAuthorityActivation = 2,
     AssetReviewDecision = 3,
     SpaceAwarePublishRequest = 4,
+    SpaceAwareModuleDeliveryKey = 5,
 };
 
 enum class ReviewDecision : uint8_t {
@@ -185,6 +187,26 @@ struct SdnPublishSignature {
     std::array<uint8_t, 32> request_digest;
 };
 
+/// "This session key may fetch paid modules for this account": the session's
+/// Ed25519 module-delivery key, the page origin and an expiry (unix seconds).
+struct ModuleDeliveryKeyFields {
+    uint32_t protocol_version;
+    std::string origin;
+    std::array<uint8_t, 32> session_public;
+    uint64_t expires_at;
+};
+
+/// The account key's ECDSA (DER, over sha256) signature of the byte-replayed
+/// statement, as an EPM ChainProof carries it.
+struct ModuleDeliveryKeyProof {
+    uint32_t schema_version;
+    std::string key_path;
+    std::string account_xpub;
+    std::array<uint8_t, 33> account_public;
+    std::string statement;
+    std::vector<uint8_t> signature_der;
+};
+
 struct AuthorityActivationFields {
     uint32_t protocol_version;
     std::string audience;
@@ -259,6 +281,11 @@ IdentityOutcome<CanonicalSignature> sign_sdn_login_v2(
 IdentityOutcome<SdnPublishSignature> sign_sdn_publish_request(
     IdentityHandle handle,
     const SdnPublishRequestFields& request,
+    RegistryRowId registry_row);
+
+IdentityOutcome<ModuleDeliveryKeyProof> sign_module_delivery_key(
+    IdentityHandle handle,
+    const ModuleDeliveryKeyFields& request,
     RegistryRowId registry_row);
 
 IdentityOutcome<CanonicalSignature> sign_asset_review_authority_activation(

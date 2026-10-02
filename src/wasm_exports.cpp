@@ -1340,6 +1340,26 @@ StringOutcome serializePublishSignature(const SdnPublishSignature& signature) {
     }));
 }
 
+StringOutcome serializeModuleDeliveryKeyProof(const ModuleDeliveryKeyProof& proof) {
+    if (proof.schema_version != 1 || proof.signature_der.empty() ||
+        proof.signature_der.size() > 80 || proof.statement.empty()) {
+        return IdentityError::CryptoFailure;
+    }
+    // Shaped as an EPM ChainProof: KEY_PATH, PUBLIC_KEY, SIGNED_PAYLOAD (hex,
+    // byte-replayed), SIGNATURE (hex DER), ALGORITHM, ENCODING.
+    return serializeValue(Value(Value::Members{
+        {"schemaVersion", 1.0},
+        {"keyPath", proof.key_path},
+        {"accountXpub", proof.account_xpub},
+        {"publicKeyHex", hex(proof.account_public)},
+        {"signedPayloadHex", hex(std::span<const uint8_t>(
+            reinterpret_cast<const uint8_t*>(proof.statement.data()), proof.statement.size()))},
+        {"signatureHex", hex(proof.signature_der)},
+        {"algorithm", std::string("secp256k1")},
+        {"encoding", std::string("der")},
+    }));
+}
+
 uint16_t copyTextResult(const StringOutcome& outcome, uint8_t* output,
                         uint32_t capacity, uint32_t* out_required) {
     if (std::holds_alternative<IdentityError>(outcome)) {
@@ -1592,6 +1612,35 @@ std::variant<SdnPublishRequestFields, IdentityError> parsePublishRequest(
         !uint32Member(value, "documentCount", result.document_count)) {
         return IdentityError::InvalidRequest;
     }
+    return result;
+}
+
+std::variant<ModuleDeliveryKeyFields, IdentityError> parseModuleDeliveryKey(
+    const uint8_t* bytes, uint32_t length) {
+    auto parsed = parseRequest(bytes, length);
+    if (std::holds_alternative<IdentityError>(parsed)) {
+        return std::get<IdentityError>(parsed);
+    }
+    const Value& value = std::get<Value>(parsed);
+    ModuleDeliveryKeyFields result{};
+    std::string session_hex;
+    uint32_t expires_at = 0;
+    if (!exactMembers(value, {"protocolVersion", "origin", "sessionPublicKeyHex", "expiresAt"}) ||
+        !uint32Member(value, "protocolVersion", result.protocol_version) ||
+        !stringMember(value, "origin", result.origin) ||
+        !stringMember(value, "sessionPublicKeyHex", session_hex) ||
+        !uint32Member(value, "expiresAt", expires_at) ||
+        !lowerHex(session_hex, 64)) {
+        return IdentityError::InvalidRequest;
+    }
+    for (size_t i = 0; i < 32; ++i) {
+        const auto nibble = [](char c) -> uint8_t {
+            return static_cast<uint8_t>(c <= '9' ? c - '0' : c - 'a' + 10);
+        };
+        result.session_public[i] = static_cast<uint8_t>(
+            (nibble(session_hex[i * 2]) << 4) | nibble(session_hex[i * 2 + 1]));
+    }
+    result.expires_at = expires_at;
     return result;
 }
 
@@ -1899,6 +1948,35 @@ uint16_t hd_sdn_sign_publish_request(
         return finishPublishSignature(sign_sdn_publish_request(
             handle, std::get<SdnPublishRequestFields>(parsed),
             RegistryRowId::SpaceAwarePublishRequest), out_json, out_capacity, out_required);
+    });
+}
+
+extern "C" HD_WALLET_EXPORT
+uint16_t hd_sdn_sign_module_delivery_key(
+    uint64_t handle, const uint8_t* request_json, uint32_t request_len,
+    uint8_t registry_row, uint8_t* out_json, uint32_t out_capacity,
+    uint32_t* out_required) {
+    return guarded([&] {
+        if (!prepareOutput(out_json, out_capacity, out_required) ||
+            !validRange(request_json, request_len) || request_len > kMaximumOutputBytes) {
+            return status(IdentityError::InvalidRequest);
+        }
+        if (registry_row != static_cast<uint8_t>(RegistryRowId::SpaceAwareModuleDeliveryKey)) {
+            return status(IdentityError::OperationNotAllowed);
+        }
+        auto parsed = parseModuleDeliveryKey(request_json, request_len);
+        if (std::holds_alternative<IdentityError>(parsed)) {
+            return status(std::get<IdentityError>(parsed));
+        }
+        auto outcome = sign_module_delivery_key(
+            handle, std::get<ModuleDeliveryKeyFields>(parsed),
+            RegistryRowId::SpaceAwareModuleDeliveryKey);
+        if (std::holds_alternative<IdentityError>(outcome)) {
+            return status(std::get<IdentityError>(outcome));
+        }
+        return copyTextResult(
+            serializeModuleDeliveryKeyProof(std::get<ModuleDeliveryKeyProof>(outcome)),
+            out_json, out_capacity, out_required);
     });
 }
 

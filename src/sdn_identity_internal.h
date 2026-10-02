@@ -81,6 +81,10 @@ void sha256_secret(std::span<const uint8_t> bytes,
                    std::span<uint8_t, 32> output);
 std::array<uint8_t, 64> sign_ed25519(std::span<const uint8_t, 32> seed,
                                      std::span<const uint8_t> message);
+// ECDSA (RFC 6979, DER) over sha256(message) with the account secp256k1 key
+// m/44'/0'/<account>' of a modern identity; the private scalar never leaves.
+std::vector<uint8_t> sign_account_secp256k1_der(
+    const DerivedIdentityMaterial& material, std::span<const uint8_t> message);
 SecretBuffer hkdf_sha256(std::span<const uint8_t> input_key_material,
                          std::span<const uint8_t> salt,
                          std::span<const uint8_t> info,

@@ -3,6 +3,7 @@
 #include "hd_wallet/libp2p.h"
 
 #include <cryptopp/aes.h>
+#include <cryptopp/dsa.h>
 #include <cryptopp/eccrypto.h>
 #include <cryptopp/ecp.h>
 #include <cryptopp/gcm.h>
@@ -661,6 +662,34 @@ void sha256_secret(std::span<const uint8_t> bytes,
 std::array<uint8_t, 64> sign_ed25519(std::span<const uint8_t, 32> seed,
                                      std::span<const uint8_t> message) {
     return signEd25519Impl(seed, message, signingBackend);
+}
+
+std::vector<uint8_t> sign_account_secp256k1_der(
+    const DerivedIdentityMaterial& material, std::span<const uint8_t> message) {
+    if (material.kind != IdentityKind::PasswordV2 || material.seed.size() != 64) {
+        throw std::runtime_error("account signing needs a modern identity");
+    }
+    const std::array<uint32_t, 3> account_path = {
+        44U | kHardened, 0U | kHardened, material.account_index | kHardened};
+    Bip32Node account = bip32Path(material.seed.span(), account_path, hmacSha512);
+    if (account.public_key != material.account_public) {
+        throw std::runtime_error("account key mismatch");
+    }
+    CryptoPP::ECDSA_RFC6979<CryptoPP::ECP, CryptoPP::SHA256>::PrivateKey key;
+    key.Initialize(CryptoPP::ASN1::secp256k1(),
+                   CryptoPP::Integer(account.private_key.data(), 32));
+    CryptoPP::ECDSA_RFC6979<CryptoPP::ECP, CryptoPP::SHA256>::Signer signer(key);
+    std::vector<uint8_t> p1363(signer.MaxSignatureLength());
+    // RFC 6979: k is derived from key and message; no randomness is consumed.
+    const size_t p1363_size = signer.SignMessage(
+        CryptoPP::NullRNG(), message.data(), message.size(), p1363.data());
+    std::vector<uint8_t> der(p1363_size + 8);
+    const size_t der_size = CryptoPP::DSAConvertSignatureFormat(
+        der.data(), der.size(), CryptoPP::DSA_DER,
+        p1363.data(), p1363_size, CryptoPP::DSA_P1363);
+    der.resize(der_size);
+    secureWipe(p1363.data(), p1363.size());
+    return der;
 }
 
 SecretBuffer hkdf_sha256(std::span<const uint8_t> input_key_material,

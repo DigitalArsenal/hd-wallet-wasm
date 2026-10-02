@@ -34,6 +34,7 @@ const RAW_ENTRYPOINTS = Object.freeze([
   '_hd_sdn_sign_login_v1',
   '_hd_sdn_sign_login_v2',
   '_hd_sdn_sign_publish_request',
+  '_hd_sdn_sign_module_delivery_key',
   '_hd_sdn_sign_asset_review_authority_activation',
   '_hd_sdn_sign_asset_review_decision',
   '_hd_sdn_seal_remembered_identity',
@@ -348,6 +349,17 @@ function parseIdentity(bytes) {
 }
 
 function copySignature(value, canonical) {
+  if (canonical === 'module-delivery-key') {
+    if (!exactKeys(value, ['schemaVersion', 'keyPath', 'accountXpub', 'publicKeyHex',
+      'signedPayloadHex', 'signatureHex', 'algorithm', 'encoding']) ||
+        value.schemaVersion !== 1 || !/^m\/44'\/0'\/\d+'$/u.test(value.keyPath) ||
+        typeof value.accountXpub !== 'string' || !value.accountXpub.startsWith('xpub') ||
+        !validLowerHex(value.publicKeyHex, 66) ||
+        typeof value.signedPayloadHex !== 'string' || !/^(?:[0-9a-f]{2})+$/u.test(value.signedPayloadHex) ||
+        typeof value.signatureHex !== 'string' || !/^30(?:[0-9a-f]{2}){7,72}$/u.test(value.signatureHex) ||
+        value.algorithm !== 'secp256k1' || value.encoding !== 'der') fail('CRYPTO_FAILURE');
+    return Object.freeze({ ...value });
+  }
   if (canonical === 'publish') {
     if (!exactKeys(value, ['schemaVersion', 'keyId', 'identityScheme', 'algorithm',
       'encoding', 'signatureProfile', 'publicKeyHex', 'signatureHex', 'requestDigestSha256']) ||
@@ -817,6 +829,23 @@ export function createSdnTypedCapabilities(wasm) {
           native, input, length, 4, output, MAX_OUTPUT_BYTES, required,
         ],
         'publish',
+      );
+    },
+
+    /**
+     * Account key's proof that `request.sessionPublicKeyHex` may fetch paid
+     * modules for this account: an EPM ChainProof's fields.
+     */
+    signModuleDeliveryKey(handle, request, registryRow) {
+      const record = recordFor(handle);
+      if (registryRow !== 'spaceaware-module-delivery-key-v1') fail('INVALID_REQUEST');
+      const requestBytes = encodeRequest(request);
+      return invokeSign(
+        '_hd_sdn_sign_module_delivery_key', record, requestBytes,
+        (native, input, length, output, required) => [
+          native, input, length, 5, output, MAX_OUTPUT_BYTES, required,
+        ],
+        'module-delivery-key',
       );
     },
 

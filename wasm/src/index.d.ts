@@ -341,6 +341,21 @@ export interface SdnIdentityCapabilities {
     request: SdnPublishRequest,
     registryRow: 'spaceaware-publish-request-v1',
   ): SdnPublishSignature;
+  /** The account key's EPM ChainProof that a session key may fetch paid modules. */
+  signModuleDeliveryKey(
+    handle: SdnIdentityHandle,
+    request: { protocolVersion: 1; origin: string; sessionPublicKeyHex: string; expiresAt: number },
+    registryRow: 'spaceaware-module-delivery-key-v1',
+  ): {
+    schemaVersion: 1;
+    keyPath: string;
+    accountXpub: string;
+    publicKeyHex: string;
+    signedPayloadHex: string;
+    signatureHex: string;
+    algorithm: 'secp256k1';
+    encoding: 'der';
+  };
   signAssetReviewAuthorityActivation(
     handle: SdnIdentityHandle,
     request: AssetReviewAuthorityActivationRequest,

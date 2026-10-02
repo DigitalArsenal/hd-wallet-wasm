@@ -650,6 +650,7 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       "_hd_sdn_sign_login_v1"
       "_hd_sdn_sign_login_v2"
       "_hd_sdn_sign_publish_request"
+      "_hd_sdn_sign_module_delivery_key"
       "_hd_sdn_sign_asset_review_authority_activation"
       "_hd_sdn_sign_asset_review_decision"
       "_hd_sdn_seal_remembered_identity"
