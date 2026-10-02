@@ -457,6 +457,27 @@ export class WalletOriginController {
     try { return copyModernPublicIdentity(identity); } catch { fail('WASM_FAILURE'); }
   }
 
+  /**
+   * The account key's proof that `sessionPublicKeyHex` (the page's Ed25519
+   * module-delivery key) may fetch paid modules for this account, for this
+   * page's origin, until `expiresAt` (unix seconds). Shaped as an EPM
+   * ChainProof; the key server checks it before an allowlisted grant.
+   */
+  signModuleDeliveryKey({ sessionPublicKeyHex, expiresAt }) {
+    if (this.#destroyed || this.#revoked || this.#handle === null) fail('STALE_CONTROLLER');
+    if (typeof this.#capabilities.signModuleDeliveryKey !== 'function') fail('OPERATION_NOT_ALLOWED');
+    return this.#capabilities.signModuleDeliveryKey(
+      this.#handle,
+      {
+        protocolVersion: 1,
+        origin: String(this.#window?.location?.origin ?? ''),
+        sessionPublicKeyHex,
+        expiresAt,
+      },
+      'spaceaware-module-delivery-key-v1',
+    );
+  }
+
   supportsRememberedWallet() {
     return !this.#destroyed && !this.#revoked && this.#rememberedWallet.supported();
   }
