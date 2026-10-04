@@ -58,14 +58,14 @@ a, button, nav, nav * {
   --glass-blur: blur(20px);
 
   /* Accent Colors */
-  --monster: #ef4444;
-  --weapon: #3b82f6;
-  --galaxy: #8b5cf6;
-  --success: #10b981;
+  --monster: #ff3b30;
+  --weapon: #59d9ff;
+  --galaxy: #f5a524;
+  --success: #f5a524;
 
   /* Typography */
-  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
 
   /* Spacing */
   --section-padding: 160px;
@@ -104,9 +104,9 @@ body {
   z-index: -1;
   overflow: hidden;
   background:
-    radial-gradient(ellipse at 20% 50%, rgba(59, 130, 246, 0.15) 0%, transparent 50%),
-    radial-gradient(ellipse at 80% 20%, rgba(139, 92, 246, 0.12) 0%, transparent 50%),
-    radial-gradient(ellipse at 50% 80%, rgba(16, 185, 129, 0.1) 0%, transparent 50%),
+    radial-gradient(ellipse at 20% 50%, rgba(89, 217, 255, 0.15) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 20%, rgba(245, 165, 36, 0.12) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 80%, rgba(245, 165, 36, 0.1) 0%, transparent 50%),
     linear-gradient(to bottom, rgba(0, 0, 0, 0.2) 0%, rgba(0, 0, 0, 0.6) 50%, rgba(0, 0, 0, 0.9) 100%);
   filter: blur(40px);
 }
@@ -309,8 +309,8 @@ body:has(.modal.active) .nav-bar {
 }
 
 .nav-status.ready {
-  background: #22c55e;
-  box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+  background: #f5a524;
+  box-shadow: 0 0 8px rgba(245, 165, 36, 0.5);
 }
 
 @media (max-width: 900px) {
@@ -548,14 +548,14 @@ body:has(.modal.active) .nav-bar {
 /* vCard actions - old styles removed, see .vcard-actions-footer */
 
 .glass-btn.accent {
-  background: rgba(139, 92, 246, 0.15);
-  border-color: rgba(139, 92, 246, 0.4);
+  background: rgba(245, 165, 36, 0.15);
+  border-color: rgba(245, 165, 36, 0.4);
   color: #c4b5fd;
 }
 
 .glass-btn.accent:hover {
-  background: rgba(139, 92, 246, 0.25);
-  border-color: rgba(139, 92, 246, 0.6);
+  background: rgba(245, 165, 36, 0.25);
+  border-color: rgba(245, 165, 36, 0.6);
 }
 
 /* Entropy bar */
@@ -815,9 +815,9 @@ body:has(.modal.active) .nav-bar {
 }
 
 #forget-stored-wallet:hover {
-  background: rgba(239, 68, 68, 0.1);
-  border-color: #ef4444;
-  color: #ef4444;
+  background: rgba(255, 59, 48, 0.1);
+  border-color: #ff3b30;
+  color: #ff3b30;
 }
 
 /* Remember Method Selector (PIN vs Passkey) */
@@ -987,7 +987,7 @@ body:has(.modal.active) .nav-bar {
   gap: 8px;
   min-height: 30px;
   padding: 6px 24px;
-  background: rgba(59, 130, 246, 0.1);
+  background: rgba(89, 217, 255, 0.1);
   font-size: 13px;
   line-height: 1.5;
   color: rgba(255, 255, 255, 0.8);
@@ -998,7 +998,7 @@ body:has(.modal.active) .nav-bar {
 }
 
 .wallet-info-content strong {
-  color: #60a5fa;
+  color: #59d9ff;
 }
 
 .wallet-info-close {
@@ -1027,19 +1027,19 @@ body:has(.modal.active) .nav-bar {
   gap: 6px;
   padding: 8px 24px;
   font-size: 14px;
-  color: #60a5fa;
+  color: #59d9ff;
   cursor: pointer;
   user-select: none;
 }
 
 .wallet-info-collapsed:hover {
-  background: rgba(59, 130, 246, 0.05);
+  background: rgba(89, 217, 255, 0.05);
 }
 
 .wallet-info-icon-wrap {
   display: inline-flex;
   align-self: center;
-  color: #60a5fa;
+  color: #59d9ff;
 }
 
 .wallet-info-icon-wrap svg {
@@ -1065,13 +1065,13 @@ body:has(.modal.active) .nav-bar {
 
 .memory-notice-label {
   font-size: 13px;
-  color: rgba(251, 191, 36, 0.8);
+  color: rgba(245, 165, 36, 0.8);
   font-weight: 500;
 }
 
 .memory-notice-row .wallet-info-icon-wrap {
   cursor: pointer;
-  color: rgba(251, 191, 36, 0.6);
+  color: rgba(245, 165, 36, 0.6);
 }
 
 .memory-info-box {
@@ -1080,8 +1080,8 @@ body:has(.modal.active) .nav-bar {
   gap: 8px;
   padding: 12px 16px;
   margin-bottom: 12px;
-  background: rgba(251, 191, 36, 0.08);
-  border: 1px solid rgba(251, 191, 36, 0.2);
+  background: rgba(245, 165, 36, 0.08);
+  border: 1px solid rgba(245, 165, 36, 0.2);
   border-radius: 8px;
   font-size: 13px;
   line-height: 1.5;
@@ -1097,7 +1097,7 @@ body:has(.modal.active) .nav-bar {
 }
 
 .memory-info-content strong {
-  color: rgb(251, 191, 36);
+  color: rgb(245, 165, 36);
 }
 
 .xpub-header {
@@ -1121,8 +1121,8 @@ body:has(.modal.active) .nav-bar {
   gap: 8px;
   padding: 12px 16px;
   margin-bottom: 10px;
-  background: rgba(59, 130, 246, 0.1);
-  border: 1px solid rgba(59, 130, 246, 0.2);
+  background: rgba(89, 217, 255, 0.1);
+  border: 1px solid rgba(89, 217, 255, 0.2);
   border-radius: 8px;
   font-size: 13px;
   line-height: 1.5;
@@ -1142,7 +1142,7 @@ body:has(.modal.active) .nav-bar {
 }
 
 .xpub-info-content strong {
-  color: #60a5fa;
+  color: #59d9ff;
 }
 
 /* Photo upload - see final override section below */
@@ -1251,7 +1251,7 @@ body:has(.modal.active) .nav-bar {
 }
 
 .account-wallet-summary .ph-portfolio-value {
-  color: #4ade80;
+  color: #f5a524;
   font-size: 25px;
 }
 
@@ -1274,7 +1274,7 @@ body:has(.modal.active) .nav-bar {
 
 .account-address-value {
   font-size: 11px;
-  color: #4ade80;
+  color: #f5a524;
   white-space: nowrap;
   margin-left: auto;
 }
@@ -1426,8 +1426,8 @@ body:has(.modal.active) .nav-bar {
 }
 
 .copy-key-btn.copied {
-  color: #22c55e;
-  border-color: #22c55e;
+  color: #f5a524;
+  border-color: #f5a524;
 }
 
 /* =============================================================================
@@ -1505,11 +1505,11 @@ body:has(.modal.active) .nav-bar {
 
 .key-warning {
   padding: 16px;
-  background: rgba(251, 191, 36, 0.1);
-  border: 1px solid rgba(251, 191, 36, 0.3);
+  background: rgba(245, 165, 36, 0.1);
+  border: 1px solid rgba(245, 165, 36, 0.3);
   border-radius: var(--radius-sm);
   font-size: 13px;
-  color: #fbbf24;
+  color: #f5a524;
   margin-top: 20px;
 }
 
@@ -1724,8 +1724,8 @@ body:has(.modal.active) .nav-bar {
 
 /* HD Not Initialized Warning */
 .hd-not-initialized {
-  background: rgba(251, 191, 36, 0.1);
-  border: 1px solid rgba(251, 191, 36, 0.3);
+  background: rgba(245, 165, 36, 0.1);
+  border: 1px solid rgba(245, 165, 36, 0.3);
   border-radius: var(--radius-sm);
   padding: 16px 20px;
   margin-bottom: 20px;
@@ -1733,7 +1733,7 @@ body:has(.modal.active) .nav-bar {
 
 .hd-not-initialized p {
   margin: 0;
-  color: rgb(251, 191, 36);
+  color: rgb(245, 165, 36);
   font-size: 14px;
 }
 
@@ -1789,7 +1789,7 @@ body:has(.modal.active) .nav-bar {
 
 .network-card.has-balance {
   border-color: var(--success);
-  box-shadow: 0 0 20px rgba(16, 185, 129, 0.15);
+  box-shadow: 0 0 20px rgba(245, 165, 36, 0.15);
 }
 
 .network-card.has-balance .network-logo {
@@ -1802,10 +1802,10 @@ body:has(.modal.active) .nav-bar {
 
 @keyframes secure-pulse {
   0%, 100% {
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
+    box-shadow: 0 0 0 0 rgba(245, 165, 36, 0.4);
   }
   50% {
-    box-shadow: 0 0 20px 5px rgba(16, 185, 129, 0.15);
+    box-shadow: 0 0 20px 5px rgba(245, 165, 36, 0.15);
   }
 }
 
@@ -1901,7 +1901,7 @@ body:has(.modal.active) .nav-bar {
 
 .bond-network-card.has-balance {
   border-color: var(--success);
-  box-shadow: 0 0 10px rgba(16, 185, 129, 0.1);
+  box-shadow: 0 0 10px rgba(245, 165, 36, 0.1);
 }
 
 .bond-net-name {
@@ -2156,7 +2156,7 @@ body:has(.modal.active) .nav-bar {
 .wallet-scan-bar {
   height: 100%;
   width: 0%;
-  background: #22c55e;
+  background: #f5a524;
   border-radius: 1px;
   transition: width 0.3s ease;
 }
@@ -2746,15 +2746,15 @@ body:has(.modal.active) .nav-bar {
 }
 
 .send-status-success {
-  background: rgba(34, 197, 94, 0.1);
-  border: 1px solid rgba(34, 197, 94, 0.3);
-  color: #22c55e;
+  background: rgba(245, 165, 36, 0.1);
+  border: 1px solid rgba(245, 165, 36, 0.3);
+  color: #f5a524;
 }
 
 .send-status-error {
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  color: #ef4444;
+  background: rgba(255, 59, 48, 0.1);
+  border: 1px solid rgba(255, 59, 48, 0.3);
+  color: #ff3b30;
 }
 
 /* Receive overlay */
@@ -2880,7 +2880,7 @@ body:has(.modal.active) .nav-bar {
 
 .trust-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--monster), #f59e0b, var(--success));
+  background: linear-gradient(90deg, var(--monster), #f5a524, var(--success));
   border-radius: 4px;
   transition: width 0.5s ease;
 }
@@ -3015,7 +3015,7 @@ body:has(.modal.active) .nav-bar {
 
 .trust-meter-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--success) 0%, #34d399 100%);
+  background: linear-gradient(90deg, var(--success) 0%, #f5a524 100%);
   border-radius: 4px;
   transition: width 0.5s ease;
   width: 0%;
@@ -3063,7 +3063,7 @@ body:has(.modal.active) .nav-bar {
 
 .wallet-network-card.has-balance {
   border-color: var(--success);
-  box-shadow: 0 0 15px rgba(16, 185, 129, 0.1);
+  box-shadow: 0 0 15px rgba(245, 165, 36, 0.1);
 }
 
 .network-icon {
@@ -3565,12 +3565,12 @@ body:has(.modal.active) .nav-bar {
   font-weight: 600;
 }
 
-.pki-badge.signing { background: rgba(59, 130, 246, 0.2); color: var(--weapon); }
-.pki-badge.encryption { background: rgba(139, 92, 246, 0.2); color: var(--galaxy); }
-.pki-badge.root { background: rgba(239, 68, 68, 0.2); color: var(--monster); }
-.pki-badge.valid { background: rgba(16, 185, 129, 0.2); color: var(--success); }
-.pki-badge.expired { background: rgba(239, 68, 68, 0.2); color: var(--monster); }
-.pki-badge.ca { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
+.pki-badge.signing { background: rgba(89, 217, 255, 0.2); color: var(--weapon); }
+.pki-badge.encryption { background: rgba(245, 165, 36, 0.2); color: var(--galaxy); }
+.pki-badge.root { background: rgba(255, 59, 48, 0.2); color: var(--monster); }
+.pki-badge.valid { background: rgba(245, 165, 36, 0.2); color: var(--success); }
+.pki-badge.expired { background: rgba(255, 59, 48, 0.2); color: var(--monster); }
+.pki-badge.ca { background: rgba(245, 165, 36, 0.2); color: #f5a524; }
 
 /* Info Rows */
 .pki-info-row {
@@ -3873,15 +3873,15 @@ body:has(.modal.active) .nav-bar {
 }
 
 .key-display-badge.signing {
-  background: rgba(59, 130, 246, 0.2);
-  border: 1px solid rgba(59, 130, 246, 0.4);
-  color: #60a5fa;
+  background: rgba(89, 217, 255, 0.2);
+  border: 1px solid rgba(89, 217, 255, 0.4);
+  color: #59d9ff;
 }
 
 .key-display-badge.encryption {
-  background: rgba(16, 185, 129, 0.2);
-  border: 1px solid rgba(16, 185, 129, 0.4);
-  color: #34d399;
+  background: rgba(245, 165, 36, 0.2);
+  border: 1px solid rgba(245, 165, 36, 0.4);
+  color: #f5a524;
 }
 
 .key-display-row {
@@ -4048,11 +4048,11 @@ body:has(.modal.active) .nav-bar {
   letter-spacing: 0.02em;
 }
 
-.trust-badge.trust-ultimate { background: rgba(139, 92, 246, 0.2); color: #a78bfa; border: 1px solid rgba(139, 92, 246, 0.3); }
-.trust-badge.trust-full     { background: rgba(16, 185, 129, 0.2); color: #6ee7b7; border: 1px solid rgba(16, 185, 129, 0.3); }
-.trust-badge.trust-marginal { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
+.trust-badge.trust-ultimate { background: rgba(245, 165, 36, 0.2); color: #f5a524; border: 1px solid rgba(245, 165, 36, 0.3); }
+.trust-badge.trust-full     { background: rgba(245, 165, 36, 0.2); color: #6ee7b7; border: 1px solid rgba(245, 165, 36, 0.3); }
+.trust-badge.trust-marginal { background: rgba(245, 165, 36, 0.2); color: #f5a524; border: 1px solid rgba(245, 165, 36, 0.3); }
 .trust-badge.trust-unknown  { background: rgba(107, 114, 128, 0.2); color: #9ca3af; border: 1px solid rgba(107, 114, 128, 0.3); }
-.trust-badge.trust-never    { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+.trust-badge.trust-never    { background: rgba(255, 59, 48, 0.2); color: #ff3b30; border: 1px solid rgba(255, 59, 48, 0.3); }
 
 /* =============================================================================
    Trust Map - Actions Bar
@@ -4095,7 +4095,7 @@ body:has(.modal.active) .nav-bar {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #10b981;
+  background: #f5a524;
   animation: trust-pulse 1.5s ease-in-out infinite;
 }
 
@@ -4372,19 +4372,19 @@ body:has(.modal.active) .nav-bar {
 }
 
 .trust-address-input.invalid {
-  border-color: rgba(239, 68, 68, 0.4);
+  border-color: rgba(255, 59, 48, 0.4);
 }
 
 .trust-address-input.invalid:focus {
-  border-color: rgba(239, 68, 68, 0.6);
+  border-color: rgba(255, 59, 48, 0.6);
 }
 
 .trust-address-input.valid {
-  border-color: rgba(16, 185, 129, 0.4);
+  border-color: rgba(245, 165, 36, 0.4);
 }
 
 .trust-address-input.valid:focus {
-  border-color: rgba(16, 185, 129, 0.6);
+  border-color: rgba(245, 165, 36, 0.6);
 }
 
 /* Address status line */
@@ -4402,7 +4402,7 @@ body:has(.modal.active) .nav-bar {
 }
 
 .trust-address-status.invalid {
-  color: #f87171;
+  color: #ff3b30;
 }
 
 /* VCF dropzone */
@@ -4425,7 +4425,7 @@ body:has(.modal.active) .nav-bar {
 .trust-vcf-dropzone:hover,
 .trust-vcf-dropzone.dragover {
   border-color: var(--weapon);
-  background: rgba(59, 130, 246, 0.05);
+  background: rgba(89, 217, 255, 0.05);
   color: var(--white-60);
 }
 
@@ -4583,8 +4583,8 @@ body:has(.modal.active) .nav-bar {
   align-items: center;
   text-align: center;
   padding: 24px;
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: rgba(255, 59, 48, 0.1);
+  border: 1px solid rgba(255, 59, 48, 0.3);
   border-radius: 8px;
   margin-bottom: 24px;
 }
@@ -4653,7 +4653,7 @@ body:has(.modal.active) .nav-bar {
   line-height: 1;
 }
 
-.trust-rule-delete:hover { color: #f87171; }
+.trust-rule-delete:hover { color: #ff3b30; }
 
 .trust-rules-empty {
   text-align: center;
@@ -4965,9 +4965,9 @@ body:has(.modal.active) .nav-bar {
 }
 
 .vcard-sig-badge.sig-verified {
-  background: rgba(34, 197, 94, 0.1);
-  border: 1px solid rgba(34, 197, 94, 0.25);
-  color: #22c55e;
+  background: rgba(245, 165, 36, 0.1);
+  border: 1px solid rgba(245, 165, 36, 0.25);
+  color: #f5a524;
 }
 
 .vcard-sig-badge.sig-unsigned {
@@ -4977,9 +4977,9 @@ body:has(.modal.active) .nav-bar {
 }
 
 .vcard-sig-badge.sig-invalid {
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.25);
-  color: #f87171;
+  background: rgba(255, 59, 48, 0.1);
+  border: 1px solid rgba(255, 59, 48, 0.25);
+  color: #ff3b30;
 }
 
 /* Actions footer - fixed height bar at bottom of tab */
@@ -5601,7 +5601,7 @@ body:has(.modal.active) .nav-bar {
 }
 
 .text-gradient {
-  background: linear-gradient(135deg, #3b82f6, #60a5fa);
+  background: linear-gradient(135deg, #59d9ff, #59d9ff);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -5705,7 +5705,7 @@ html {
   width: 40px;
   height: 40px;
   margin-bottom: 16px;
-  color: #60a5fa;
+  color: #59d9ff;
 }
 
 .feature-card .feature-icon svg {
@@ -6048,7 +6048,7 @@ a.chain-card:hover {
   padding: 6px 10px;
   margin-bottom: 14px;
   border-radius: 999px;
-  background: rgba(96, 165, 250, 0.12);
+  background: rgba(89, 217, 255, 0.12);
   color: #93c5fd;
   font-size: 0.72rem;
   font-weight: 600;
@@ -6165,12 +6165,12 @@ a.chain-card:hover {
   border-radius: 6px;
 }
 .encrypt-role-badge.sender {
-  background: rgba(59, 130, 246, 0.2);
-  color: #60a5fa;
+  background: rgba(89, 217, 255, 0.2);
+  color: #59d9ff;
 }
 .encrypt-role-badge.recipient {
-  background: rgba(16, 185, 129, 0.2);
-  color: #34d399;
+  background: rgba(245, 165, 36, 0.2);
+  color: #f5a524;
 }
 .encrypt-key-detail {
   margin-bottom: 8px;
@@ -6325,8 +6325,8 @@ a.chain-card:hover {
 .decrypt-result {
   margin-top: 12px;
   padding: 12px;
-  background: rgba(16, 185, 129, 0.1);
-  border: 1px solid rgba(16, 185, 129, 0.25);
+  background: rgba(245, 165, 36, 0.1);
+  border: 1px solid rgba(245, 165, 36, 0.25);
   border-radius: var(--radius-sm);
 }
 .decrypt-result label {
@@ -6334,7 +6334,7 @@ a.chain-card:hover {
   font-size: 0.7rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: #34d399;
+  color: #f5a524;
   margin-bottom: 6px;
 }
 .decrypt-result-value {
@@ -6402,3 +6402,14 @@ html[dir="rtl"] .x509-tag {
   unicode-bidi: embed;
   text-align: left;
 }
+
+/* Space Data Network style guide layer (spacedatanetwork.org/style-guide.html):
+   white primary pills, an unselectable header, the hero reel. */
+.nav-bar { -webkit-user-select: none; user-select: none; }
+.text-gradient { background: none; -webkit-text-fill-color: currentColor; color: #f5a524; }
+.hero-title { font-weight: 700; letter-spacing: -0.03em; }
+.glass-btn.primary { background: #f5f5f7; color: #000; border-color: #f5f5f7; }
+.glass-btn:hover:not(:disabled), .glass-btn.primary:hover:not(:disabled) { background: #f5f5f7; color: #000; border-color: #f5f5f7; filter: none; }
+.hero-actions:hover .glass-btn.primary:not(:hover) { background: var(--glass-bg); color: var(--white); border-color: var(--glass-border); }
+.hero-section .hero-reel { width: min(100%, 960px, max(560px, calc((100svh - 470px) * 16 / 9))); max-width: 100%; margin: 0 auto 28px; }
+.hero-section .hero-content { max-width: 1120px; }

@@ -6,11 +6,9 @@
   <meta name="description" content="HD Wallet">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>HD Wallet WASM - Hierarchical Deterministic Wallet Library</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=SF+Pro+Display:wght@400;500;600;700&family=SF+Mono:wght@400;500&display=swap" rel="stylesheet">
   <script type="module" crossorigin src="./assets/main-C8_6AG63.js"></script>
   <link rel="stylesheet" crossorigin href="./assets/main-Gd0H5xB0.css">
+  <link rel="stylesheet" href="media/reel/reel.css">
 </head>
 <body>
   <!-- Blurred Background -->
@@ -74,11 +72,17 @@
   <section class="hero-section page-section" id="hero">
     <div class="hero-content">
       <h1 class="hero-title">HD Wallet <span class="text-gradient">WASM</span></h1>
-      <p class="hero-subtitle" data-i18n="hero.subtitle">
-        A comprehensive hierarchical deterministic wallet implementation in pure C++,
-        compiled to WebAssembly for cross-platform compatibility. BIP-32/39/44 compliant
-        with multi-curve cryptography and multi-chain support.
+      <p class="hero-subtitle">
+        A hierarchical deterministic wallet in C++, compiled to WebAssembly.
       </p>
+      <figure class="reel-frame hero-reel">
+        <div class="reel-stage">
+          <video muted playsinline preload="auto" data-poster="media/hd-wallet-reel-poster.webp" aria-label="HD Wallet in 30 seconds, with music">
+            <source src="media/hd-wallet-reel.webm" type='video/webm; codecs="av01.0.08M.08"'>
+            <source src="media/hd-wallet-reel.mp4" type="video/mp4">
+          </video>
+        </div>
+      </figure>
       <div class="hero-actions">
         <button id="hero-login" class="glass-btn primary hero-btn" data-i18n="hero.demo">Try Interactive Demo</button>
         <a href="https://github.com/DigitalArsenal/hd-wallet-wasm" class="glass-btn hero-btn" target="_blank" rel="noopener">
@@ -593,5 +597,7 @@ const walletProofValid = wallet.x509.verifyWalletAttestation(certPem);</code></p
       });
     });
   </script>
+  <script src="media/reel/reel.js" defer></script>
+  <script src="assets/ai-credits/ai-credits.js" defer></script>
 </body>
 </html>
