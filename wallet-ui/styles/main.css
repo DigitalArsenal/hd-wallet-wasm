@@ -5471,7 +5471,7 @@ body:has(.modal.active) {
 }
 
 .hero-section.page-section {
-  justify-content: center;
+  justify-content: flex-start;
 }
 
 html {

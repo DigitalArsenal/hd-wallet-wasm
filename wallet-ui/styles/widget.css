@@ -5466,7 +5466,7 @@ body:has(#hd-wallet-ui-container .modal.active) {
 }
 
 #hd-wallet-ui-container .hero-section.page-section {
-  justify-content: center;
+  justify-content: flex-start;
 }
 
 #hd-wallet-ui-container {
