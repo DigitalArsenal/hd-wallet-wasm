@@ -58,7 +58,7 @@ describe('account modal wallet layout', () => {
     expect(app).toContain('fitWalletSelectorToSelectedLabel');
   });
 
-  it('left-aligns the account header and puts a large Bond label beside the green balance', () => {
+  it('left-aligns the account header and puts a large Bond label beside the amber balance', () => {
     const template = read('src/template.js');
     const css = read('styles/main.css');
     const headerInfoRule = css.match(/\.account-header-info\s*\{[^}]+\}/)?.[0] ?? '';
@@ -78,7 +78,7 @@ describe('account modal wallet layout', () => {
     expect(summaryRule).toContain('text-align: left');
     expect(balanceLineRule).toContain('align-items: center');
     expect(balanceLineRule).toContain('gap: 16px');
-    expect(valueRule).toContain('color: #4ade80');
+    expect(valueRule).toContain('color: #f5a524');
     expect(valueRule).toContain('font-size: 25px');
     expect(labelRule).toContain('font-size: 18px');
   });
