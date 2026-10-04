@@ -1,8 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-sdn-light="invert">
 <head>
   <meta charset="UTF-8">
-  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="assets/sdn-chrome/sdn-chrome.css">
+  <script src="assets/sdn-chrome/sdn-chrome.js"></script>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32' fill='none'><defs><linearGradient id='t' gradientUnits='userSpaceOnUse' x1='16' y1='29' x2='16' y2='3'><stop offset='0' stop-color='%23f5a524' stop-opacity='0'/><stop offset='.55' stop-color='%23f5a524' stop-opacity='.55'/><stop offset='1' stop-color='%23f5a524'/></linearGradient></defs><circle cx='16' cy='16' r='13' stroke='%23f5f5f7' stroke-width='1.6' opacity='.3'/><path d='M16 29A13 13 0 0 1 16 3' stroke='url(%23t)' stroke-width='2.2' stroke-linecap='round'/><path d='M16 10.2L10.4 20.1H21.6Z' stroke='%23f5f5f7' stroke-width='1.6' stroke-linejoin='round'/><circle cx='16' cy='10.2' r='2.6' fill='%23f5f5f7'/><circle cx='10.4' cy='20.1' r='2.6' fill='%23f5f5f7'/><circle cx='21.6' cy='20.1' r='2.6' fill='%23f5f5f7'/><circle cx='16' cy='3' r='2.5' fill='%23f5a524'/></svg>">
   <meta name="description" content="HD Wallet">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>HD Wallet WASM - Hierarchical Deterministic Wallet Library</title>
@@ -12,29 +14,25 @@
 </head>
 <body>
   <!-- Blurred Background -->
-  <div class="blurred-background"></div>
+  <div class="blurred-background" data-sdn-dark-only></div>
 
   <!-- Grid Animation Background -->
-  <canvas id="grid-canvas" class="grid-background"></canvas>
+  <canvas id="grid-canvas" class="grid-background" data-sdn-dark-only></canvas>
 
   <!-- Navigation -->
-  <nav class="nav-bar">
-    <div class="nav-content">
-      <a href="#" class="nav-logo">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path>
-        </svg>
-        <span>HD Wallet</span>
-      </a>
-      <div class="nav-links" id="demo-nav-links">
+  <header class="sdn-header">
+    <div class="sdn-header-inner">
+      <a class="sdn-header-brand" href="#"><span>HD Wallet</span></a>
+      <nav class="sdn-header-links" id="demo-nav-links" aria-label="Site">
         <a href="#packages" class="nav-link" data-i18n="nav.packages">Packages</a>
         <a href="#features" class="nav-link" data-i18n="nav.features">Features</a>
         <a href="#quickstart" class="nav-link" data-i18n="nav.quickstart">Quick Start</a>
         <a href="#x509-pki" class="nav-link" data-i18n="nav.pki">X.509 PKI</a>
         <a href="#blockchains" class="nav-link" data-i18n="nav.blockchains">Blockchains</a>
         <a href="#adversarial" class="nav-link" data-i18n="nav.security">Security</a>
-      </div>
-      <div class="nav-actions">
+        <a href="#stack" class="nav-link">Stack</a>
+      </nav>
+      <div class="sdn-header-actions">
         <select id="lang-switcher" class="lang-switcher" aria-label="Language" data-i18n-attr="aria-label:lang.label"></select>
         <button id="nav-login" class="nav-btn glass-btn primary" data-i18n="nav.login">Login</button>
         <button id="nav-keys" class="nav-icon-btn" style="display: none;" title="Account">
@@ -44,29 +42,11 @@
           </svg>
         </button>
         <button id="nav-logout" class="nav-btn glass-btn" style="display: none;" data-i18n="nav.logout">Logout</button>
-        <button id="nav-menu-btn" class="nav-menu-btn" aria-label="Toggle menu">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="3" y1="6" x2="21" y2="6"/>
-            <line x1="3" y1="12" x2="21" y2="12"/>
-            <line x1="3" y1="18" x2="21" y2="18"/>
-          </svg>
-        </button>
+        <button data-sdn-theme-toggle aria-label="Switch between light and dark theme"></button>
+        <button data-sdn-menu-toggle aria-label="Menu"></button>
       </div>
     </div>
-  </nav>
-
-  <!-- Mobile Menu -->
-  <div id="nav-mobile-menu" class="nav-mobile-menu">
-    <a href="#packages" class="nav-link" data-i18n="nav.packages">Packages</a>
-    <a href="#features" class="nav-link" data-i18n="nav.features">Features</a>
-    <a href="#quickstart" class="nav-link" data-i18n="nav.quickstart">Quick Start</a>
-    <a href="#x509-pki" class="nav-link" data-i18n="nav.pki">X.509 PKI</a>
-    <a href="#blockchains" class="nav-link" data-i18n="nav.blockchains">Blockchains</a>
-    <a href="#adversarial" class="nav-link" data-i18n="nav.security">Security</a>
-    <div class="nav-divider"></div>
-    <button id="mobile-login" class="glass-btn primary mobile-auth-btn" data-i18n="nav.login">Login</button>
-    <button id="mobile-logout" class="glass-btn mobile-auth-btn" style="display: none;" data-i18n="nav.logout">Logout</button>
-  </div>
+  </header>
 
   <!-- Hero Section -->
   <section class="hero-section page-section" id="hero">
@@ -548,18 +528,18 @@ const walletProofValid = wallet.x509.verifyWalletAttestation(certPem);</code></p
     </div>
   </section>
 
+  <section id="stack" class="page-section" data-sdn-stack="hd-wallet"></section>
+
   <!-- Footer -->
-  <footer class="site-footer">
-    <div class="section-container">
-      <div class="footer-content">
-        <p><span data-i18n="footer.license">HD Wallet WASM — Apache-2.0 License</span> <span id="version-tag"></span></p>
-        <div class="footer-links">
-          <a href="https://github.com/DigitalArsenal/hd-wallet-wasm" target="_blank" rel="noopener">GitHub</a>
-          <a href="https://www.npmjs.com/package/hd-wallet-wasm" target="_blank" rel="noopener">hd-wallet-wasm</a>
-          <a href="https://www.npmjs.com/package/hd-wallet-ui" target="_blank" rel="noopener">hd-wallet-ui</a>
-          <a href="mailto:tj@edgesource.com">tj@edgesource.com</a>
-        </div>
-      </div>
+  <footer class="sdn-footer">
+    <div class="sdn-footer-inner">
+      <a class="sdn-footer-brand" href="https://spacedatanetwork.org/">Space Data Network</a>
+      <nav class="sdn-footer-links" aria-label="Footer">
+        <a href="https://github.com/DigitalArsenal/hd-wallet-wasm">GitHub</a>
+        <a href="https://www.npmjs.com/package/hd-wallet-wasm">hd-wallet-wasm</a>
+        <a href="https://www.npmjs.com/package/hd-wallet-ui">hd-wallet-ui</a>
+      </nav>
+      <p class="sdn-footer-legal"><span data-i18n="footer.license">HD Wallet WASM — Apache-2.0 License</span> &middot; &copy; Edgesource Corporation &middot; <a href="mailto:tj@edgesource.com">tj@edgesource.com</a></p>
     </div>
   </footer>
 
@@ -568,7 +548,7 @@ const walletProofValid = wallet.x509.verifyWalletAttestation(certPem);</code></p
     // Deeplinking on scroll: update URL hash and active nav link
     (function() {
       const sections = document.querySelectorAll('.page-section[id]');
-      const navLinks = document.querySelectorAll('.nav-links .nav-link');
+      const navLinks = document.querySelectorAll('.sdn-header-links .nav-link');
 
       const observer = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
