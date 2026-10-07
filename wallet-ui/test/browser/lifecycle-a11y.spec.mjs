@@ -225,9 +225,9 @@ test('supports the complete login and confirmation keyboard path at 320 CSS pixe
   await expect(login).toBeFocused();
   await popup.keyboard.press('Enter');
 
-  const confirmation = popup.getByRole('dialog', { name: 'Confirm wallet action' });
+  const confirmation = popup.getByRole('dialog', { name: 'Connect your wallet to Space Data Network' });
   await expect(confirmation).toBeVisible({ timeout: 20_000 });
-  const confirm = confirmation.getByRole('button', { exact: true, name: 'Confirm' });
+  const confirm = confirmation.getByRole('button', { exact: true, name: 'Connect' });
   const confirmationCancel = confirmation.getByRole('button', { exact: true, name: 'Cancel' });
   await expect(confirm).toBeFocused();
   await popup.keyboard.press('Tab');

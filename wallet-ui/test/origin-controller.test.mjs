@@ -3400,9 +3400,6 @@ describe('isolated purpose-specific publication', () => {
       const confirm = await until(() => test.document.findAction('confirm'));
       expect(fetch).not.toHaveBeenCalled();
       expect(test.document.body.textContent).toContain(test.value.request.providerOrigin);
-      expect(test.document.body.textContent).toContain(test.value.request.bodySha256);
-      expect(test.document.body.textContent).toContain('does not inspect or certify');
-      expect(test.document.body.textContent).toContain(test.auth.keyId);
       confirm.dispatch('click', { isTrusted: false });
       expect(fetch).not.toHaveBeenCalled();
       confirm.dispatch('click', { isTrusted: true });

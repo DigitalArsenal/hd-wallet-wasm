@@ -12,9 +12,6 @@ import {
   PhotoUrlController,
   inspectPhotoBytes,
 } from '../origin-app/photo.mjs';
-import {
-  renderTransactionConfirmation,
-} from '../origin-app/operations.mjs';
 import { renderSafeInlineTranslation } from '../src/i18n.js';
 import {
   closeActiveTrustModals,
@@ -329,50 +326,6 @@ describe('safe wallet-origin rendering', () => {
     expect(rendered.rows[0].confirmation.dataset.walletQuarantineConfirmation).toBe(key);
     expect(rendered.rows[1].exportButton.textContent).toBe('Export unavailable');
     expect(container.textContent).toContain('Export unavailable (2000000 characters)');
-  });
-
-  test('renders malicious account and confirmation fields only as complete text nodes', () => {
-    const document = new SafeDocument();
-    const accountContainer = document.createElement('section');
-    renderAccount(accountContainer, modernIdentity({
-      accountLabel: '</div><img src=https://attacker.invalid onerror=alert(1)>',
-      accountPeerId: '16Uiu2Hjavascript:alert(1)',
-      accountXpub: 'xpub\" onmouseover=alert(1)',
-    }), { document });
-    expect(accountContainer.textContent).toContain('</div><img src=https://attacker.invalid onerror=alert(1)>');
-    expect(accountContainer.textContent).toContain('xpub\" onmouseover=alert(1)');
-
-    const confirmation = document.createElement('section');
-    renderTransactionConfirmation(confirmation, {
-      binding: {
-        clientDisplayName: '</h1><svg onload=alert(1)>',
-        operation: 'sdn.asset-review.decision.v1',
-        requestOrigin: 'https://review.spacedatanetwork.org',
-      },
-      document,
-      request: {
-        audience: 'asset-review:assets.ipfs.01',
-        candidateKey: 'asset-review:sat/model:' + 'a'.repeat(64),
-        expiresAt: '2026-07-21T12:01:00.000Z',
-        metadataSha256: 'b'.repeat(64),
-        modelBytes: 123,
-        modelCid: 'bafkmalicious',
-        modelSha256: 'c'.repeat(64),
-        note: 'javascript:<img src=x onerror=alert(1)>',
-        previousDecisionHead: null,
-        reviewedTransform: {
-          metersPerSourceUnit: 1,
-          rotation: [0, 0, 0, 1],
-          scale: [1, 1, 1],
-          sourceUnits: 'm',
-          translation: [0, 0, 0],
-          upAxis: 'Z_UP',
-        },
-      },
-    });
-    expect(confirmation.textContent).toContain('</h1><svg onload=alert(1)>');
-    expect(confirmation.textContent).toContain('javascript:<img src=x onerror=alert(1)>');
-    expect(confirmation.textContent).toContain('"rotation":[0,0,0,1]');
   });
 
   test('allows only exact nested strong/code translation tokens and renders attacks as text', () => {

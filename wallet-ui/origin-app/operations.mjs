@@ -286,48 +286,84 @@ function appendRow(document, container, label, value) {
   const row = document.createElement('div');
   row.className = 'wallet-confirmation-row';
   const labelNode = document.createElement('strong');
-  labelNode.textContent = `${label}: `;
+  labelNode.textContent = label;
   const valueNode = document.createElement('span');
-  valueNode.textContent = value === null ? 'null' : typeof value === 'string' ? value : canonicalJson(value);
+  valueNode.textContent = value;
   row.append(labelNode, valueNode);
   container.append(row);
 }
 
-export function renderTransactionConfirmation(container, {
-  binding,
-  document,
-  identity = null,
-  request,
-  transaction = null,
-}) {
+function hostOf(origin) {
+  try {
+    return new URL(origin).host;
+  } catch {
+    return String(origin ?? '');
+  }
+}
+
+const SHARE_DETAIL = 'The site sees your public key and address. It cannot spend or sign anything without asking you.';
+
+/**
+ * What a person is about to confirm, in words: a sentence, the few facts it
+ * rests on, and the button's verb (owner 2026-10-07: "simplify this screen to
+ * just say what I'm about to confirm"). Transaction ids, hashes, registry
+ * releases, expiry and key ids are the wallet's checks, not the person's, so
+ * they are not shown.
+ */
+export function describeTransaction(binding, request = {}) {
+  const host = hostOf(binding.requestOrigin);
+  const name = String(binding.clientDisplayName ?? '').trim();
+  const who = name || host;
+  const facts = name && host && name !== host ? [['Site', host]] : [];
+  const about = (title, detail, action, extra = []) => ({
+    title,
+    detail,
+    action,
+    facts: [...facts, ...extra].filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== ''),
+  });
+  switch (binding.operation) {
+    case 'sdn.auth.raw-challenge.v1':
+    case 'sdn.auth.jcs-envelope.v2':
+      return about(`Sign in to ${who}`, 'This proves you hold this wallet. Nothing is paid, sent or shared.', 'Sign in');
+    case 'sdn.wallet.connect.v1':
+      return about(`Connect your wallet to ${who}`, SHARE_DETAIL, 'Connect');
+    case 'sdn.wallet.account.v1':
+      return about(`Share your account with ${who}`, SHARE_DETAIL, 'Share');
+    case 'sdn.auth.publish-request.v1':
+      return about(`Publish to ${hostOf(request.providerOrigin)}`, 'One signed publication of exactly this data. It grants no session and no later writes.', 'Publish', [
+        ['Provider', request.providerOrigin],
+        ['Data', request.entityName],
+        ['Schema', request.schema],
+        ['Documents', request.documentCount],
+      ]);
+    case 'sdn.asset-review.authority-activation.v1':
+      return about('Activate asset review', `Your key becomes the asset reviewer ${who} accepts.`, 'Activate');
+    case 'sdn.asset-review.decision.v1': {
+      const approve = request.decision !== 'disapprove';
+      return about(approve ? 'Approve this model' : 'Disapprove this model', `Your decision is signed and published by ${who}.`, approve ? 'Approve' : 'Disapprove', [
+        ['Model', String(request.candidateKey ?? '').replace(/^asset-review:/u, '').replace(/:[0-9a-f]{64}$/u, '')],
+        ['Note', request.note],
+      ]);
+    }
+    default:
+      return about(`Confirm a request from ${who}`, '', 'Confirm');
+  }
+}
+
+export function renderTransactionConfirmation(container, { binding, document, request }) {
+  const about = describeTransaction(binding, request ?? {});
   container.replaceChildren();
   const heading = document.createElement('h1');
   heading.id = 'wallet-confirmation-heading';
-  heading.textContent = 'Confirm wallet action';
+  heading.textContent = about.title;
   container.append(heading);
-  appendRow(document, container, 'Client', binding.clientDisplayName);
-  appendRow(document, container, 'Requesting origin', binding.requestOrigin);
-  appendRow(document, container, 'Operation', binding.operation);
-  if (binding.audience !== undefined) appendRow(document, container, 'Audience', binding.audience);
-  if (binding.callbackUri !== undefined) appendRow(document, container, 'Callback URI', binding.callbackUri);
-  if (transaction) {
-    appendRow(document, container, 'Transaction ID', transaction.transactionId);
-    appendRow(document, container, 'Request hash', transaction.requestSha256);
-    appendRow(document, container, 'Registry release', transaction.registryVersion);
-    appendRow(document, container, 'Transaction expiry', transaction.expiresAt);
+  if (about.detail) {
+    const detail = document.createElement('p');
+    detail.className = 'wallet-confirmation-detail';
+    detail.textContent = about.detail;
+    container.append(detail);
   }
-  const purpose = binding.operation.startsWith('sdn.asset-review.')
-    ? 'asset-review-approval'
-    : binding.operation.startsWith('sdn.auth.') ? 'sdn-authentication' : null;
-  const key = purpose && Array.isArray(identity?.keys)
-    ? identity.keys.find((candidate) => candidate?.purpose === purpose)
-    : null;
-  if (key?.keyId) appendRow(document, container, 'Signing key ID', key.keyId);
-  if (binding.operation === 'sdn.auth.publish-request.v1') {
-    appendRow(document, container, 'Action', 'Publish this exact payload to the provider shown below. This grants no session or future write permission.');
-    appendRow(document, container, 'Descriptions', 'Entity name, ID, schema and document count are supplied by the requesting application; the wallet does not inspect or certify the payload.');
-  }
-  for (const field of Object.keys(request).sort()) appendRow(document, container, field, request[field]);
+  for (const [label, value] of about.facts) appendRow(document, container, label, String(value));
   return container;
 }
 
@@ -400,7 +436,7 @@ async function signPublication({ assertCurrent, binding, capabilities, handle, i
   return buildSdnPublishResult({ ...signed, challengeId: challenge.challenge_id, challengeBase64url });
 }
 
-export function requestTrustedConfirmation({ binding, document, identity = null, request, transaction = null }) {
+export function requestTrustedConfirmation({ binding, document, request }) {
   const previousFocus = document.activeElement ?? null;
   const root = document.createElement('section');
   root.className = 'wallet-confirmation';
@@ -408,19 +444,13 @@ export function requestTrustedConfirmation({ binding, document, identity = null,
   root.setAttribute?.('aria-modal', 'true');
   root.setAttribute?.('aria-labelledby', 'wallet-confirmation-heading');
   root.tabIndex = -1;
-  renderTransactionConfirmation(root, { binding, document, identity, request, transaction });
+  renderTransactionConfirmation(root, { binding, document, request });
   const actions = document.createElement('div');
   actions.className = 'wallet-confirmation-actions';
   const confirm = document.createElement('button');
   confirm.type = 'button';
   confirm.dataset.walletAction = 'confirm';
-  confirm.textContent = request?.decision === 'approve'
-    ? 'Approve'
-    : request?.decision === 'disapprove'
-      ? 'Disapprove'
-      : binding.operation === 'sdn.asset-review.authority-activation.v1'
-        ? 'Activate'
-        : 'Confirm';
+  confirm.textContent = describeTransaction(binding, request ?? {}).action;
   const cancel = document.createElement('button');
   cancel.type = 'button';
   cancel.dataset.walletAction = 'cancel';

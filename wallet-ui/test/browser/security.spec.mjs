@@ -415,12 +415,12 @@ test('keeps trusted-click popup order synchronous through real connect and Accou
   await popup.getByLabel('Password').fill('Correct Horse Battery Staple!');
   await popup.getByRole('button', { exact: true, name: 'Login' }).click();
   await expect(popup.getByLabel('Password')).toHaveCount(0, { timeout: 20_000 });
-  await expect(popup.getByRole('heading', { name: 'Confirm wallet action' })).toBeVisible({ timeout: 20_000 });
+  await expect(popup.getByRole('heading', { name: 'Connect your wallet to Space Data Network' })).toBeVisible({ timeout: 20_000 });
   const publishedConnect = popup.waitForRequest((request) => request.method() === 'POST'
     && request.url() === `https://wallet.spacedatanetwork.org/relay/v1/transactions/${registrationBody.transactionId}/result`);
   const redeemEvent = page.waitForRequest((request) => request.method() === 'POST'
     && request.url() === 'https://wallet.spacedatanetwork.org/relay/v1/codes/redeem');
-  await popup.getByRole('button', { exact: true, name: 'Confirm' }).click();
+  await popup.getByRole('button', { exact: true, name: 'Connect' }).click();
   const connectPublication = await publishedConnect;
   await redeemEvent;
   expect(connectPublication.postDataJSON()).toMatchObject({
@@ -444,8 +444,8 @@ test('keeps trusted-click popup order synchronous through real connect and Accou
   await accountPopup.getByLabel('Username').fill('  ALICE_01  ');
   await accountPopup.getByLabel('Password').fill('Correct Horse Battery Staple!');
   await accountPopup.getByRole('button', { exact: true, name: 'Login' }).click();
-  await expect(accountPopup.getByRole('heading', { name: 'Confirm wallet action' })).toBeVisible({ timeout: 20_000 });
-  await accountPopup.getByRole('button', { exact: true, name: 'Confirm' }).click();
+  await expect(accountPopup.getByRole('heading', { name: 'Share your account with Space Data Network' })).toBeVisible({ timeout: 20_000 });
+  await accountPopup.getByRole('button', { exact: true, name: 'Share' }).click();
   await expect(accountPopup.getByRole('heading', { exact: true, name: 'Account' })).toBeVisible({ timeout: 20_000 });
   const accountPublication = accountPopup.waitForRequest((request) => request.method() === 'POST'
     && request.url() === `https://wallet.spacedatanetwork.org/relay/v1/transactions/${accountBody.transactionId}/result`);
