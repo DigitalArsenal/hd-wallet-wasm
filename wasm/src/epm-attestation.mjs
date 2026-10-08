@@ -141,6 +141,9 @@ export function buildEPMSigningContent(epm) {
   epmAddStr(content, 'OCCUPATION', g('OCCUPATION'));
   epmAddStr(content, 'EMAIL', g('EMAIL'));
   epmAddStr(content, 'TELEPHONE', g('TELEPHONE'));
+  // SDS 1.239.0 annex rule 7: the photo (an RFC 2397 data URI) is signed like
+  // the name it pictures, as SDN's Go signer and the modules' C++ projection do.
+  epmAddStr(content, 'PHOTO', g('PHOTO'));
 
   const addr = g('ADDRESS');
   if (addr && typeof addr === 'object') {

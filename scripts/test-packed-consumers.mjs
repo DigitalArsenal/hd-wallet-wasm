@@ -219,7 +219,7 @@ try {
   const uiManifest = JSON.parse(await readFile(join(installedUi, 'package.json'), 'utf8'));
   assert.equal(JSON.stringify(coreManifest).includes('workspace:'), false);
   assert.equal(JSON.stringify(uiManifest).includes('workspace:'), false);
-  assert.deepEqual(uiManifest.dependencies, { 'hd-wallet-wasm': '2.0.31' });
+  assert.deepEqual(uiManifest.dependencies, { 'hd-wallet-wasm': '2.0.32' });
   assert.equal(uiManifest.scripts?.prepack, undefined);
 
   const [coreReadme, uiReadme] = await Promise.all([
