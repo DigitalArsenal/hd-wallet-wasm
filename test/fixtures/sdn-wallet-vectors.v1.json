@@ -281,9 +281,9 @@
         "name": "username-leading-nbsp",
         "inputEncoding": "utf8-hex",
         "inputHex": "c2a0616263",
-        "accepted": false,
-        "canonicalUsername": null,
-        "error": "username-format"
+        "accepted": true,
+        "canonicalUsername": " abc",
+        "error": null
       },
       {
         "name": "username-leading-tab",
@@ -297,9 +297,9 @@
         "name": "username-non-ascii",
         "inputEncoding": "utf8-hex",
         "inputHex": "616cc3ad6365",
-        "accepted": false,
-        "canonicalUsername": null,
-        "error": "username-format"
+        "accepted": true,
+        "canonicalUsername": "alíce",
+        "error": null
       },
       {
         "name": "username-invalid-utf8",

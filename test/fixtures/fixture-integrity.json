@@ -24,8 +24,8 @@
     },
     {
       "path": "test/fixtures/sdn-wallet-vectors.v1.json",
-      "bytes": 36960,
-      "sha256": "63fc032f3243d18b5ce5e47a4d82ad1ebc7c5213e9c8323b1899763c436e8bc1"
+      "bytes": 36939,
+      "sha256": "ff2d58ff1caeaaf68e221bc3235f1fd3830f90966b5e53a03b6d522ace219891"
     },
     {
       "path": "test/fixtures/trezor-bip39-vectors.json",

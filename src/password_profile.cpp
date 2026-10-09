@@ -109,15 +109,8 @@ bool decodeStrictUtf8(std::span<const uint8_t> input,
     return true;
 }
 
-bool isUsernameFirst(uint8_t byte) {
-    return (byte >= 'a' && byte <= 'z') || (byte >= '0' && byte <= '9');
-}
-
-bool isUsernameRest(uint8_t byte) {
-    return isUsernameFirst(byte) || byte == '.' || byte == '_' || byte == '-';
-}
-
-bool isForbiddenPasswordScalar(uint32_t scalar) {
+// C0 controls, DEL and C1 controls: refused in usernames and passwords alike.
+bool isControlScalar(uint32_t scalar) {
     return scalar <= 0x1f || (scalar >= 0x7f && scalar <= 0x9f);
 }
 
@@ -213,7 +206,7 @@ internal::DetailedPasswordOutcome derivePasswordSeedImpl(
         if (!decodeStrictUtf8(password, scalars)) {
             return policyFailure(PasswordError::InvalidUtf8);
         }
-        if (std::any_of(scalars.begin(), scalars.end(), isForbiddenPasswordScalar)) {
+        if (std::any_of(scalars.begin(), scalars.end(), isControlScalar)) {
             return policyFailure(PasswordError::InvalidPasswordScalar);
         }
         if (scalars.size() < kPasswordMinScalars || scalars.size() > kPasswordMaxScalars) {
@@ -326,7 +319,14 @@ canonicalize_username(std::span<const uint8_t> rawUtf8) {
     try {
         SecureVector<uint32_t> scalars;
         if (!decodeStrictUtf8(rawUtf8, scalars)) return PasswordError::InvalidUtf8;
+        if (std::any_of(scalars.begin(), scalars.end(), isControlScalar)) {
+            return PasswordError::InvalidUsername;
+        }
 
+        // Any well-formed username of 3-64 bytes after trimming spaces is
+        // accepted. ASCII capitals fold to lowercase; every other byte is kept
+        // as entered. A byte in 'A'..'Z' is never part of a multi-byte UTF-8
+        // sequence, so folding byte by byte cannot alter non-ASCII text.
         size_t begin = 0;
         size_t end = rawUtf8.size();
         while (begin < end && rawUtf8[begin] == 0x20) ++begin;
@@ -338,10 +338,6 @@ canonicalize_username(std::span<const uint8_t> rawUtf8) {
         for (size_t i = begin; i < end; ++i) {
             uint8_t byte = rawUtf8[i];
             if (byte >= 'A' && byte <= 'Z') byte = static_cast<uint8_t>(byte + ('a' - 'A'));
-            if ((i == begin && !isUsernameFirst(byte)) ||
-                (i != begin && !isUsernameRest(byte))) {
-                return PasswordError::InvalidUsername;
-            }
             canonical.push_back(static_cast<char>(byte));
         }
         return std::move(canonical);

@@ -105,6 +105,18 @@ function wellFormedString(value) {
   return true;
 }
 
+// The wallet username in canonical form, mirroring the native
+// canonicalize_username: 3-64 UTF-8 bytes, no control character (C0, DEL, C1),
+// no leading or trailing space, no ASCII capital. Any other text is allowed.
+export function isCanonicalWalletUsername(value) {
+  if (!wellFormedString(value)) return false;
+  const byteLength = encoder.encode(value).length;
+  return byteLength >= 3 && byteLength <= 64
+    && !/[\u0000-\u001f\u007f-\u009f]/u.test(value)
+    && !/^ | $/u.test(value)
+    && !/[A-Z]/u.test(value);
+}
+
 function encodeBase64url(bytes) {
   let binary = '';
   for (let offset = 0; offset < bytes.length; offset += 0x8000) {
@@ -160,14 +172,10 @@ function freezeRecord(record) {
 export function validateRememberedWalletRecord(input) {
   const value = exactRecord(input, RECORD_FIELDS);
   const aad = exactRecord(value.aad, AAD_FIELDS);
-  const usernameBytes = wellFormedString(value.canonicalUsername)
-    ? encoder.encode(value.canonicalUsername)
-    : null;
   if (value.schemaVersion !== 2 || value.storageProfile !== PROFILE
       || aad.schemaVersion !== 2 || aad.storageProfile !== PROFILE
       || aad.identityScheme !== IDENTITY_SCHEME || aad.seedProfile !== SEED_PROFILE
-      || !usernameBytes || usernameBytes.length < 3 || usernameBytes.length > 64
-      || !/^[a-z0-9][a-z0-9._-]*$/u.test(value.canonicalUsername)
+      || !isCanonicalWalletUsername(value.canonicalUsername)
       || !LOWER_HEX_32.test(aad.usernameSha256)
       || value.credentialIdBase64url !== aad.credentialIdBase64url
       || !wellFormedString(value.createdAt) || !RFC3339_MILLISECONDS.test(value.createdAt)

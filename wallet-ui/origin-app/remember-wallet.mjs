@@ -11,6 +11,7 @@ import {
   forgetRememberedWallet,
   inspectQuarantinedWalletStorage,
   inspectRememberedWalletStorage,
+  isCanonicalWalletUsername,
 } from '../src/wallet-storage.js';
 
 const encoder = new TextEncoder();
@@ -342,17 +343,14 @@ function decodeUsername(input) {
   }
 }
 
+// Trims spaces and folds ASCII capitals, as the native derivation does, so the
+// result names the same wallet the username and password derive.
 export function canonicalizeWalletUsername(input) {
-  const decoded = decodeUsername(input);
-  const canonical = decoded
+  const canonical = decodeUsername(input)
     .replace(/^ +/u, '')
     .replace(/ +$/u, '')
     .replace(/[A-Z]/gu, (character) => character.toLowerCase());
-  const canonicalBytes = encoder.encode(canonical);
-  if (canonicalBytes.length < 3 || canonicalBytes.length > 64
-      || !/^[a-z0-9][a-z0-9._-]*$/u.test(canonical)) {
-    fail('INVALID_USERNAME');
-  }
+  if (!isCanonicalWalletUsername(canonical)) fail('INVALID_USERNAME');
   return canonical;
 }
 

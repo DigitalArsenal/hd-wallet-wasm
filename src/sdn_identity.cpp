@@ -798,6 +798,23 @@ SecretBuffer rememberInfo(std::string_view username) {
     return result;
 }
 
+// The remembered plaintext is a JCS object, so the username is written as a
+// JSON string body: '"' and '\\' are escaped. Control characters, the only
+// other bytes JCS escapes, never get here: canonicalize_username refuses them.
+std::string jsonStringBody(std::string_view value) {
+    const auto escaped = [](char character) {
+        return character == '"' || character == '\\';
+    };
+    std::string output;
+    output.reserve(value.size() + static_cast<size_t>(
+        std::count_if(value.begin(), value.end(), escaped)));
+    for (const char character : value) {
+        if (escaped(character)) output.push_back('\\');
+        output.push_back(character);
+    }
+    return output;
+}
+
 SecretBuffer rememberPlaintext(std::span<const uint8_t> password,
                                std::string_view username) {
     const SecretBuffer encoded = encodeBase64UrlSecret(password);
@@ -807,13 +824,14 @@ SecretBuffer rememberPlaintext(std::span<const uint8_t> password,
     const std::string middle =
         "\",\"seedProfile\":\"password-scrypt-v2\",\"username\":\"";
     constexpr std::string_view suffix = "\"}";
+    const std::string username_json = jsonStringBody(username);
     SecretBuffer output;
     output.reserve(prefix.size() + encoded.size() + middle.size() +
-                   username.size() + suffix.size());
+                   username_json.size() + suffix.size());
     for (const uint8_t byte : bytes(prefix)) output.push_back(byte);
     for (const uint8_t byte : encoded.span()) output.push_back(byte);
     for (const uint8_t byte : bytes(middle)) output.push_back(byte);
-    for (const uint8_t byte : bytes(username)) output.push_back(byte);
+    for (const uint8_t byte : bytes(username_json)) output.push_back(byte);
     for (const uint8_t byte : bytes(suffix)) output.push_back(byte);
     return output;
 }
@@ -839,7 +857,7 @@ IdentityOutcome<SecretBuffer> passwordFromPlaintext(
     const size_t username_begin = middle_position + middle.size();
     const std::string_view username = input.substr(
         username_begin, input.size() - suffix.size() - username_begin);
-    if (username != expected_username) return IdentityError::InvalidRequest;
+    if (username != jsonStringBody(expected_username)) return IdentityError::InvalidRequest;
     bool decoded_ok = false;
     auto password = decodeBase64Url(encoded, decoded_ok);
     const auto canonical_encoded = encodeBase64UrlSecret(password.span());

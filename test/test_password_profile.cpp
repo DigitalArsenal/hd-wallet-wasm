@@ -161,28 +161,6 @@ TEST_CASE(PasswordProfile, PasswordSeedIsMoveOnlyAndNothrowMovable) {
     ASSERT_TRUE(second.bytes.empty());
 }
 
-TEST_CASE(PasswordProfile, UsernameCanonicalizationIsAsciiOnlyAndGrammarBounded) {
-    auto canonical = hd_wallet::sdn::canonicalize_username(asBytes(std::string("  ALICE_01  ")));
-    ASSERT_TRUE(std::holds_alternative<std::string>(canonical));
-    ASSERT_STR_EQ("alice_01", std::get<std::string>(canonical));
-
-    for (const std::string& accepted : {std::string("abc"), std::string(64, 'a'),
-                                        std::string("a.b-c_d9")}) {
-        ASSERT_TRUE(std::holds_alternative<std::string>(
-            hd_wallet::sdn::canonicalize_username(asBytes(accepted))));
-    }
-    for (const std::string& rejected : {std::string("ab"), std::string(65, 'a'),
-                                        std::string("-abc"), std::string("a+b"),
-                                        std::string("a bc"), std::string("abc\t")}) {
-        assertError(PasswordError::InvalidUsername,
-                    hd_wallet::sdn::canonicalize_username(asBytes(rejected)));
-    }
-
-    const auto leadingNbsp = bytes({0xc2, 0xa0, 'a', 'b', 'c'});
-    assertError(PasswordError::InvalidUsername,
-                hd_wallet::sdn::canonicalize_username(asBytes(leadingNbsp)));
-}
-
 TEST_CASE(PasswordProfile, UsernameValidationIsStrictAndByteCapHasPrecedence) {
     const std::string atRawByteLimit = std::string(192, ' ') + std::string(64, 'A');
     auto atLimit = hd_wallet::sdn::canonicalize_username(asBytes(atRawByteLimit));
