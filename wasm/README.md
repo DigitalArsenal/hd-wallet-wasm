@@ -7,7 +7,7 @@ canonical EPM attestations.
 ## Install
 
 ```sh
-npm install hd-wallet-wasm@2.0.33
+npm install hd-wallet-wasm@2.1.0
 ```
 
 Use the package through a standards-compliant ESM bundler or from an installed
@@ -44,8 +44,17 @@ const seed = wallet.mnemonic.toSeed(phrase, 'optional passphrase');
 const master = wallet.hdkey.fromSeed(seed);
 const child = master.derivePath("m/44'/0'/0'/0/0");
 
-const digest = wallet.utils.sha256(new TextEncoder().encode('example'));
-const signature = wallet.curves.secp256k1.sign(digest, child.privateKey());
+// sign()/verify() hash the message themselves (SHA-256; SHA-384 for P-384):
+// pass the message, never a hash of it.
+const message = new TextEncoder().encode('example');
+const signature = wallet.curves.secp256k1.sign(message, child.privateKey());
+const valid = wallet.curves.secp256k1.verify(message, signature, child.publicKey());
+
+// signRecoverable()/recover() take a 32-byte hash you computed, used as given.
+const { signature: rs, recoveryId } = wallet.curves.secp256k1.signRecoverable(
+  wallet.utils.keccak256(message),
+  child.privateKey(),
+);
 
 wallet.utils.secureWipe(seed);
 child.wipe();
@@ -115,6 +124,14 @@ const valid = verifyEPMSignature(wallet, epm, publicKey, {
   curve: 'ed25519',
 });
 ```
+
+A secp256k1 EPM signature (`{ curve: 'secp256k1' }`) is DER-encoded ECDSA over
+SHA-256 of the canonical content, hashed once, as the SDS EPM annex and SDN's
+Go and C++ verifiers require. Bitcoin chain proofs sign the Bitcoin
+signed-message hash and Ethereum chain proofs the EIP-191 `personal_sign` hash,
+each as a 65-byte compact recoverable signature; `verifyChainProof` recovers the
+key from that protocol hash. Signatures from 2.0.x, which hashed twice, do not
+verify.
 
 The dedicated attestation subpath and root package expose the same declaration
 surface for these helpers.

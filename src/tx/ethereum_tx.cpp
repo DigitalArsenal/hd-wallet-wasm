@@ -8,6 +8,7 @@
 
 #include "hd_wallet/tx/ethereum_tx.h"
 #include "hd_wallet/config.h"
+#include "hd_wallet/ecdsa.h"
 #include "hd_wallet/secure_rng.h"
 
 #include <algorithm>
@@ -637,67 +638,28 @@ size_t EthereumTransaction::size() const {
 
 #if HD_WALLET_USE_CRYPTOPP
 
-// Helper to sign with secp256k1 and get recovery ID
+// Sign the Keccak-256 signing hash as given (RFC 6979 deterministic k, low-S)
+// and return r, s and the recovery id (0 or 1) that v encodes.
 static bool signECDSARecoverable(
   const Bytes32& hash,
   const Bytes32& privateKey,
   Bytes32& outR,
   Bytes32& outS,
-  uint8_t& outV
+  uint8_t& outRecoveryId
 ) {
-  using namespace CryptoPP;
-
-  try {
-    // Create private key
-    ECDSA<ECP, SHA256>::PrivateKey privKey;
-    Integer x(privateKey.data(), privateKey.size());
-    privKey.Initialize(ASN1::secp256k1(), x);
-
-    // Get public key for recovery
-    ECDSA<ECP, SHA256>::PublicKey pubKey;
-    privKey.MakePublicKey(pubKey);
-
-    // Create signer with deterministic K (RFC 6979)
-    SecureRandomGenerator rng;
-    ECDSA<ECP, SHA256>::Signer signer(privKey);
-
-    // Sign (produces DER-encoded signature)
-    std::string signature;
-    StringSource ss(
-      hash.data(), hash.size(), true,
-      new SignerFilter(rng, signer, new StringSink(signature))
-    );
-
-    // Parse R and S from signature
-    // Crypto++ ECDSA signatures are (r, s) concatenated, each 32 bytes for secp256k1
-    if (signature.size() < 64) {
-      return false;
-    }
-
-    std::copy(signature.begin(), signature.begin() + 32, outR.begin());
-    std::copy(signature.begin() + 32, signature.begin() + 64, outS.begin());
-
-    // Determine recovery ID by trying both values
-    // For simplicity, we'll use 0 and adjust based on public key recovery
-    // In production, you'd properly recover the public key
-    outV = 0;
-
-    // Check if S > N/2, if so, use N - S (low-S normalization)
-    // This is required by Ethereum
-    Integer n = privKey.GetGroupParameters().GetSubgroupOrder();
-    Integer halfN = n >> 1;
-    Integer sInt(outS.data(), outS.size());
-
-    if (sInt > halfN) {
-      sInt = n - sInt;
-      sInt.Encode(outS.data(), 32);
-      outV ^= 1;  // Flip V
-    }
-
-    return true;
-  } catch (...) {
+  auto signature = ecdsa::secp256k1SignRecoverable(privateKey, hash);
+  if (!signature.ok()) {
     return false;
   }
+  // secp256k1SignRecoverable returns v (27 + recovery id) || r || s.
+  const uint8_t recoveryId = static_cast<uint8_t>(signature.value[0] - 27);
+  if (recoveryId > 1) {
+    return false;  // r >= n (recovery id 2/3) is not representable in Ethereum's v
+  }
+  std::copy(signature.value.begin() + 1, signature.value.begin() + 33, outR.begin());
+  std::copy(signature.value.begin() + 33, signature.value.end(), outS.begin());
+  outRecoveryId = recoveryId;
+  return true;
 }
 
 #endif

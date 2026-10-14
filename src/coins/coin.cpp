@@ -9,6 +9,7 @@
 #include "hd_wallet/coins/ethereum.h"
 #include "hd_wallet/coins/polkadot.h"
 #include "hd_wallet/coins/solana.h"
+#include "hd_wallet/ecdsa.h"
 #include "hd_wallet/secure_rng.h"
 
 #include <algorithm>
@@ -816,102 +817,32 @@ Result<Bytes33> ecdsaRecover(const Bytes32& hash, const ECDSASignature& signatur
     return Result<Bytes33>::success(std::move(result));
 }
 
-#else // !HD_WALLET_USE_LIBSECP256K1 - Crypto++ fallback for native builds
+#else // !HD_WALLET_USE_LIBSECP256K1 - native builds use the ecdsa module
 
+// The hash is the caller's protocol digest and is signed as given: RFC 6979
+// deterministic k, low-S, recovery id in v (0 or 1), like the libsecp256k1 path.
 Result<ECDSASignature> ecdsaSign(const Bytes32& hash, const Bytes32& private_key) {
-  try {
-    using namespace CryptoPP;
-
-    // Initialize secp256k1
-    ECDSA<ECP, SHA256>::PrivateKey key;
-    key.Initialize(ASN1::secp256k1(), Integer(private_key.data(), 32));
-
-    // Create signer with deterministic k (RFC 6979)
-    ECDSA<ECP, SHA256>::Signer signer(key);
-
-    // Sign
-    SecureRandomGenerator rng;
-    size_t sig_len = signer.MaxSignatureLength();
-    std::vector<uint8_t> signature(sig_len);
-    sig_len = signer.SignMessage(rng, hash.data(), 32, signature.data());
-    signature.resize(sig_len);
-
-    // Parse DER signature
-    auto parsed = ECDSASignature::fromDER(ByteVector(signature.begin(), signature.end()));
-    if (!parsed.ok()) {
-      return Result<ECDSASignature>::fail(Error::INVALID_SIGNATURE);
-    }
-
-    // Try to determine recovery ID by trying both
-    for (uint8_t v = 0; v < 2; v++) {
-      parsed.value.v = v;
-      auto recovered = ecdsaRecover(hash, parsed.value);
-      if (recovered.ok()) {
-        // Verify this matches our public key
-        Bytes33 our_pubkey;
-        const DL_GroupParameters_EC<ECP>& params = key.GetGroupParameters();
-        ECP::Point Q = params.ExponentiateBase(key.GetPrivateExponent());
-        our_pubkey[0] = Q.y.IsOdd() ? 0x03 : 0x02;
-        Q.x.Encode(our_pubkey.data() + 1, 32);
-
-        if (recovered.value == our_pubkey) {
-          return parsed;
-        }
-      }
-    }
-
-    // Default to v=0 if we couldn't determine
-    parsed.value.v = 0;
-    return parsed;
-  } catch (const std::exception& e) {
+  auto recoverable = ecdsa::secp256k1SignRecoverable(private_key, hash);
+  if (!recoverable.ok()) {
     return Result<ECDSASignature>::fail(Error::INVALID_PRIVATE_KEY);
   }
+  // secp256k1SignRecoverable returns v (27 + recovery id) || r || s.
+  ECDSASignature sig;
+  std::copy(recoverable.value.begin() + 1, recoverable.value.begin() + 33, sig.r.begin());
+  std::copy(recoverable.value.begin() + 33, recoverable.value.end(), sig.s.begin());
+  sig.v = static_cast<uint8_t>(recoverable.value[0] - 27);
+  return Result<ECDSASignature>::success(std::move(sig));
 }
 
 Result<bool> ecdsaVerify(const Bytes32& hash, const ECDSASignature& signature, const ByteVector& public_key) {
-  try {
-    using namespace CryptoPP;
-
-    if (public_key.size() != 33 && public_key.size() != 65) {
-      return Result<bool>::fail(Error::INVALID_PUBLIC_KEY);
-    }
-
-    // Initialize secp256k1
-    ECDSA<ECP, SHA256>::PublicKey key;
-    const DL_GroupParameters_EC<ECP>& params = ECDSA<ECP, SHA256>::PrivateKey().AccessGroupParameters();
-    key.AccessGroupParameters().Initialize(ASN1::secp256k1());
-
-    // Decode public key
-    ECP::Point Q;
-    if (public_key.size() == 33) {
-      // Compressed
-      bool y_odd = public_key[0] == 0x03;
-      Integer x(public_key.data() + 1, 32);
-      key.GetGroupParameters().GetCurve().DecodePoint(Q, public_key.data(), public_key.size());
-    } else {
-      // Uncompressed
-      if (public_key[0] != 0x04) {
-        return Result<bool>::fail(Error::INVALID_PUBLIC_KEY);
-      }
-      Integer x(public_key.data() + 1, 32);
-      Integer y(public_key.data() + 33, 32);
-      Q = ECP::Point(x, y);
-    }
-
-    key.SetPublicElement(Q);
-
-    // Create verifier
-    ECDSA<ECP, SHA256>::Verifier verifier(key);
-
-    // Convert signature to DER
-    ByteVector der_sig = signature.toDER();
-
-    // Verify
-    bool valid = verifier.VerifyMessage(hash.data(), 32, der_sig.data(), der_sig.size());
-    return Result<bool>::success(std::move(valid));
-  } catch (const std::exception& e) {
-    return Result<bool>::fail(Error::VERIFICATION_FAILED);
+  if (public_key.size() != 33 && public_key.size() != 65) {
+    return Result<bool>::fail(Error::INVALID_PUBLIC_KEY);
   }
+  ecdsa::CompactSignature compact{};
+  std::copy(signature.r.begin(), signature.r.end(), compact.begin());
+  std::copy(signature.s.begin(), signature.s.end(), compact.begin() + 32);
+  bool valid = ecdsa::secp256k1Verify(public_key, hash, compact);
+  return Result<bool>::success(std::move(valid));
 }
 
 Result<Bytes33> ecdsaRecover(const Bytes32& hash, const ECDSASignature& signature) {

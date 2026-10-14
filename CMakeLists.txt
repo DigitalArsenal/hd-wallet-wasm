@@ -31,8 +31,8 @@ cmake_minimum_required(VERSION 3.16...3.28)
 
 # Version
 set(HD_WALLET_VERSION_MAJOR 2)
-set(HD_WALLET_VERSION_MINOR 0)
-set(HD_WALLET_VERSION_PATCH 33)
+set(HD_WALLET_VERSION_MINOR 1)
+set(HD_WALLET_VERSION_PATCH 0)
 
 project(HDWalletWasm
   VERSION ${HD_WALLET_VERSION_MAJOR}.${HD_WALLET_VERSION_MINOR}.${HD_WALLET_VERSION_PATCH}
@@ -1314,6 +1314,7 @@ if(HD_WALLET_BUILD_TESTS AND NOT EMSCRIPTEN)
     test/test_ecies.cpp
     test/test_x509.cpp
     test/test_vectors.cpp
+    test/test_tx_signing.cpp
   )
   target_link_libraries(hd_wallet_tests PRIVATE hd_wallet)
   target_include_directories(hd_wallet_tests PRIVATE

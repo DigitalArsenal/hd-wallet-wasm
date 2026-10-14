@@ -200,11 +200,26 @@ const typedData = {
 };
 const typedSignature = wallet.ethereum.signTypedData(typedData, ethKey.privateKey());
 
-// Raw curve signing
-const messageHash = wallet.utils.keccak256(new TextEncoder().encode('message'));
+// Raw curve signing: sign() and verify() hash the message themselves
+const message = new TextEncoder().encode('message');
+const sig = wallet.curves.secp256k1.sign(message, privateKey);          // ECDSA over SHA-256(message)
+const ok = wallet.curves.secp256k1.verify(message, sig, publicKey);
+
+// Recoverable signing takes a 32-byte hash you computed (here Keccak-256, as Ethereum does)
+const messageHash = wallet.utils.keccak256(message);
 const { signature, recoveryId } = wallet.curves.secp256k1.signRecoverable(messageHash, privateKey);
 const recovered = wallet.curves.secp256k1.recover(messageHash, signature, recoveryId);
 ```
+
+**Which functions hash.** `curves.secp256k1.sign` / `verify` and `curves.p256.sign` / `verify` compute SHA-256 of
+the bytes you pass, and `curves.p384.sign` / `verify` compute SHA-384, then sign or verify that hash: pass the
+**message**, never a hash of it. Passing `sha256(message)` produces a signature over `SHA-256(SHA-256(message))`,
+which a standard ECDSA verifier checking the message (OpenSSL, Node `crypto.verify('sha256', message, ...)`, Go
+`ecdsa.VerifyASN1` over `sha256(message)`) rejects, and so does this library's `verify`.
+`curves.secp256k1.signRecoverable` and `recover` are the exception: they take the 32-byte hash as given (for
+Ethereum's Keccak-256 or any digest you computed yourself). Ed25519 signs the message itself, as the algorithm
+specifies. Since 2.1.0 every signer in the package hashes once; see [CHANGELOG.md](CHANGELOG.md) for what changed
+from 2.0.x.
 
 ### AES-GCM Encryption
 
@@ -592,11 +607,11 @@ if (wallet.isOpenSSL()) {
 if (wallet.isOpenSSLFips()) {
   // Use P-256/P-384 for ECDSA (FIPS-approved)
   const p256Key = wallet.hdkey.fromSeed(seed, Curve.P256);
-  const signature = wallet.curves.p256.sign(hash, privateKey);
+  const signature = wallet.curves.p256.sign(message, privateKey);     // hashes with SHA-256
 } else {
   // Standard secp256k1 for Ethereum/Bitcoin
   const btcKey = wallet.hdkey.fromSeed(seed, Curve.SECP256K1);
-  const signature = wallet.curves.secp256k1.sign(hash, privateKey);
+  const signature = wallet.curves.secp256k1.sign(message, privateKey); // hashes with SHA-256
 }
 ```
 
@@ -632,11 +647,11 @@ const aesKey = wallet.utils.generateAesKey(256);        // AES-256 key via FIPS 
 const encrypted = wallet.utils.aesGcm.encrypt(          // AES-GCM via FIPS
   aesKey, plaintext, iv
 );
-const p256Sig = wallet.curves.p256.sign(hash, p256Key); // ECDSA P-256 via FIPS
+const p256Sig = wallet.curves.p256.sign(message, p256Key); // ECDSA P-256 over SHA-256(message), via FIPS
 
 // Non-FIPS operations (use Crypto++)
 const ethKey = masterKey.derivePath("m/44'/60'/0'/0/0"); // secp256k1 (Crypto++)
-const ethSig = wallet.curves.secp256k1.sign(hash, ethKey.privateKey());
+const ethSig = wallet.curves.secp256k1.signRecoverable(wallet.utils.keccak256(data), ethKey.privateKey()); // Ethereum: Keccak-256 hash, signed as given
 const keccakHash = wallet.utils.keccak256(data);         // Keccak (Crypto++)
 ```
 

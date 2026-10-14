@@ -88,7 +88,7 @@ await testAsync('verifyWasmIntegrity accepts and rejects hashes correctly', asyn
 });
 
 test('module metadata APIs return typed values', () => {
-  assertEqual(wallet.getVersion(), '2.0.33', 'Version string should match the release contract');
+  assertEqual(wallet.getVersion(), '2.1.0', 'Version string should match the release contract');
   assert(typeof wallet.hasCryptopp() === 'boolean', 'hasCryptopp should return boolean');
   assert(typeof wallet.isFipsMode() === 'boolean', 'isFipsMode should return boolean');
 
@@ -177,12 +177,15 @@ test('curve helper methods and recoverable-signature path are callable', () => {
   const recompressed = wallet.curves.compressPublicKey(uncompressed, Curve.SECP256K1);
   assertEqual(bytesToHex(recompressed), expectedSecpPub, 'compress/decompress should round-trip');
 
-  const messageHash = wallet.utils.sha256(TEST_MSG);
-  const signature = wallet.curves.secp256k1.sign(messageHash, privateKey);
-  assert(signature.length >= 64, 'Expected secp256k1 signature');
+  // sign()/verify() hash the message with SHA-256 themselves: pass the message.
+  const signature = wallet.curves.secp256k1.sign(TEST_MSG, privateKey);
+  assertEqual(signature.length, 64, 'Expected a 64-byte compact secp256k1 signature');
 
-  const isValid = wallet.curves.secp256k1.verify(messageHash, signature, uncompressed);
+  const isValid = wallet.curves.secp256k1.verify(TEST_MSG, signature, uncompressed);
   assertEqual(isValid, true, 'secp256k1 signature should verify');
+
+  // signRecoverable()/recover() take the 32-byte hash as given.
+  const messageHash = wallet.utils.sha256(TEST_MSG);
 
   // Recoverable-signature support (libsecp256k1 recovery module enabled).
   const recoverable = wallet.curves.secp256k1.signRecoverable(messageHash, privateKey);

@@ -114,6 +114,10 @@ export interface SdnPluginInvocationResult {
 
 export interface SdnPluginCapabilities {
   randomBytes?: (length: number, context?: Record<string, unknown>) => BinaryLike;
+  /**
+   * Wallet-held signer for sign_detached. For secp256k1 it receives the message
+   * (digest is null) and must return ECDSA over SHA-256(messageBytes), hashed once.
+   */
   walletSign?: (request: {
     curve: string;
     payload: any;
@@ -731,10 +735,14 @@ export interface CurvesAPI {
 
   // ECDSA (secp256k1)
   secp256k1: {
+    /** ECDSA over SHA-256(message), hashed here: pass the message, never a hash of it. Returns 64-byte r||s. */
     sign(message: Uint8Array, privateKey: Uint8Array): Uint8Array;
-    signRecoverable(message: Uint8Array, privateKey: Uint8Array): { signature: Uint8Array; recoveryId: number };
+    /** Signs the 32-byte hash as given (no hashing): pass your protocol digest (e.g. Keccak-256). */
+    signRecoverable(hash: Uint8Array, privateKey: Uint8Array): { signature: Uint8Array; recoveryId: number };
+    /** Verifies ECDSA over SHA-256(message), hashed here; signature is 64-byte r||s or DER. */
     verify(message: Uint8Array, signature: Uint8Array, publicKey: Uint8Array): boolean;
-    recover(message: Uint8Array, signature: Uint8Array, recoveryId: number): Uint8Array;
+    /** Recovers the compressed key from a signature over the 32-byte hash, used as given. */
+    recover(hash: Uint8Array, signature: Uint8Array, recoveryId: number): Uint8Array;
     ecdh(privateKey: Uint8Array, publicKey: Uint8Array): Uint8Array;
   };
 
@@ -746,14 +754,18 @@ export interface CurvesAPI {
 
   // ECDSA (P-256)
   p256: {
+    /** ECDSA over SHA-256(message), hashed here: pass the message, never a hash of it. Returns 64-byte r||s. */
     sign(message: Uint8Array, privateKey: Uint8Array): Uint8Array;
+    /** Verifies ECDSA over SHA-256(message), hashed here. */
     verify(message: Uint8Array, signature: Uint8Array, publicKey: Uint8Array): boolean;
     ecdh(privateKey: Uint8Array, publicKey: Uint8Array): Uint8Array;
   };
 
   // ECDSA (P-384)
   p384: {
+    /** ECDSA over SHA-384(message), hashed here: pass the message, never a hash of it. Returns 96-byte r||s. */
     sign(message: Uint8Array, privateKey: Uint8Array): Uint8Array;
+    /** Verifies ECDSA over SHA-384(message), hashed here. */
     verify(message: Uint8Array, signature: Uint8Array, publicKey: Uint8Array): boolean;
     ecdh(privateKey: Uint8Array, publicKey: Uint8Array): Uint8Array;
   };

@@ -103,3 +103,12 @@ export function verifyAllChainProofs(
   wallet: HDWalletModule,
   chainProofs: ChainProofData[],
 ): ChainProofVerifyResult;
+
+/** DER-encode a 64-byte compact r||s ECDSA signature (the SDS EPM annex encoding). */
+export function compactSignatureToDer(compact: Uint8Array): Uint8Array;
+
+/** SHA-256(SHA-256("\x18Bitcoin Signed Message:\n" || CompactSize(len) || message)). */
+export function bitcoinSignedMessageHash(wallet: HDWalletModule, message: Uint8Array): Uint8Array;
+
+/** EIP-191 personal_sign: Keccak-256("\x19Ethereum Signed Message:\n" || decimal(len) || message). */
+export function ethereumPersonalSignHash(wallet: HDWalletModule, message: Uint8Array): Uint8Array;

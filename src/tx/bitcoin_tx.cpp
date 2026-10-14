@@ -8,6 +8,7 @@
 
 #include "hd_wallet/tx/bitcoin_tx.h"
 #include "hd_wallet/config.h"
+#include "hd_wallet/ecdsa.h"
 #include "hd_wallet/secure_rng.h"
 
 #include <algorithm>
@@ -895,29 +896,17 @@ Result<Bytes32> BitcoinTransaction::signatureHashSegWit(
 
 #if HD_WALLET_USE_CRYPTOPP
 
-// Helper function to sign with secp256k1
-static ByteVector signECDSA(const Bytes32& hash, const Bytes32& privateKey) {
-  using namespace CryptoPP;
-
-  // Create private key
-  ECDSA<ECP, SHA256>::PrivateKey privKey;
-  Integer x(privateKey.data(), privateKey.size());
-  privKey.Initialize(ASN1::secp256k1(), x);
-
-  // Create signer
-  ECDSA<ECP, SHA256>::Signer signer(privKey);
-
-  // Sign
-  SecureRandomGenerator rng;
-  std::string signature;
-  StringSource ss(
-    hash.data(), hash.size(), true,
-    new SignerFilter(rng, signer, new StringSink(signature))
-  );
-
-  // Convert to DER format
-  ByteVector result(signature.begin(), signature.end());
-  return result;
+// Sign a BIP-143 / legacy sighash. The sighash is already the protocol digest
+// (double SHA-256 of the preimage), so it is signed as given: RFC 6979
+// deterministic k, low-S, strict DER. Returns empty on failure.
+static ByteVector signECDSA(const Bytes32& sigHash, const Bytes32& privateKey) {
+  auto signature = ecdsa::secp256k1SignRecoverable(privateKey, sigHash);
+  if (!signature.ok()) {
+    return ByteVector();
+  }
+  ecdsa::CompactSignature compact{};
+  std::memcpy(compact.data(), signature.value.data() + 1, compact.size());  // drop the v byte
+  return ecdsa::compactToDer(compact);
 }
 
 // Helper function to get public key from private key
@@ -1016,6 +1005,9 @@ Error BitcoinTransaction::signInput(
 
       // Sign
       ByteVector signature = signECDSA(sigHash, privateKey);
+      if (signature.empty()) {
+        return Error::INVALID_SIGNATURE;
+      }
       signature.push_back(static_cast<uint8_t>(sigHashType));
 
       // Build scriptSig
@@ -1037,6 +1029,9 @@ Error BitcoinTransaction::signInput(
 
       // Sign
       ByteVector signature = signECDSA(sigHash, privateKey);
+      if (signature.empty()) {
+        return Error::INVALID_SIGNATURE;
+      }
       signature.push_back(static_cast<uint8_t>(sigHashType));
 
       // Build witness (signature, pubkey)
@@ -1063,6 +1058,9 @@ Error BitcoinTransaction::signInput(
 
       // Sign
       ByteVector signature = signECDSA(sigHash, privateKey);
+      if (signature.empty()) {
+        return Error::INVALID_SIGNATURE;
+      }
       signature.push_back(static_cast<uint8_t>(sigHashType));
 
       // Build witness (signature, pubkey)
