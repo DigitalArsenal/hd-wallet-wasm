@@ -23,6 +23,9 @@
  * @module hd-wallet-wasm/input-validation
  */
 
+/** A UTF-16 surrogate without its partner. */
+const UNPAIRED_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
 /** Curve ids (match the Curve enum in index.mjs and the aligned schema). */
 export const CURVE_ID = Object.freeze({
   SECP256K1: 0,
@@ -111,6 +114,24 @@ export function createInputValidation(makeError) {
   function string(value, name = 'value') {
     if (typeof value !== 'string') fail(INVALID_ARGUMENT, `${name} must be a string`);
     return value;
+  }
+
+  /**
+   * Require a string that reaches native code unchanged as a NUL-terminated
+   * UTF-8 C string: no NUL (native code would stop there, so 'pw\0extra'
+   * would act as 'pw') and no unpaired surrogate (which has no UTF-8 form;
+   * the encoder would merge it with the next character).
+   */
+  function cString(value, name = 'value') {
+    string(value, name);
+    if (value.includes('\0')) fail(INVALID_ARGUMENT, `${name} must not contain a NUL character`);
+    if (UNPAIRED_SURROGATE.test(value)) fail(INVALID_ARGUMENT, `${name} must be well-formed Unicode`);
+    return value;
+  }
+
+  /** Whether a string passes cString (for checks that answer false, not throw). */
+  function isCString(value) {
+    return typeof value === 'string' && !value.includes('\0') && !UNPAIRED_SURROGATE.test(value);
   }
 
   /** Require an integer number within [min, max]. */
@@ -232,6 +253,8 @@ export function createInputValidation(makeError) {
     bytesOfLength,
     bytesInRange,
     string,
+    cString,
+    isCString,
     integer,
     uint32,
     unsignedBigInt,

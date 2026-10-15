@@ -255,31 +255,46 @@ struct SignatureData {
     }
 
     /**
-     * Parse from DER format
+     * Parse from DER format, strictly (X.690 DER, as BIP-66 for secp256k1):
+     * SEQUENCE { INTEGER r, INTEGER s } with short-form lengths that match the
+     * input exactly, minimally encoded positive integers of 1..coordSize
+     * bytes (plus one 0x00 when the top bit is set), and nothing after s.
+     * Anything else throws: a lax parser read past the buffer and let one
+     * signature have many encodings.
      */
-    static SignatureData fromDER(const uint8_t* der, size_t derLen) {
+    static SignatureData fromDER(const uint8_t* der, size_t derLen, size_t coordSize) {
         SignatureData sig;
 
-        if (derLen < 8) throw std::invalid_argument("DER too short");
+        if (!der || derLen < 8) throw std::invalid_argument("DER too short");
         if (der[0] != 0x30) throw std::invalid_argument("Invalid DER sequence tag");
-
-        size_t seqLen = der[1];
-        if (seqLen + 2 > derLen) throw std::invalid_argument("Invalid DER length");
+        if (der[1] & 0x80) throw std::invalid_argument("DER sequence length is not short form");
+        if (static_cast<size_t>(der[1]) + 2 != derLen) throw std::invalid_argument("Invalid DER length");
 
         size_t pos = 2;
+        auto readInteger = [&](ByteVector& out) {
+            if (derLen - pos < 2) throw std::invalid_argument("DER integer header truncated");
+            if (der[pos] != 0x02) throw std::invalid_argument("Invalid DER integer tag");
+            const size_t len = der[pos + 1];
+            pos += 2;
+            if (len == 0 || (len & 0x80)) throw std::invalid_argument("Invalid DER integer length");
+            if (len > derLen - pos) throw std::invalid_argument("DER integer truncated");
+            const uint8_t* value = der + pos;
+            if (value[0] & 0x80) throw std::invalid_argument("Negative DER integer");
+            if (len > 1 && value[0] == 0x00 && !(value[1] & 0x80)) {
+                throw std::invalid_argument("Non-minimal DER integer");
+            }
+            const size_t skip = (value[0] == 0x00 && len > 1) ? 1 : 0;
+            if (len - skip > coordSize) throw std::invalid_argument("DER integer too large");
+            out.assign(value + skip, value + len);
+            pos += len;
+            bool nonZero = false;
+            for (uint8_t byte : out) nonZero |= (byte != 0);
+            if (!nonZero) throw std::invalid_argument("Zero DER integer");
+        };
 
-        // Parse r
-        if (der[pos] != 0x02) throw std::invalid_argument("Invalid r tag");
-        size_t rLen = der[pos + 1];
-        pos += 2;
-        sig.r.assign(der + pos, der + pos + rLen);
-        pos += rLen;
-
-        // Parse s
-        if (der[pos] != 0x02) throw std::invalid_argument("Invalid s tag");
-        size_t sLen = der[pos + 1];
-        pos += 2;
-        sig.s.assign(der + pos, der + pos + sLen);
+        readInteger(sig.r);
+        readInteger(sig.s);
+        if (pos != derLen) throw std::invalid_argument("Trailing bytes after DER signature");
 
         return sig;
     }
@@ -748,10 +763,11 @@ bool verify(
     }
 
     try {
-        SignatureData sig = SignatureData::fromDER(signature, signatureLen);
+        const size_t coordSize = curve == Curve::P384 ? 48 : 32;
+        SignatureData sig = SignatureData::fromDER(signature, signatureLen, coordSize);
+        const ByteVector compact = sig.toCompact(coordSize);
         return verifyCompact(curve, publicKey, publicKeyLen, hash, hashLen,
-                            sig.toCompact(curve == Curve::P384 ? 48 : 32).data(),
-                            sig.toCompact(curve == Curve::P384 ? 48 : 32).size());
+                            compact.data(), compact.size());
     } catch (...) {
         return false;
     }
@@ -1076,7 +1092,7 @@ bool recoverWithId(
 
 Result<CompactSignature> derToCompact(const ByteVector& der) {
     try {
-        SignatureData sig = SignatureData::fromDER(der.data(), der.size());
+        SignatureData sig = SignatureData::fromDER(der.data(), der.size(), 32);
         ByteVector compact = sig.toCompact(32);
         if (compact.size() != 64) {
             return Result<CompactSignature>::fail(Error::INVALID_SIGNATURE);

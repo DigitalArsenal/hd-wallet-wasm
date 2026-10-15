@@ -417,6 +417,56 @@ fuzz('curves.secp256k1.verify', 'false', [
   ...BAD_SECP_POINTS.map(([label, pub]) => [label, () => wallet.curves.secp256k1.verify(MSG, SIG, pub)]),
 ]);
 
+// Strict DER (2.1.1 round 2). A secp256k1 signature that is not 64 bytes is
+// read as DER; the old parser trusted its inner lengths (reading past the
+// buffer) and took many encodings of one signature. Only X.690 DER verifies.
+const derInt = (m) => {
+  let i = 0;
+  while (i < m.length - 1 && m[i] === 0) i++;
+  const v = Array.from(m.slice(i));
+  return v[0] & 0x80 ? [0x02, v.length + 1, 0x00, ...v] : [0x02, v.length, ...v];
+};
+const derOf = (sig) => {
+  const body = [...derInt(sig.slice(0, 32)), ...derInt(sig.slice(32))];
+  return [0x30, body.length, ...body];
+};
+const SIG_DER = derOf(SIG);
+test('fuzz: curves.secp256k1.verify accepts the genuine signature as DER', () => {
+  assert(wallet.curves.secp256k1.verify(MSG, Uint8Array.from(SIG_DER), PUB), 'DER of the genuine signature verifies');
+});
+const derVariants = (() => {
+  const d = SIG_DER;
+  const sAt = 4 + d[3];
+  const edit = (fn) => { const v = d.slice(); fn(v); return Uint8Array.from(v); };
+  return [
+    ['r length past the end', Uint8Array.from([0x30, 0x00, 0x02, 0x7f, 1, 2, 3, 4])],
+    ['sequence length 0', edit((v) => { v[1] = 0; })],
+    ['sequence length one short', edit((v) => { v[1] -= 1; })],
+    ['sequence length one long', edit((v) => { v[1] += 1; })],
+    ['trailing byte', edit((v) => { v.push(0); })],
+    ['trailing byte inside the sequence', edit((v) => { v.push(0); v[1] += 1; })],
+    ['truncated', edit((v) => { v.pop(); })],
+    ['r tag', edit((v) => { v[2] = 0x03; })],
+    ['s tag', edit((v) => { v[sAt] = 0x04; })],
+    ['r with an extra 0x00', edit((v) => { v.splice(4, 0, 0); v[3] += 1; v[1] += 1; })],
+    ['s with an extra 0x00', edit((v) => { v.splice(sAt + 2, 0, 0); v[sAt + 1] += 1; v[1] += 1; })],
+    ['r + 2^256', edit((v) => { v.splice(4, 0, 1); v[3] += 1; v[1] += 1; })],
+    ['s + 2^256', edit((v) => { v.splice(sAt + 2, 0, 1); v[sAt + 1] += 1; v[1] += 1; })],
+    ['negative r', edit((v) => { v[4] |= 0x80; })],
+    ['long-form sequence length', edit((v) => { v.splice(1, 0, 0x81); })],
+    ['long-form r length', edit((v) => { v.splice(3, 0, 0x81); v[1] += 1; })],
+    ['no s', edit((v) => { v.length = sAt; v[1] = sAt - 2; })],
+    ['r = 0, s = 1', Uint8Array.from([0x30, 0x06, 0x02, 0x01, 0x00, 0x02, 0x01, 0x01])],
+  ];
+})();
+fuzz('curves.secp256k1.verify(DER)', 'false', derVariants.map(([label, sig]) => [label, afterGenuineDer(sig)]));
+function afterGenuineDer(sig) {
+  return () => {
+    assert(wallet.curves.secp256k1.verify(MSG, Uint8Array.from(SIG_DER), PUB) === true, 'genuine DER must verify');
+    return wallet.curves.secp256k1.verify(MSG, sig, PUB);
+  };
+}
+
 // A truncated or oversized P-256/P-384 signature, presented right after the
 // genuine one verified: the missing bytes must not come from the heap.
 const afterGenuine = (verify, genuine, bad) => () => {
@@ -560,6 +610,14 @@ fuzz('ethereum.tx recipient and integer fields', 'throw', [
   ].flatMap(([label, to]) => [[`eip1559 to ${label}`, eth1559({ to })], [`legacy to ${label}`, ethLegacy({ to })]]),
   ['eip1559 no to', eth1559({ to: undefined })],
   ['eip1559 empty to', eth1559({ to: '' })],
+  ['eip1559 to 0x0x + 38 hex', eth1559({ to: '0x0x' + 'ab'.repeat(19) })],
+  ['legacy to 0x0x + 38 hex', ethLegacy({ to: '0x0x' + 'ab'.repeat(19) })],
+  ['eip1559 to 0X0x + 38 hex', eth1559({ to: '0X0x' + 'ab'.repeat(19) })],
+  ['eip1559 to the zero address', eth1559({ to: '0x' + '00'.repeat(20) })],
+  ['legacy to the zero address', ethLegacy({ to: '00'.repeat(20) })],
+  ['eip1559 to a broken EIP-55 checksum', eth1559({ to: '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAeD' })],
+  ['eip1559 to fullwidth digits', eth1559({ to: '0x' + '\uFF11'.repeat(40) })],
+  ['eip1559 to address with a leading space', eth1559({ to: ' 0x' + 'ab'.repeat(20) })],
   ['legacy no to', ethLegacy({ to: undefined })],
   ['legacy create({chainId}) only', signEth(() => wallet.ethereum.tx.create({ chainId: 1 }))],
   ['value 2^256', eth1559({ value: 1n << 256n })],
@@ -573,6 +631,36 @@ fuzz('ethereum.tx recipient and integer fields', 'throw', [
   ['chainId -1', eth1559({ chainId: -1 })],
   ['legacy gasPrice 2^64', ethLegacy({ gasPrice: 1n << 64n })],
   ['legacy value 2^256', ethLegacy({ value: 1n << 256n })],
+]);
+
+// Strings reach native code as NUL-terminated UTF-8 (2.1.1 round 2). A NUL
+// used to end the string there ('pw\0extra' derived the seed of 'pw', an
+// address + '\0garbage' signed to the address) and an unpaired surrogate was
+// merged with the next character. Both are refused; validators answer false.
+const MNEMONIC = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+const ETH_ADDR = '0x52908400098527886E0F7030069857D2E4169EE7';
+test('fuzz: the string fixtures are valid without the extra characters', () => {
+  assert(wallet.mnemonic.validate(MNEMONIC), 'mnemonic');
+  assert(wallet.ethereum.validateAddress(ETH_ADDR), 'Ethereum address');
+  assert(wallet.bitcoin.validateAddress(btcAddress), 'Bitcoin address');
+});
+fuzz('strings with a NUL or an unpaired surrogate', 'throw', [
+  ['mnemonic.toSeed passphrase "pw\\0extra"', () => wallet.mnemonic.toSeed(MNEMONIC, 'pw\u0000extra')],
+  ['mnemonic.toSeed passphrase "\\0"', () => wallet.mnemonic.toSeed(MNEMONIC, '\u0000')],
+  ['mnemonic.toSeed passphrase with an unpaired high surrogate', () => wallet.mnemonic.toSeed(MNEMONIC, 'pw\uD800x')],
+  ['mnemonic.toSeed passphrase with an unpaired low surrogate', () => wallet.mnemonic.toSeed(MNEMONIC, '\uDC00pw')],
+  ['mnemonic.toSeed mnemonic + "\\0junk"', () => wallet.mnemonic.toSeed(MNEMONIC + '\u0000junk')],
+  ['eip1559 to address + "\\0garbage"', eth1559({ to: ETH_ADDR + '\u0000garbage' })],
+  ['legacy to address + "\\0"', ethLegacy({ to: ETH_ADDR + '\u0000' })],
+  ['eip1559 to address + unpaired surrogate', eth1559({ to: ETH_ADDR + '\uD800' })],
+  ['bitcoin.fromWIF(WIF + "\\0")', () => wallet.bitcoin.fromWIF(wallet.bitcoin.toWIF(K) + '\u0000')],
+]);
+fuzz('validators given a NUL or an unpaired surrogate', 'false', [
+  ['mnemonic.validate(mnemonic + "\\0junk")', () => wallet.mnemonic.validate(MNEMONIC + '\u0000junk')],
+  ['mnemonic.validate(mnemonic + unpaired surrogate)', () => wallet.mnemonic.validate(MNEMONIC + '\uD800')],
+  ['ethereum.validateAddress(address + "\\0")', () => wallet.ethereum.validateAddress(ETH_ADDR + '\u0000')],
+  ['bitcoin.validateAddress(address + "\\0x")', () => wallet.bitcoin.validateAddress(btcAddress + '\u0000x')],
+  ['coin.validateAddress(BTC, address + "\\0")', () => wallet.coin.validateAddress(CoinType.BITCOIN, btcAddress + '\u0000')],
 ]);
 
 fuzz('wrong argument types', 'throw', [

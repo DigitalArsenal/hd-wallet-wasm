@@ -9,6 +9,8 @@
 #include "hd_wallet/tx/ethereum_tx.h"
 #include "hd_wallet/config.h"
 #include "hd_wallet/ecdsa.h"
+#include "hd_wallet/bip32.h"
+#include "../key_validation.h"
 #include "hd_wallet/secure_rng.h"
 
 #include <algorithm>
@@ -379,21 +381,39 @@ EthereumTransaction EthereumTransaction::createEIP2930(uint64_t chainId) {
 
 // ----- Field Setters -----
 
-void EthereumTransaction::setTo(const std::array<uint8_t, 20>& to) {
+// A recipient is 20 bytes and never 0x00..00: a transaction with no 'to' is
+// a contract creation, which is requested with setContractCreation(true) and
+// serializes an empty field. A refused recipient leaves the transaction with
+// none (and not a contract creation), so it cannot serialize or sign.
+Error EthereumTransaction::setTo(const std::array<uint8_t, 20>& to) {
+  hasTo_ = false;
+  isContractCreation_ = false;
+  to_.fill(0);
+  if (isZeroAddress(to)) {
+    return Error::INVALID_ADDRESS;
+  }
   to_ = to;
   hasTo_ = true;
-  isContractCreation_ = false;
+  return Error::OK;
 }
 
 Error EthereumTransaction::setToFromHex(const std::string& addressHex) {
   auto result = parseAddress(addressHex);
   if (!result.ok()) {
+    hasTo_ = false;
+    isContractCreation_ = false;
+    to_.fill(0);
     return result.error;
   }
-  to_ = result.value;
-  hasTo_ = true;
-  isContractCreation_ = false;
-  return Error::OK;
+  return setTo(result.value);
+}
+
+void EthereumTransaction::setContractCreation(bool creation) {
+  isContractCreation_ = creation;
+  if (creation) {
+    hasTo_ = false;
+    to_.fill(0);
+  }
 }
 
 void EthereumTransaction::setValue(uint64_t value) {
@@ -1013,35 +1033,26 @@ Result<uint64_t> parseEther(const std::string& eth) {
   }
 }
 
-std::array<uint8_t, 20> publicKeyToAddress(const Bytes65& publicKey) {
-  // Skip the 0x04 prefix if present
-  const uint8_t* keyData = publicKey.data();
-  size_t keyLen = publicKey.size();
-
-  if (keyLen == 65 && keyData[0] == 0x04) {
-    keyData = keyData + 1;
-    keyLen = 64;
+// The address of a secp256k1 public key: the last 20 bytes of Keccak-256 of
+// x || y. A key that is not a point of the curve has no address (it used to
+// hash whatever bytes it was given, and a compressed key gave 0x00..00).
+Result<std::array<uint8_t, 20>> publicKeyToAddress(const Bytes65& publicKey) {
+  if (publicKey[0] != 0x04 || !keys::isValidPublicKey(Curve::SECP256K1, publicKey.data(), publicKey.size())) {
+    return Result<std::array<uint8_t, 20>>::fail(Error::INVALID_PUBLIC_KEY);
   }
 
-  // Keccak-256 of the public key (without prefix)
-  Bytes32 hash = keccak256(keyData, keyLen);
-
-  // Take last 20 bytes
-  std::array<uint8_t, 20> address;
+  Bytes32 hash = keccak256(publicKey.data() + 1, 64);
+  std::array<uint8_t, 20> address{};
   std::copy(hash.begin() + 12, hash.end(), address.begin());
-
-  return address;
+  return Result<std::array<uint8_t, 20>>::success(std::move(address));
 }
 
-std::array<uint8_t, 20> publicKeyToAddress(const Bytes33& compressedPublicKey) {
-  // Decompress public key first
-  // TODO: Implement proper decompression
-  // For now, this is a placeholder
-
-  (void)compressedPublicKey;
-
-  std::array<uint8_t, 20> address{};
-  return address;
+Result<std::array<uint8_t, 20>> publicKeyToAddress(const Bytes33& compressedPublicKey) {
+  auto uncompressed = bip32::decompressPublicKey(compressedPublicKey, Curve::SECP256K1);
+  if (!uncompressed.ok()) {
+    return Result<std::array<uint8_t, 20>>::fail(Error::INVALID_PUBLIC_KEY);
+  }
+  return publicKeyToAddress(uncompressed.value);
 }
 
 std::string addressToChecksumHex(const std::array<uint8_t, 20>& address) {
@@ -1068,28 +1079,56 @@ std::string addressToChecksumHex(const std::array<uint8_t, 20>& address) {
   return result;
 }
 
+bool isZeroAddress(const std::array<uint8_t, 20>& address) {
+  uint8_t any = 0;
+  for (uint8_t b : address) {
+    any |= b;
+  }
+  return any == 0;
+}
+
+// An address is exactly 40 ASCII hex digits, after at most one "0x"/"0X".
+// Nothing else is accepted: no second prefix, no whitespace or NUL, no other
+// script's digits, no other length. Hex digits of mixed case are an EIP-55
+// checksum and must match it (a mismatch is a mistyped address).
 Result<std::array<uint8_t, 20>> parseAddress(const std::string& addressHex) {
-  std::string input = addressHex;
-
-  // Remove 0x prefix
-  if (input.size() >= 2 && input[0] == '0' && (input[1] == 'x' || input[1] == 'X')) {
-    input = input.substr(2);
+  using AddressResult = Result<std::array<uint8_t, 20>>;
+  size_t start = 0;
+  if (addressHex.size() >= 2 && addressHex[0] == '0' && (addressHex[1] == 'x' || addressHex[1] == 'X')) {
+    start = 2;
+  }
+  if (addressHex.size() - start != 40) {
+    return AddressResult::fail(Error::INVALID_ADDRESS);
   }
 
-  // Must be exactly 40 hex characters
-  if (input.size() != 40) {
-    return Result<std::array<uint8_t, 20>>::fail(Error::INVALID_ADDRESS);
+  std::array<uint8_t, 20> address{};
+  bool hasLower = false;
+  bool hasUpper = false;
+  for (size_t i = 0; i < 40; ++i) {
+    const char c = addressHex[start + i];
+    int nibble;
+    if (c >= '0' && c <= '9') {
+      nibble = c - '0';
+    } else if (c >= 'a' && c <= 'f') {
+      nibble = c - 'a' + 10;
+      hasLower = true;
+    } else if (c >= 'A' && c <= 'F') {
+      nibble = c - 'A' + 10;
+      hasUpper = true;
+    } else {
+      return AddressResult::fail(Error::INVALID_ADDRESS);
+    }
+    address[i / 2] = static_cast<uint8_t>(address[i / 2] | (i % 2 == 0 ? nibble << 4 : nibble));
   }
 
-  auto bytes = hexToBytes(input);
-  if (!bytes.ok()) {
-    return Result<std::array<uint8_t, 20>>::fail(Error::INVALID_ADDRESS);
+  if (hasLower && hasUpper) {
+    const std::string checksummed = addressToChecksumHex(address);
+    if (checksummed.compare(2, 40, addressHex, start, 40) != 0) {
+      return AddressResult::fail(Error::INVALID_ADDRESS);
+    }
   }
 
-  std::array<uint8_t, 20> address;
-  std::copy(bytes.value.begin(), bytes.value.end(), address.begin());
-
-  return Result<std::array<uint8_t, 20>>::success(std::move(address));
+  return AddressResult::success(std::move(address));
 }
 
 // =============================================================================
@@ -1134,11 +1173,9 @@ int32_t hd_eth_tx_set_to(eth_tx_handle tx, const uint8_t* address) {
     return static_cast<int32_t>(Error::INVALID_ARGUMENT);
   }
 
-  std::array<uint8_t, 20> addr;
+  std::array<uint8_t, 20> addr{};
   std::copy(address, address + 20, addr.begin());
-  reinterpret_cast<EthereumTransaction*>(tx)->setTo(addr);
-
-  return static_cast<int32_t>(Error::OK);
+  return static_cast<int32_t>(reinterpret_cast<EthereumTransaction*>(tx)->setTo(addr));
 }
 
 int32_t hd_eth_tx_set_to_hex(eth_tx_handle tx, const char* address_hex) {
@@ -1318,21 +1355,22 @@ int32_t hd_eth_pubkey_to_address(
     return static_cast<int32_t>(Error::INVALID_ARGUMENT);
   }
 
+  Result<std::array<uint8_t, 20>> addr = Result<std::array<uint8_t, 20>>::fail(Error::INVALID_PUBLIC_KEY);
   if (pubkey_len == 65) {
     Bytes65 pk;
     std::copy(pubkey, pubkey + 65, pk.begin());
-    auto addr = publicKeyToAddress(pk);
-    std::copy(addr.begin(), addr.end(), address_out);
-    return static_cast<int32_t>(Error::OK);
+    addr = publicKeyToAddress(pk);
   } else if (pubkey_len == 33) {
     Bytes33 pk;
     std::copy(pubkey, pubkey + 33, pk.begin());
-    auto addr = publicKeyToAddress(pk);
-    std::copy(addr.begin(), addr.end(), address_out);
-    return static_cast<int32_t>(Error::OK);
+    addr = publicKeyToAddress(pk);
+  }
+  if (!addr.ok()) {
+    return static_cast<int32_t>(addr.error);
   }
 
-  return static_cast<int32_t>(Error::INVALID_PUBLIC_KEY);
+  std::copy(addr.value.begin(), addr.value.end(), address_out);
+  return static_cast<int32_t>(Error::OK);
 }
 
 int32_t hd_eth_address_to_checksum(

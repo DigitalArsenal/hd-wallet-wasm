@@ -340,12 +340,17 @@ public:
   const std::array<uint8_t, 20>& to() const { return to_; }
 
   /**
-   * Set recipient address
+   * Set recipient address. The zero address is refused (INVALID_ADDRESS): a
+   * transaction without a recipient is a contract creation, requested with
+   * setContractCreation(true). A refused recipient leaves none set.
    */
-  void setTo(const std::array<uint8_t, 20>& to);
+  Error setTo(const std::array<uint8_t, 20>& to);
 
   /**
-   * Set recipient address from hex string
+   * Set recipient address from hex string: exactly 40 hex digits after at
+   * most one 0x/0X prefix, matching its EIP-55 checksum when of mixed case,
+   * and not the zero address. Anything else is INVALID_ADDRESS and leaves no
+   * recipient set.
    */
   Error setToFromHex(const std::string& addressHex);
 
@@ -357,7 +362,7 @@ public:
   /**
    * Set as contract creation (no 'to' address)
    */
-  void setContractCreation(bool creation) { isContractCreation_ = creation; }
+  void setContractCreation(bool creation);
 
   /**
    * True when the transaction has a recipient set with setTo/setToFromHex (or
@@ -546,17 +551,23 @@ Result<uint64_t> parseEther(const std::string& eth);
 
 /**
  * Derive Ethereum address from public key
- * @param publicKey 65-byte uncompressed public key (with 0x04 prefix)
- * @return 20-byte Ethereum address
+ * @param publicKey 65-byte uncompressed secp256k1 public key (0x04 prefix)
+ * @return 20-byte Ethereum address, or INVALID_PUBLIC_KEY for a key that is
+ *         not a point of the curve
  */
-std::array<uint8_t, 20> publicKeyToAddress(const Bytes65& publicKey);
+Result<std::array<uint8_t, 20>> publicKeyToAddress(const Bytes65& publicKey);
 
 /**
  * Derive Ethereum address from compressed public key
- * @param publicKey 33-byte compressed public key
- * @return 20-byte Ethereum address
+ * @param publicKey 33-byte compressed secp256k1 public key
+ * @return 20-byte Ethereum address, or INVALID_PUBLIC_KEY
  */
-std::array<uint8_t, 20> publicKeyToAddress(const Bytes33& publicKey);
+Result<std::array<uint8_t, 20>> publicKeyToAddress(const Bytes33& publicKey);
+
+/**
+ * True for the zero address 0x00..00
+ */
+bool isZeroAddress(const std::array<uint8_t, 20>& address);
 
 /**
  * Format address with checksum (EIP-55)
@@ -567,8 +578,9 @@ std::string addressToChecksumHex(const std::array<uint8_t, 20>& address);
 
 /**
  * Validate and parse address from hex string
- * @param addressHex Hex address string (with or without 0x prefix)
- * @return 20-byte address or error
+ * @param addressHex exactly 40 ASCII hex digits after at most one 0x/0X
+ *        prefix; mixed case must match the EIP-55 checksum
+ * @return 20-byte address or INVALID_ADDRESS
  */
 Result<std::array<uint8_t, 20>> parseAddress(const std::string& addressHex);
 

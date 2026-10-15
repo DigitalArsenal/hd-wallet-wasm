@@ -31,6 +31,31 @@ that has signed with an affected version** (first item).
   zero transaction to `0x00…00`. Separately, `value` went through a 64-bit
   setter, so 2^64 wei (about 18.45 ETH) or more wrapped: 20 ETH was signed as
   about 1.553 ETH. nonce, gas and fee fields wrapped the same way above 2^64.
+- **A double-prefixed Ethereum recipient signed to an uninitialized byte.**
+  Found while verifying the fix above. The recipient parser removed one `0x`
+  and counted 40 characters, then the hex decoder removed a second `0x`, so
+  `"0x0x"` followed by 38 hex digits produced 19 bytes, copied into an
+  uninitialized 20-byte address that was reported as valid and signed: the
+  recipient's last byte was whatever the stack held. `hd_eth_parse_address`
+  returned the same byte.
+- **ECDSA DER signatures were parsed without bounds checks.** The DER reader
+  behind `curves.secp256k1.verify` (any signature that is not 64 bytes) and the
+  C++ `ecdsa::verify` / `derToCompact` took the integer
+  lengths inside the signature on trust, so a short signature was read past
+  its buffer (a heap over-read), and it accepted encodings that are not DER: a
+  wrong sequence length, trailing bytes, padded or negative integers, and r or
+  s with 2^256 added. One signature had many accepted encodings. (EPM
+  signatures were checked for strict DER in JS first and were not affected.)
+- **Text arguments ended at the first NUL.** Strings reach native code as C
+  strings, so everything after a NUL was dropped: `mnemonic.toSeed(m,
+  'pw\0extra')` derived the wallet of the passphrase `pw` (a different wallet
+  from the BIP-39 one, and a weaker passphrase than the user typed),
+  `mnemonic.validate(m + '\0junk')` returned true and a recipient
+  `address + '\0garbage'` signed to `address`. An unpaired UTF-16 surrogate was
+  merged with the character after it.
+- **`hd_eth_pubkey_to_address` gave `0x00…00` for a compressed key** (the C++
+  `publicKeyToAddress(Bytes33)` was a placeholder that returned the zero
+  address) and hashed any 65 bytes, point or not, into an address.
 - **Forged chain proofs could verify.** Several WASM exports reported failure
   with a positive error code, but their JS wrappers treated only negative values
   as errors. When secp256k1 public-key recovery failed, `curves.secp256k1.recover`
@@ -102,6 +127,38 @@ The fix:
   documented `nonce`, `gasPrice`, `gasLimit`, `to`, `value` and `data`.
   Display the recipient and amount decoded from the built transaction, not the
   typed text, before asking for confirmation.
+- **One recipient rule.** A recipient is exactly 40 ASCII hex digits after at
+  most one `0x`/`0X`; when its letters are of mixed case they must be its
+  EIP-55 checksum (a mismatch is a mistyped address); and it is never the zero
+  address, which is only the empty `to` of an explicit contract creation
+  (`setContractCreation(true)`, C++ only). Anything else (a second prefix,
+  whitespace, a NUL, other scripts' digits, any other length) is
+  INVALID_ADDRESS from `parseAddress`, `setToFromHex`, `setTo`,
+  `hd_eth_tx_set_to_hex`, `hd_eth_tx_set_to` and `hd_eth_parse_address`
+  (which still parses the zero address: it is a parser, not a recipient
+  setter). A refused recipient clears any recipient or contract creation set
+  before it, so the transaction cannot sign. Native and WASM tests fuzz the
+  rule with prefixes, whitespace, Unicode digits and look-alikes, NUL,
+  unpaired surrogates and lengths around 40 (over 50,000 native and 23,000
+  WASM inputs against a reference implementation of the rule).
+- **Strict DER.** A DER ECDSA signature must be exactly `30 len 02 len r 02 len
+  s` with short-form lengths that match the input, positive minimally encoded
+  integers of at most the curve's size, r and s nonzero, and nothing after s;
+  anything else does not verify. Wycheproof's `ecdsa_secp256k1_sha256_bitcoin`
+  set now agrees on 462 of 464 cases (2.1.0: 444); the two left are high-S
+  signatures, accepted by decision (below).
+- **Text reaches native code whole or not at all.** Every wrapper that passes a
+  string to WASM refuses one containing a NUL or an unpaired surrogate with
+  INVALID_ARGUMENT; `mnemonic.validate` and the `validateAddress` functions
+  return false for such a string. A BIP-39 passphrase containing a NUL cannot
+  be used with this library (it never could: it was cut short).
+- **Addresses from public keys.** `hd_eth_pubkey_to_address` decompresses a
+  33-byte key and requires a 65-byte key to be `04 ‖ x ‖ y` on secp256k1;
+  anything else is INVALID_PUBLIC_KEY with the output untouched.
+- C++ API changes from these fixes: `EthereumTransaction::setTo` returns
+  `Error` (INVALID_ADDRESS for the zero address), `setContractCreation(true)`
+  clears a recipient set before it, and both `publicKeyToAddress` overloads
+  return `Result<std::array<uint8_t, 20>>`.
 - One return convention for the native exports. An export whose success is a
   byte length, a count or a 1/0 verdict now fails with a negative `-ErrorCode`,
   never a positive one, and zeroes its output buffer; an export whose success is
@@ -203,10 +260,11 @@ byte for byte, and in the JS set only the messages of four errors differ (keys 0
 and n are now refused by the wrapper's check, with the same
 `INVALID_PRIVATE_KEY` code). None of the vectors used a malleable Ed25519
 signature. A committed fuzz test (`wasm/test/test_input_fuzz.mjs`) fills freed
-WASM heap with a marker and passes 771 invalid inputs (wrong lengths, invalid
-scalars, invalid points, malleable or small-order Ed25519 signatures, wrong
-types, Ethereum recipients that do not parse, out-of-range transaction
-integers) through 88 wrapper entry points: each throws a library error or returns
+WASM heap with a marker and passes 811 invalid inputs (wrong lengths, invalid
+scalars, invalid points, malleable or small-order Ed25519 signatures, non-DER
+signatures, wrong types, Ethereum recipients that do not parse, strings with a
+NUL or an unpaired surrogate, out-of-range transaction integers) through 91
+wrapper entry points: each throws a library error or returns
 false, none returns the marker, and the module still signs and verifies
 afterwards. Native tests cover strict Ed25519, the key checks, the ECIES output
 on a tag mismatch and the X.509 scalar check.

@@ -587,7 +587,7 @@ function allocAndCopy(wasm, data) {
  * @returns {number} Pointer to allocated memory
  */
 function allocString(wasm, str) {
-  V.string(str, 'string argument');
+  V.cString(str, 'string argument');
   const len = wasm.lengthBytesUTF8(str) + 1;
   const ptr = wasm._hd_alloc(len);
   if (!ptr) throw new HDWalletError(ErrorCode.OUT_OF_MEMORY);
@@ -1359,6 +1359,7 @@ function createModule(wasm) {
      */
     validate(mnemonicStr, language = Language.ENGLISH) {
       V.integer(language, 'language', 0, 0x7fffffff);
+      if (!V.isCString(V.string(mnemonicStr, 'mnemonic'))) return false;
       const ptr = allocString(wasm, mnemonicStr);
       try {
         const result = wasm._hd_mnemonic_validate(ptr, language);
@@ -2255,6 +2256,7 @@ function createModule(wasm) {
       const fn = requireWasmFunction(wasm, '_hd_coin_validate_address');
       V.integer(coinType, 'coinType', -0x80000000, 0x7fffffff);
       V.integer(network, 'network', -0x80000000, 0x7fffffff);
+      if (!V.isCString(V.string(address, 'address'))) return false;
       const addrPtr = allocString(wasm, address);
       try {
         return fn(coinType, network, addrPtr) === 0;
@@ -2409,6 +2411,7 @@ function createModule(wasm) {
     validateAddress(address, network = Network.MAINNET) {
       const validateFn = requireWasmFunction(wasm, '_hd_btc_validate_address');
       V.integer(network, 'network', -0x80000000, 0x7fffffff);
+      if (!V.isCString(V.string(address, 'address'))) return false;
       const addrPtr = allocString(wasm, address);
       try {
         const result = validateFn(addrPtr, network);
@@ -2829,6 +2832,7 @@ function createModule(wasm) {
      */
     validateAddress(address) {
       const validateFn = requireWasmFunction(wasm, '_hd_eth_validate_address');
+      if (!V.isCString(V.string(address, 'address'))) return false;
       const addrPtr = allocString(wasm, address);
       try {
         const result = validateFn(addrPtr);
@@ -3259,6 +3263,8 @@ function createModule(wasm) {
     validateAddress(address, prefix) {
       const validateFn = requireWasmFunction(wasm, '_hd_cosmos_validate_address');
       if (prefix !== undefined && prefix !== null && prefix !== '') V.string(prefix, 'prefix');
+      if (!V.isCString(V.string(address, 'address'))) return false;
+      if (prefix && !V.isCString(prefix)) return false;
       const addrPtr = allocString(wasm, address);
       const prefixPtr = prefix ? allocString(wasm, prefix) : 0;
       try {
@@ -3426,6 +3432,7 @@ function createModule(wasm) {
 
     validateAddress(address) {
       const validateFn = requireWasmFunction(wasm, '_hd_sol_validate_address');
+      if (!V.isCString(V.string(address, 'address'))) return false;
       const addrPtr = allocString(wasm, address);
       try {
         return validateFn(addrPtr) === 0;
@@ -3584,6 +3591,7 @@ function createModule(wasm) {
     validateAddress(address, prefix) {
       const validateFn = requireWasmFunction(wasm, '_hd_dot_validate_address');
       if (prefix !== undefined) V.integer(prefix, 'prefix', 0, 16383);
+      if (!V.isCString(V.string(address, 'address'))) return false;
       const addrPtr = allocString(wasm, address);
       try {
         return validateFn(addrPtr, prefix !== undefined ? prefix : -1) === 0;

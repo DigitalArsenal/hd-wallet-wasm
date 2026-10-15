@@ -706,6 +706,10 @@ bool signCompact(Curve curve, const uint8_t* privateKey, size_t privateKeyLen,
 bool verifyCompact(Curve curve, const uint8_t* publicKey, size_t publicKeyLen,
                    const uint8_t* hash, size_t hashLen, const uint8_t* signature,
                    size_t signatureLen);
+// The DER-signature verifier, also in src/ecdsa.cpp.
+bool verify(Curve curve, const uint8_t* publicKey, size_t publicKeyLen,
+            const uint8_t* hash, size_t hashLen, const uint8_t* signature,
+            size_t signatureLen);
 } // namespace ecdsa
 } // namespace hd_wallet
 
@@ -857,4 +861,151 @@ TEST_CASE(Curves, Rfc6979_RefusesUnsupportedHashLength) {
         ASSERT_FALSE(ecdsa::signCompact(Curve::P256, priv.data(), priv.size(), hash.data(), len,
                                         sig, &sigLen, &recoveryId));
     }
+}
+
+// =============================================================================
+// Strict DER signatures (2.1.1 round 2)
+// =============================================================================
+//
+// fromDER never checked the integer lengths against the input: a short DER
+// read past the buffer (heap overflow under ASan), and one signature had many
+// accepted encodings (wrong sequence length, padding, trailing bytes, r with
+// 2^256 added). Only X.690 DER is accepted now.
+
+namespace {
+
+ByteVector derInteger(const ByteVector& magnitude) {
+    ByteVector out{0x02};
+    size_t start = 0;
+    while (start + 1 < magnitude.size() && magnitude[start] == 0) ++start;
+    const bool pad = magnitude[start] & 0x80;
+    out.push_back(static_cast<uint8_t>(magnitude.size() - start + (pad ? 1 : 0)));
+    if (pad) out.push_back(0x00);
+    out.insert(out.end(), magnitude.begin() + start, magnitude.end());
+    return out;
+}
+
+ByteVector derSequence(const ByteVector& r, const ByteVector& s) {
+    ByteVector body = derInteger(r);
+    ByteVector sEnc = derInteger(s);
+    body.insert(body.end(), sEnc.begin(), sEnc.end());
+    ByteVector out{0x30, static_cast<uint8_t>(body.size())};
+    out.insert(out.end(), body.begin(), body.end());
+    return out;
+}
+
+// Each malformed variant of a well-formed DER signature `der` (r with the top
+// bit set, so it carries a 0x00 pad; s padded or not) for `coordSize`-byte
+// integers.
+std::vector<std::pair<std::string, ByteVector>> malformedDer(const ByteVector& der, size_t coordSize) {
+    std::vector<std::pair<std::string, ByteVector>> out;
+    const size_t rAt = 2;                       // 02 len 00 r...
+    const size_t sAt = rAt + 2 + der[rAt + 1];  // 02 len [00] s...
+    const bool sPadded = der[sAt + 2] == 0x00;
+    auto add = [&](const char* name, ByteVector v) { out.emplace_back(name, std::move(v)); };
+    auto grow = [](ByteVector& v, size_t lenAt) { v[lenAt] += 1; v[1] += 1; };
+    auto shrink = [](ByteVector& v, size_t lenAt) { v[lenAt] -= 1; v[1] -= 1; };
+
+    // First: under ASan the old parser read 127 bytes from this 8-byte buffer.
+    { ByteVector v{0x30, 0x00, 0x02, 0x7f, 0x01, 0x02, 0x03, 0x04}; add("r length past the end", v); }
+    { auto v = der; v[1] -= 1; add("sequence length one short", v); }
+    { auto v = der; v[1] += 1; add("sequence length one long", v); }
+    { auto v = der; v.push_back(0x00); add("trailing byte", v); }
+    { auto v = der; v.push_back(0x00); v[1] += 1; add("trailing byte inside the sequence", v); }
+    { auto v = der; v.pop_back(); add("truncated", v); }
+    { auto v = der; v[0] = 0x31; add("SET tag", v); }
+    { auto v = der; v[rAt] = 0x03; add("r tag", v); }
+    { auto v = der; v[sAt] = 0x04; add("s tag", v); }
+    { auto v = der; v.erase(v.begin() + rAt + 2); shrink(v, rAt + 1); add("r without its 0x00 pad (negative)", v); }
+    { auto v = der; v.insert(v.begin() + rAt + 2, 0x00); grow(v, rAt + 1); add("r padded twice", v); }
+    { auto v = der; v.insert(v.begin() + sAt + 2, 0x00); grow(v, sAt + 1); add("s with an extra 0x00", v); }
+    { auto v = der; v[rAt + 2] = 0x01; add("r + 2^(8*coordSize)", v); }
+    if (sPadded) {
+        { auto v = der; v.erase(v.begin() + sAt + 2); shrink(v, sAt + 1); add("s without its 0x00 pad (negative)", v); }
+        { auto v = der; v[sAt + 2] = 0x01; add("s + 2^(8*coordSize)", v); }
+    } else {
+        { auto v = der; v[sAt + 2] |= 0x80; add("s with the top bit set, unpadded (negative)", v); }
+        { auto v = der; v.insert(v.begin() + sAt + 2, 0x01); grow(v, sAt + 1); add("s + 2^(8*coordSize)", v); }
+    }
+    { auto v = der; v[rAt + 2] = 0xff; add("leading ff in r", v); }
+    { auto v = der; v.insert(v.begin() + 1, 0x81); add("long-form sequence length", v); }
+    { auto v = der; v.insert(v.begin() + rAt + 1, 0x81); v[1] += 1; add("long-form r length", v); }
+    { ByteVector v{0x30, 0x06, 0x02, 0x01, 0x00, 0x02, 0x01, 0x01}; add("r = 0", v); }
+    { ByteVector v{0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x00}; add("s = 0", v); }
+    { ByteVector v{0x30, 0x06, 0x02, 0x00, 0x02, 0x02, 0x01, 0x01}; add("empty r", v); }
+    { ByteVector v(der.begin(), der.begin() + sAt); v[1] = static_cast<uint8_t>(v.size() - 2); add("no s", v); }
+    (void)coordSize;
+    return out;
+}
+
+ByteVector rfcBytes(const char* hex) { return test::hexToBytes(hex); }
+
+} // namespace
+
+TEST_CASE(Curves, Der_StrictEncodingOnly_P256_P384) {
+    struct Case { Curve curve; const char* priv; const char* pub; const Rfc6979Vector& vec; size_t coordSize; };
+    const Case cases[] = {
+        {Curve::P256, kRfcP256Private, kRfcP256Public, kRfcP256Vectors[0], 32},  // SHA-256 "sample"
+        {Curve::P384, kRfcP384Private, kRfcP384Public, kRfcP384Vectors[1], 48},  // SHA-384 "sample"
+    };
+    for (const auto& c : cases) {
+        auto hash = rfcMessageHash(c.vec.hashBits, c.vec.message);
+        auto pub = rfcBytes(c.pub);
+        auto r = rfcBytes(c.vec.r);
+        auto s = rfcBytes(c.vec.s);
+        ASSERT_EQ(c.coordSize, r.size());
+        // The variants below need r to carry a 0x00 pad.
+        ASSERT_TRUE(r[0] & 0x80);
+        ByteVector der = derSequence(r, s);
+        ASSERT_TRUE(ecdsa::verify(c.curve, pub.data(), pub.size(), hash.data(), hash.size(), der.data(), der.size()));
+        for (const auto& bad : malformedDer(der, c.coordSize)) {
+            if (ecdsa::verify(c.curve, pub.data(), pub.size(), hash.data(), hash.size(),
+                              bad.second.data(), bad.second.size())) {
+                ASSERT_STR_EQ("refused", std::string("accepted: ") + bad.first);
+            }
+        }
+    }
+}
+
+TEST_CASE(Curves, Der_StrictEncodingOnly_Secp256k1) {
+    // A secp256k1 signature whose r has the top bit set (s is low-S, so it
+    // never does) and whose s has no leading zero byte.
+    ByteVector priv(32, 0);
+    priv[31] = 9;
+    ByteVector hash(32, 0);
+    uint8_t sig[64];
+    size_t sigLen = 0;
+    int recoveryId = -1;
+    for (uint8_t i = 0;; ++i) {
+        hash[0] = i;
+        sigLen = sizeof(sig);
+        ASSERT_TRUE(ecdsa::signCompact(Curve::SECP256K1, priv.data(), priv.size(), hash.data(), hash.size(),
+                                       sig, &sigLen, &recoveryId));
+        if ((sig[0] & 0x80) && sig[32] != 0) break;
+        ASSERT_TRUE(i < 250);
+    }
+    ByteVector r(sig, sig + 32);
+    ByteVector s(sig + 32, sig + 64);
+    ByteVector der = derSequence(r, s);
+
+    // derToCompact (behind curves.secp256k1.verify for a non-64-byte signature).
+    auto compact = ecdsa::derToCompact(der);
+    ASSERT_OK(compact);
+    ASSERT_BYTES_EQ(sig, compact.value.data(), 64);
+    ecdsa::CompactSignature c{};
+    std::memcpy(c.data(), sig, 64);
+    ASSERT_STR_EQ(bytesHex(der.data(), der.size()), bytesHex(ecdsa::compactToDer(c).data(), ecdsa::compactToDer(c).size()));
+    for (const auto& bad : malformedDer(der, 32)) {
+        if (ecdsa::derToCompact(bad.second).ok()) {
+            ASSERT_STR_EQ("refused", std::string("accepted: ") + bad.first);
+        }
+    }
+
+    // Integers shorter than 32 bytes are fine when minimal: r = 1, s = 1 parse
+    // (and do not verify).
+    ByteVector small{0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01};
+    auto parsed = ecdsa::derToCompact(small);
+    ASSERT_OK(parsed);
+    ASSERT_EQ(1, static_cast<int>(parsed.value[31]));
+    ASSERT_EQ(1, static_cast<int>(parsed.value[63]));
 }
