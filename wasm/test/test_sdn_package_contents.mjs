@@ -73,7 +73,7 @@ const PACKED_FILE_ALLOWLIST = Object.freeze([
 test('core package exposes only the synchronized built runtime contract', async () => {
   const manifest = JSON.parse(await readFile(join(packageDirectory, 'package.json'), 'utf8'));
 
-  assert.equal(manifest.version, '2.1.0');
+  assert.equal(manifest.version, '2.1.1');
   assert.equal(manifest.main, './dist/runtime/index.mjs');
   assert.equal(manifest.module, './dist/runtime/index.mjs');
   assert.equal(manifest.types, './dist/runtime/index.d.ts');

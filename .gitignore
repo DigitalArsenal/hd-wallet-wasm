@@ -27,6 +27,8 @@ cmake-build-*/
 *.so
 *.dylib
 *.wasm
+# The site's WASM (vite build:docs) is served from docs/assets.
+!docs/assets/*.wasm
 *.js.mem
 *.pyc
 __pycache__/

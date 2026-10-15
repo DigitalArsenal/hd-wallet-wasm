@@ -1,13 +1,52 @@
-import { defineConfig } from 'vite';
+import { defineConfig, normalizePath } from 'vite';
 import { createRequire } from 'module';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 
 const configDir = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(resolve(configDir, '..', 'wasm', 'package.json'), 'utf-8'));
 const require = createRequire(import.meta.url);
 const sdsPackageRoot = dirname(require.resolve('spacedatastandards.org/package.json'));
+
+// The site (vite build, build:docs) loads the wallet WASM as its own file.
+// The npm package's dist/hd-wallet.js carries it as base64 (SINGLE_FILE),
+// which would put a third more bytes into the site's JS chunk. The split
+// browser build of the same sources (build-wasm/wasm/browser) fetches
+// new URL("hd-wallet.wasm", import.meta.url), which Vite emits as a hashed
+// asset. The build refuses a split .wasm that is not byte for byte the one
+// inside the npm loader, so the site runs exactly the published module.
+const singleFileLoader = normalizePath(resolve(configDir, '..', 'wasm', 'dist', 'hd-wallet.js'));
+const splitWasmLoader = normalizePath(resolve(configDir, '..', 'build-wasm', 'wasm', 'browser', 'hd-wallet.js'));
+const splitWasmBinary = normalizePath(resolve(configDir, '..', 'build-wasm', 'wasm', 'browser', 'hd-wallet.wasm'));
+
+function inlineWasmBytes(loaderSource) {
+  const match = /data:application\/octet-stream;base64,([A-Za-z0-9+/=]+)/u.exec(loaderSource);
+  return match ? Buffer.from(match[1], 'base64') : null;
+}
+
+export function siteSplitWasmPlugin() {
+  return {
+    name: 'hd-wallet-site-split-wasm',
+    apply: 'build',
+    enforce: 'pre',
+    buildStart() {
+      if (!existsSync(splitWasmLoader) || !existsSync(splitWasmBinary)) {
+        this.error('Split wallet WASM is missing: build the hd_wallet_wasm_npm target (npm run build:wasm) first');
+      }
+      const inline = inlineWasmBytes(readFileSync(singleFileLoader, 'latin1'));
+      if (!inline || !inline.equals(readFileSync(splitWasmBinary))) {
+        this.error('build-wasm/wasm/browser/hd-wallet.wasm is not the WASM inside wasm/dist/hd-wallet.js; rebuild both');
+      }
+    },
+    async resolveId(source, importer, options) {
+      if (!importer || !source.endsWith('hd-wallet.js')) return null;
+      const resolved = await this.resolve(source, importer, { ...options, skipSelf: true });
+      if (resolved && normalizePath(resolved.id) === singleFileLoader) return splitWasmLoader;
+      return null;
+    },
+  };
+}
 
 export function createReleaseLibraryConfig({
   entry,
@@ -54,6 +93,7 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
+  plugins: [siteSplitWasmPlugin()],
   resolve: {
     alias: {
       '@wallet': resolve(configDir, 'src'),

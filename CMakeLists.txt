@@ -32,7 +32,7 @@ cmake_minimum_required(VERSION 3.16...3.28)
 # Version
 set(HD_WALLET_VERSION_MAJOR 2)
 set(HD_WALLET_VERSION_MINOR 1)
-set(HD_WALLET_VERSION_PATCH 0)
+set(HD_WALLET_VERSION_PATCH 1)
 
 project(HDWalletWasm
   VERSION ${HD_WALLET_VERSION_MAJOR}.${HD_WALLET_VERSION_MINOR}.${HD_WALLET_VERSION_PATCH}
@@ -681,6 +681,11 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
     set(SECP256K1_ENABLE_MODULE_ELLSWIFT OFF CACHE BOOL "" FORCE)
     set(SECP256K1_INSTALL OFF CACHE BOOL "" FORCE)
     set(SECP256K1_ASM "OFF" CACHE STRING "" FORCE)
+    # Smallest precomputed tables (v0.7.1 defaults are 15 / 86 KiB: about
+    # 1.1 MB of the module's data). Window 4 and the 2 KiB generator table
+    # change speed only, never a key, signature or recovered key.
+    set(SECP256K1_ECMULT_WINDOW_SIZE "4" CACHE STRING "" FORCE)
+    set(SECP256K1_ECMULT_GEN_KB "2" CACHE STRING "" FORCE)
     FetchContent_MakeAvailable(secp256k1)
     target_compile_options(secp256k1_precomputed PRIVATE
       $<$<CONFIG:Release>:-Oz>
