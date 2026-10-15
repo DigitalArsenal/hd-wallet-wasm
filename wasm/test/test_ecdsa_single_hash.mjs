@@ -10,7 +10,7 @@
 // (sdn-server internal/epm verifySignatureForKey, verifyBitcoinChainProof,
 // verifyEthereumChainProof, at space-data-network 4a2873bfe); the EIP-191
 // vector is sdn-server/internal/chainsig/testdata/eip191-personal-sign-vectors.json.
-import { createPublicKey, verify as nodeVerify } from 'node:crypto';
+import { createHash, createPublicKey, verify as nodeVerify } from 'node:crypto';
 import init from '../src/index.mjs';
 import { test, assert, assertEqual, bytesToHex, hexToBytes } from './test_all.mjs';
 import {
@@ -289,4 +289,107 @@ test('sdn-plugin walletSign gets the message, not a digest, for secp256k1', () =
     inputs: [frame({ curve: 'secp256k1', messageBytes, signature: signed.signature, publicKey: pub })],
   }).outputs[0].payload.valid;
   assertEqual(valid, true, 'wallet-signed detached signature verifies');
+});
+
+// --- RFC 6979 deterministic nonces (2.1.1) -----------------------------------
+//
+// RFC 6979 Appendix A.2.5 (P-256, SHA-256) and A.2.6 (P-384, SHA-384), the
+// hashes curves.p256.sign / curves.p384.sign apply. Up to 2.1.0 every curve's
+// nonce came from HMAC-SHA256 into hash-sized V and K, so each P-384 nonce
+// ended in sixteen 0x01 bytes (the private key falls to a lattice attack on a
+// handful of signatures). The native tests also cover the SHA-384/SHA-512
+// rows on P-256 and the SHA-256/SHA-512 rows on P-384, which no WASM entry
+// point reaches (each curve signs with its own hash).
+
+const RFC6979 = {
+  p256: {
+    curve: 2,
+    hash: 'sha256',
+    n: 0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551n,
+    x: 'c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721',
+    pub: '0460fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6'
+      + '7903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299',
+    rows: {
+      sample: {
+        k: 'a6e3c57dd01abe90086538398355dd4c3b17aa873382b0f24d6129493d8aad60',
+        r: 'efd48b2aacb6a8fd1140dd9cd45e81d69d2c877b56aaf991c34d0ea84eaf3716',
+        s: 'f7cb1c942d657c41d436c7a1b6e29f65f3e900dbb9aff4064dc4ab2f843acda8',
+      },
+      test: {
+        k: 'd16b6ae827f17175e040871a1c7ec3500192c4c92677336ec2537acaee0008e0',
+        r: 'f1abb023518351cd71d881567b1ea663ed3efcf6c5132b354f28d3b0b7d38367',
+        s: '019f4113742a2b14bd25926b49c649155f267e60d3814b4c0cc84250e46f0083',
+      },
+    },
+  },
+  p384: {
+    curve: 3,
+    hash: 'sha384',
+    n: 0xffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52973n,
+    x: '6b9d3dad2e1b8c1c05b19875b6659f4de23c3b667bf297ba9aa47740787137d896d5724e4c70a825f872c9ea60d2edf5',
+    pub: '04ec3a4e415b4e19a4568618029f427fa5da9a8bc4ae92e02e06aae5286b300c64def8f0ea9055866064a254515480bc13'
+      + '8015d9b72d7d57244ea8ef9ac0c621896708a59367f9dfb9f54ca84b3f1c9db1288b231c3ae0d4fe7344fd2533264720',
+    rows: {
+      sample: {
+        k: '94ed910d1a099dad3254e9242ae85abde4ba15168eaf0ca87a555fd56d10fbca2907e3e83ba95368623b8c4686915cf9',
+        r: '94edbb92a5ecb8aad4736e56c691916b3f88140666ce9fa73d64c4ea95ad133c81a648152e44acf96e36dd1e80fabe46',
+        s: '99ef4aeb15f178cea1fe40db2603138f130e740a19624526203b6351d0a3a94fa329c145786e679e7b82c71a38628ac8',
+      },
+      test: {
+        k: '015ee46a5bf88773ed9123a5ab0807962d193719503c527b031b4c2d225092ada71f4a459bc0da98adb95837db8312ea',
+        r: '8203b63d3c853e8d77227fb377bcf7b7b772e97892a80f36ab775d509d7a5feb0542a7f0812998da8f1dd3ca3cf023db',
+        s: 'ddd0760448d42d8a43af45af836fce4de8be06b485e9b61b827c2f13173923e06a739f040649a667bf3b828246baa5a5',
+      },
+    },
+  },
+};
+
+const big = (bytes) => BigInt('0x' + bytesToHex(bytes));
+function powMod(base, exp, mod) {
+  let result = 1n;
+  base %= mod;
+  while (exp > 0n) {
+    if (exp & 1n) result = (result * base) % mod;
+    base = (base * base) % mod;
+    exp >>= 1n;
+  }
+  return result;
+}
+// k = s^-1 (z + r d) mod n from a signature over a known message and key.
+function recoverNonce(name, message, signature) {
+  const v = RFC6979[name];
+  const half = signature.length / 2;
+  const r = big(signature.slice(0, half));
+  const s = big(signature.slice(half));
+  const z = big(createHash(v.hash).update(message).digest());
+  const d = BigInt('0x' + v.x);
+  return (powMod(s, v.n - 2n, v.n) * (z + r * d)) % v.n;
+}
+
+for (const name of ['p256', 'p384']) {
+  const v = RFC6979[name];
+  const sign = wallet.curves[name].sign;
+  for (const [message, row] of Object.entries(v.rows)) {
+    test(`RFC 6979 ${name === 'p256' ? 'A.2.5 P-256' : 'A.2.6 P-384'} with ${v.hash.toUpperCase()}, "${message}": r, s and k match`, () => {
+      const sig = sign(enc.encode(message), hexToBytes(v.x));
+      assertEqual(bytesToHex(sig), row.r + row.s, 'r || s');
+      const k = recoverNonce(name, enc.encode(message), sig);
+      assertEqual(k.toString(16).padStart(row.k.length, '0'), row.k, 'k');
+      assert(wallet.curves[name].verify(enc.encode(message), sig, hexToBytes(v.pub)), 'wallet verifies');
+      assert(nodeVerifies(v.hash, name, hexToBytes(v.pub), enc.encode(message), sig, 'ieee-p1363'), 'Node verifies');
+    });
+  }
+}
+
+test('P-384 nonces carry no constant tail (the 2.1.0 nonce ended in 0x01 x 16)', () => {
+  const constantTail = BigInt('0x' + '01'.repeat(16));
+  const seen = new Set();
+  for (let i = 0; i < 8; i++) {
+    const message = enc.encode(`nonce tail ${i}`);
+    const sig = wallet.curves.p384.sign(message, hexToBytes(RFC6979.p384.x));
+    const k = recoverNonce('p384', message, sig);
+    assert((k & ((1n << 128n) - 1n)) !== constantTail, `nonce ${i} ends in sixteen 0x01 bytes`);
+    seen.add(k & ((1n << 128n) - 1n));
+  }
+  assertEqual(seen.size, 8, 'every nonce has its own low 128 bits');
 });

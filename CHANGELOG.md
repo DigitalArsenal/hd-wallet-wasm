@@ -5,8 +5,32 @@
 ### Security
 
 Defects found by internal review, present in 2.1.0 and every earlier release,
-are fixed. Upgrade; no data migration is needed.
+are fixed. Upgrade; no data migration is needed, but **rotate every P-384 key
+that has signed with an affected version** (first item).
 
+- **P-384 signatures exposed the private key (critical).** The RFC 6979 nonce
+  generator sized its V and K buffers to the message hash (48 bytes for P-384)
+  but always filled them with HMAC-SHA256 (32 bytes), so the last 16 bytes of
+  every P-384 nonce k were the constant `01 01 … 01`. A nonce with 128 known
+  bits is a hidden-number problem: a handful of P-384 signatures by one key
+  recover that key by lattice reduction. Affected: `curves.p384.sign` (and the
+  `hd_p384_sign` export, also in the WASI module) in hd-wallet-wasm 1.2.7
+  through 2.1.0 (0.1.8 through 1.2.6 signed P-384 with a random nonce and are
+  not affected); X.509 P-384 certificates, PKCS#12 bundles and wallet
+  attestations (`x509.*` with P-384 keys) in 2.0.0 through 2.1.0; and the C++
+  `ecdsa::p384Sign` in every release. **Treat every P-384 key that signed
+  anything with an affected version as compromised: rotate it, reissue
+  certificates and attestations it signed, and stop trusting signatures made
+  with it.** secp256k1 and P-256 signing (32-byte hashes) was not affected.
+- **Ethereum transactions could pay the zero address, or less than asked.**
+  A transaction whose recipient never parsed (an ENS name, a truncated or
+  over-long address, a stray character, a Bitcoin or Solana address) kept 20
+  zero bytes as its `to` and signed as a value transfer to `0x00…00`, burning
+  the value. 2.1.0's `ethereum.tx.createEIP1559` ignored the setter's error;
+  `ethereum.tx.create` ignored every field but `chainId`, so it always signed a
+  zero transaction to `0x00…00`. Separately, `value` went through a 64-bit
+  setter, so 2^64 wei (about 18.45 ETH) or more wrapped: 20 ETH was signed as
+  about 1.553 ETH. nonce, gas and fee fields wrapped the same way above 2^64.
 - **Forged chain proofs could verify.** Several WASM exports reported failure
   with a positive error code, but their JS wrappers treated only negative values
   as errors. When secp256k1 public-key recovery failed, `curves.secp256k1.recover`
@@ -46,6 +70,38 @@ are fixed. Upgrade; no data migration is needed.
 
 The fix:
 
+- **RFC 6979 nonces as specified.** The HMAC uses the message hash function
+  (HMAC-SHA256 for a 32-byte hash, HMAC-SHA384 for 48, HMAC-SHA512 for 64; any
+  other hash length is refused), V and K are that HMAC's size, x and h enter as
+  int2octets(x) and bits2octets(h) (h reduced mod q), and k is bits2int(T) for
+  T built from whole HMAC outputs. ECDSA's z is the leftmost qlen bits of the
+  hash in signing, verification and recovery. The RFC 6979 Appendix A.2.5
+  (P-256) and A.2.6 (P-384) known answers for SHA-256, SHA-384 and SHA-512 are
+  native tests, and the P-256/SHA-256 and P-384/SHA-384 rows (the hashes
+  `curves.p256.sign` and `curves.p384.sign` apply) are WASM tests, with a check
+  that no P-384 nonce ends in the old constant.
+  **P-384 signatures change:** every P-384 signature now differs from 2.1.0 (it
+  is the RFC 6979 signature, which every ECDSA verifier, 2.1.0 included,
+  accepts).
+  secp256k1 and P-256 signatures are unchanged byte for byte (the reviewer's
+  secp256k1 vector set and 168 P-256 signatures compared), except that a
+  P-256 SHA-256 hash at or above the group order (probability about 2^-32) now
+  gets the RFC nonce.
+- **An Ethereum transfer needs a recipient.** In C++ and at the C ABI a
+  transaction that was never given a valid `to` (and is not an explicit
+  contract creation, `setContractCreation(true)`) does not serialize, hash or
+  sign: `serialize`, `serializeForSigning`, `sign` and `validate` fail with
+  INVALID_ADDRESS (502). Parsing refuses a `to` field that is neither 20 bytes
+  nor empty, and a value over 32 bytes, with INVALID_TRANSACTION (it read a
+  malformed `to` as a contract creation). The wrappers check `to` with
+  `hd_eth_tx_set_to_hex`'s result (throwing on ENS names, wrong lengths, extra
+  characters and non-Ethereum addresses), always set `value` through the
+  256-bit setter (any 0 ≤ value < 2^256 is encoded in full), and refuse
+  negative or non-integer amounts and nonce, gas, fee or chain id values of
+  2^64 or more instead of wrapping them. `ethereum.tx.create` now applies the
+  documented `nonce`, `gasPrice`, `gasLimit`, `to`, `value` and `data`.
+  Display the recipient and amount decoded from the built transaction, not the
+  typed text, before asking for confirmation.
 - One return convention for the native exports. An export whose success is a
   byte length, a count or a 1/0 verdict now fails with a negative `-ErrorCode`,
   never a positive one, and zeroes its output buffer; an export whose success is
@@ -65,8 +121,8 @@ The fix:
 - The wrappers wipe plaintext and key buffers (AES-GCM, AES-CTR, ECIES, aligned
   batches) before freeing them; AES-GCM decryption zeroes unauthenticated
   plaintext when the tag does not match; `ethereum.tx.createEIP1559` throws on a
-  `to` address that does not parse instead of building a transaction with no
-  recipient.
+  `to` address that does not parse instead of building a transaction that
+  pays `0x00…00`.
 - **Input validation everywhere, one rule.** Every JS wrapper (`index.mjs`,
   `aligned.mjs`) checks every input before it reaches WASM, with one helper set
   (`dist/runtime/input-validation.mjs`): its type (binary data must be a
@@ -147,9 +203,10 @@ byte for byte, and in the JS set only the messages of four errors differ (keys 0
 and n are now refused by the wrapper's check, with the same
 `INVALID_PRIVATE_KEY` code). None of the vectors used a malleable Ed25519
 signature. A committed fuzz test (`wasm/test/test_input_fuzz.mjs`) fills freed
-WASM heap with a marker and passes 740 invalid inputs (wrong lengths, invalid
+WASM heap with a marker and passes 771 invalid inputs (wrong lengths, invalid
 scalars, invalid points, malleable or small-order Ed25519 signatures, wrong
-types) through 87 wrapper entry points: each throws a library error or returns
+types, Ethereum recipients that do not parse, out-of-range transaction
+integers) through 88 wrapper entry points: each throws a library error or returns
 false, none returns the marker, and the module still signs and verifies
 afterwards. Native tests cover strict Ed25519, the key checks, the ECIES output
 on a tag mismatch and the X.509 scalar check.
@@ -163,10 +220,10 @@ where the chain itself requires low-S, still refuse high-S.
 
 ### A smaller module; no output change
 
-Every key, address, signature and recovered key is byte for byte what 2.1.0
-produced: RFC 6979 secp256k1 signatures, recoverable signatures and recovered
-keys, BIP-39 seeds, BIP-32/BIP-44 keys and addresses, P-256/P-384/Ed25519
-signatures, ECDH secrets, message and transaction signatures, and the frozen
+Apart from P-384 signatures (fixed, see Security), every key, address,
+signature and recovered key is byte for byte what 2.1.0 produced: RFC 6979
+secp256k1 signatures, recoverable signatures and recovered keys, BIP-39 seeds,
+BIP-32/BIP-44 keys and addresses, P-256/Ed25519 signatures, ECDH secrets, message and transaction signatures, and the frozen
 single-hash cross-language vectors, checked from both the JS package and the
 WASI module. The API, the export names and the files each npm package ships
 are unchanged (the content-hashed wallet-origin host assets in `hd-wallet-ui`
@@ -196,6 +253,11 @@ described under Security. The export list gains `hd_curve_validate_pubkey` and
 | Site assets, brotli 11 | 2,482,438 | 1,092,246 |
 | `hd-wallet-wasm` tarball | 4,643,086 | 2,379,311 |
 | `hd-wallet-ui` tarball | 2,515,476 | 1,389,312 |
+
+The table was measured before the security fixes above; the RFC 6979 fix
+links HMAC-SHA384/SHA-512 and adds about 13 KB to each WASM (browser
+2,707,652 → 2,720,252 bytes standalone, WASI 1,897,259 → 1,905,350,
+`dist/hd-wallet.js` 3,750,367 → 3,768,499).
 
 gzip is `gzip -9 -n` and brotli is quality 11 (Node's zlib); the site totals
 cover the files directly in `docs/assets/`; tarball sizes are `npm pack` with

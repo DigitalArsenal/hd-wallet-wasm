@@ -141,3 +141,141 @@ TEST_CASE(TxSigning, Eip155LegacyRecoveryIdOne) {
   ASSERT_OK(serialized);
   ASSERT_STR_EQ(kEip155SignedNonce0, toHex(serialized.value));
 }
+
+// =============================================================================
+// Ethereum recipient and value (2.1.1)
+// =============================================================================
+//
+// A transaction whose recipient never parsed used to serialize and sign with
+// to = 0x00..00 (isContractCreation_ stays false), sending the value to the
+// burn address. A transfer now needs a recipient; only an explicit contract
+// creation has none.
+
+namespace {
+
+const char* const kBadRecipients[] = {
+    "vitalik.eth",                                    // ENS name
+    "0x52908400098527886E0F7030069857D2E4169EE",      // 39 hex digits
+    "0x52908400098527886E0F7030069857D2E4169EE7a",    // 41 hex digits
+    "0x52908400098527886E0F7030069857D2E4169EE7x",    // extra character
+    "0x52908400098527886E0F7030069857D2E4169EEg",     // 40 chars, one not hex
+    "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",     // Bitcoin address
+    "7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV",    // Solana address
+    "",
+};
+
+tx::EthereumTransaction eip1559Transfer() {
+  auto transaction = tx::EthereumTransaction::createEIP1559(1, 2000000000ULL, 30000000000ULL);
+  transaction.setNonce(7);
+  transaction.setGasLimit(21000);
+  return transaction;
+}
+
+}  // namespace
+
+TEST_CASE(TxSigning, EthTransferWithoutRecipientDoesNotSerializeOrSign) {
+  for (auto transaction : {tx::EthereumTransaction(1), eip1559Transfer()}) {
+    transaction.setValue(1000000000000000000ULL);
+    ASSERT_FALSE(transaction.hasRecipient());
+    ASSERT_ERROR(transaction.serialize(), Error::INVALID_ADDRESS);
+    ASSERT_ERROR(transaction.serializeForSigning(), Error::INVALID_ADDRESS);
+    ASSERT_TRUE(Error::INVALID_ADDRESS == transaction.validate());
+    ASSERT_TRUE(Error::INVALID_ADDRESS == transaction.sign(test::hexToArray<32>(kEip155PrivateKey)));
+    ASSERT_FALSE(transaction.hasSignature());
+  }
+}
+
+TEST_CASE(TxSigning, EthUnparsableRecipientIsRefusedAndLeavesNoRecipient) {
+  for (const char* recipient : kBadRecipients) {
+    auto transaction = eip1559Transfer();
+    transaction.setValue(1000000000000000000ULL);
+    ASSERT_TRUE(Error::INVALID_ADDRESS == transaction.setToFromHex(recipient));
+    ASSERT_FALSE(transaction.hasRecipient());
+    ASSERT_ERROR(transaction.serialize(), Error::INVALID_ADDRESS);
+    ASSERT_TRUE(Error::INVALID_ADDRESS == transaction.sign(test::hexToArray<32>(kEip155PrivateKey)));
+
+    // The C API used by the WASM wrapper: the setter reports the error and
+    // the transaction still cannot be serialized.
+    tx::eth_tx_handle handle = tx::hd_eth_tx_create_eip1559(1, 2000000000ULL, 30000000000ULL);
+    ASSERT_TRUE(handle != nullptr);
+    tx::hd_eth_tx_set_gas_limit(handle, 21000);
+    tx::hd_eth_tx_set_value(handle, 1000000000000000000ULL);
+    ASSERT_EQ(static_cast<int32_t>(Error::INVALID_ADDRESS), tx::hd_eth_tx_set_to_hex(handle, recipient));
+    uint8_t out[512];
+    size_t outLen = 0;
+    ASSERT_EQ(static_cast<int32_t>(Error::INVALID_ADDRESS), tx::hd_eth_tx_serialize(handle, out, sizeof(out), &outLen));
+    const auto key = test::hexToArray<32>(kEip155PrivateKey);
+    ASSERT_EQ(static_cast<int32_t>(Error::INVALID_ADDRESS), tx::hd_eth_tx_sign(handle, key.data()));
+    tx::hd_eth_tx_destroy(handle);
+  }
+}
+
+TEST_CASE(TxSigning, EthExplicitContractCreationSerializesWithEmptyTo) {
+  auto transaction = eip1559Transfer();
+  transaction.setContractCreation(true);
+  transaction.setData(ByteVector{0x60, 0x00});
+  ASSERT_TRUE(transaction.hasRecipient());
+  ASSERT_TRUE(Error::OK == transaction.sign(test::hexToArray<32>(kEip155PrivateKey)));
+  auto serialized = transaction.serialize();
+  ASSERT_OK(serialized);
+  auto parsed = tx::EthereumTransaction::parse(serialized.value);
+  ASSERT_OK(parsed);
+  ASSERT_TRUE(parsed.value.isContractCreation());
+}
+
+TEST_CASE(TxSigning, EthParseRefusesMalformedRecipientField) {
+  // The EIP-155 example with a 19-byte 'to' field: neither a recipient nor a
+  // contract creation (it used to parse as a contract creation).
+  std::string hex(kEip155SignedNonce9);
+  std::string recipient = "94";
+  for (int i = 0; i < 20; ++i) recipient += "35";
+  std::string shortRecipient = "93";
+  for (int i = 0; i < 19; ++i) shortRecipient += "35";
+  const size_t at = hex.find(recipient);
+  ASSERT_TRUE(at != std::string::npos);
+  hex.replace(at, recipient.size(), shortRecipient);
+  ASSERT_STR_EQ("f86c", hex.substr(0, 4));
+  hex.replace(0, 4, "f86b");
+  auto parsed = tx::EthereumTransaction::parseHex(hex);
+  ASSERT_ERROR(parsed, Error::INVALID_TRANSACTION);
+
+  // The unmodified transaction still parses with its recipient.
+  auto original = tx::EthereumTransaction::parseHex(kEip155SignedNonce9);
+  ASSERT_OK(original);
+  ASSERT_TRUE(original.value.hasRecipient());
+  ASSERT_FALSE(original.value.isContractCreation());
+  auto reserialized = original.value.serialize();
+  ASSERT_OK(reserialized);
+  ASSERT_STR_EQ(kEip155SignedNonce9, toHex(reserialized.value));
+}
+
+TEST_CASE(TxSigning, EthValueAboveTwoToThe64SerializesInFull) {
+  // 20 ETH = 20 * 10^18 wei = 0x01158e460913d00000, above 2^64 - 1.
+  auto transaction = eip1559Transfer();
+  ASSERT_TRUE(Error::OK == transaction.setToFromHex("0x52908400098527886E0F7030069857D2E4169EE7"));
+  Bytes32 twentyEth{};
+  const auto valueBytes = test::hexToBytes("01158e460913d00000");
+  std::copy(valueBytes.begin(), valueBytes.end(), twentyEth.end() - valueBytes.size());
+  transaction.setValue(twentyEth);
+  auto serialized = transaction.serialize();
+  ASSERT_OK(serialized);
+  // RLP of the value: 0x89 (9-byte string) then the nine bytes.
+  ASSERT_TRUE(toHex(serialized.value).find("94" "52908400098527886e0f7030069857d2e4169ee7" "89" "01158e460913d00000") !=
+              std::string::npos);
+  auto parsed = tx::EthereumTransaction::parse(serialized.value);
+  ASSERT_OK(parsed);
+  ASSERT_STR_EQ(toHex(twentyEth), toHex(parsed.value.value()));
+
+  // Through the C API's 256-bit setter, which the WASM wrapper now uses.
+  tx::eth_tx_handle handle = tx::hd_eth_tx_create_eip1559(1, 2000000000ULL, 30000000000ULL);
+  ASSERT_TRUE(handle != nullptr);
+  tx::hd_eth_tx_set_nonce(handle, 7);
+  tx::hd_eth_tx_set_gas_limit(handle, 21000);
+  ASSERT_EQ(0, tx::hd_eth_tx_set_to_hex(handle, "0x52908400098527886E0F7030069857D2E4169EE7"));
+  tx::hd_eth_tx_set_value_256(handle, twentyEth.data());
+  uint8_t out[512];
+  size_t outLen = 0;
+  ASSERT_EQ(0, tx::hd_eth_tx_serialize(handle, out, sizeof(out), &outLen));
+  ASSERT_STR_EQ(toHex(serialized.value), toHex(out, outLen));
+  tx::hd_eth_tx_destroy(handle);
+}

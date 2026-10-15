@@ -360,6 +360,13 @@ public:
   void setContractCreation(bool creation) { isContractCreation_ = creation; }
 
   /**
+   * True when the transaction has a recipient set with setTo/setToFromHex (or
+   * parsed), or is an explicit contract creation. A transaction with neither
+   * does not serialize or sign: it would otherwise send to 0x00..00.
+   */
+  bool hasRecipient() const { return isContractCreation_ || hasTo_; }
+
+  /**
    * Get value in wei
    */
   const Bytes32& value() const { return value_; }
@@ -480,6 +487,7 @@ private:
   uint64_t maxFeePerGas_;          // EIP-1559 only
   uint64_t gasLimit_;
   std::array<uint8_t, 20> to_;
+  bool hasTo_;
   bool isContractCreation_;
   Bytes32 value_;
   ByteVector data_;
@@ -491,6 +499,9 @@ private:
   Bytes32 signatureS_;
 
   TxStatus status_;
+
+  // Read an encoded 'to' field into tx (false when it is malformed)
+  static bool readRecipient(const ByteVector& field, EthereumTransaction& tx);
 
   // Encode transaction fields to RLP items
   std::vector<ByteVector> encodeFields() const;

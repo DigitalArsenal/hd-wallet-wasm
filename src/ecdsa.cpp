@@ -24,6 +24,7 @@
 #include <cryptopp/integer.h>
 #include <cryptopp/dsa.h>
 #include <cryptopp/sha.h>
+#include <cryptopp/hmac.h>
 #include <cryptopp/secblock.h>
 #include <cryptopp/modarith.h>
 
@@ -329,86 +330,123 @@ struct SignatureData {
 namespace {
 
 /**
- * RFC 6979 deterministic k generation
+ * RFC 6979 section 2.3.2 bits2int: the leftmost qBits bits of `data` as a
+ * non-negative integer. ECDSA's z (FIPS 186-4 section 6.4) is the same value.
+ */
+CryptoPP::Integer bits2int(const uint8_t* data, size_t len, size_t qBits) {
+    CryptoPP::Integer value(data, len);
+    const size_t bits = len * 8;
+    if (bits > qBits) {
+        value >>= static_cast<unsigned int>(bits - qBits);
+    }
+    return value;
+}
+
+/**
+ * RFC 6979 section 3.2 deterministic k, with HMAC over the message hash
+ * function H (SHA-256, SHA-384 or SHA-512, named by the hash length).
+ *
+ * V and K are hlen = |H| octets; x and h1 enter as int2octets(x) and
+ * bits2octets(h1) of rlen = ceil(qlen / 8) octets; k is bits2int(T) with T
+ * built from whole HMAC outputs. Before 2.1.1, V and K were sized to the hash
+ * but always filled by HMAC-SHA256, so a P-384 nonce ended in sixteen
+ * constant 0x01 octets.
  */
 template<typename HashType>
+CryptoPP::Integer rfc6979Nonce(
+    const CryptoPP::Integer& x,
+    const uint8_t* h1,
+    size_t h1Len,
+    const CryptoPP::Integer& q
+) {
+    constexpr size_t hLen = HashType::DIGESTSIZE;
+    const size_t qBits = q.BitCount();
+    const size_t rLen = (qBits + 7) / 8;
+
+    // int2octets(x)
+    CryptoPP::SecByteBlock xOctets(rLen);
+    x.Encode(xOctets.data(), rLen);
+
+    // bits2octets(h1) = int2octets(bits2int(h1) mod q). bits2int(h1) < 2^qlen < 2q.
+    CryptoPP::Integer z1 = bits2int(h1, h1Len, qBits);
+    if (z1 >= q) {
+        z1 -= q;
+    }
+    CryptoPP::SecByteBlock hOctets(rLen);
+    z1.Encode(hOctets.data(), rLen);
+
+    CryptoPP::SecByteBlock V(hLen);
+    std::memset(V.data(), 0x01, hLen);
+    CryptoPP::SecByteBlock K(hLen);
+    std::memset(K.data(), 0x00, hLen);
+
+    CryptoPP::HMAC<HashType> hmac;
+
+    // K = HMAC_K(V || sep || int2octets(x) || bits2octets(h1))
+    auto rekeyWithSecret = [&](uint8_t separator) {
+        hmac.SetKey(K.data(), K.size());
+        hmac.Update(V.data(), V.size());
+        hmac.Update(&separator, 1);
+        hmac.Update(xOctets.data(), xOctets.size());
+        hmac.Update(hOctets.data(), hOctets.size());
+        hmac.Final(K.data());
+    };
+    // V = HMAC_K(V)
+    auto stepV = [&]() {
+        hmac.SetKey(K.data(), K.size());
+        hmac.Update(V.data(), V.size());
+        hmac.Final(V.data());
+    };
+
+    rekeyWithSecret(0x00);  // step d
+    stepV();                // step e
+    rekeyWithSecret(0x01);  // step f
+    stepV();                // step g
+
+    const size_t tLenBytes = ((qBits + 7) / 8 + hLen - 1) / hLen * hLen;
+    CryptoPP::SecByteBlock T(tLenBytes);
+    while (true) {
+        // step h.2: T = V || V || ... until tlen >= qlen
+        for (size_t offset = 0; offset < tLenBytes; offset += hLen) {
+            stepV();
+            std::memcpy(T.data() + offset, V.data(), hLen);
+        }
+
+        // step h.3
+        CryptoPP::Integer candidate = bits2int(T.data(), T.size(), qBits);
+        if (candidate >= 1 && candidate < q) {
+            return candidate;
+        }
+
+        // K = HMAC_K(V || 0x00), V = HMAC_K(V)
+        hmac.SetKey(K.data(), K.size());
+        hmac.Update(V.data(), V.size());
+        const uint8_t zero = 0x00;
+        hmac.Update(&zero, 1);
+        hmac.Final(K.data());
+        stepV();
+    }
+}
+
+/**
+ * RFC 6979 nonce for a message hash of 32, 48 or 64 bytes (SHA-256, SHA-384,
+ * SHA-512). Any other length is refused: the HMAC must use the message hash.
+ */
 CryptoPP::Integer generateDeterministicK(
     const CryptoPP::Integer& privateKey,
     const uint8_t* hash,
     size_t hashLen,
     const CryptoPP::Integer& order
 ) {
-    // RFC 6979 deterministic nonce generation
-    size_t qLen = order.ByteCount();
-
-    CryptoPP::SecByteBlock v(hashLen);  // V = 0x01...01
-    std::memset(v.data(), 0x01, hashLen);
-    CryptoPP::SecByteBlock k(hashLen);  // K = 0x00...00
-    std::memset(k.data(), 0x00, hashLen);
-
-    // Encode private key
-    CryptoPP::SecByteBlock x(qLen);
-    privateKey.Encode(x.data(), qLen);
-
-    // K = HMAC_K(V || 0x00 || int2octets(x) || bits2octets(h1))
-    CryptoPP::HMAC<HashType> hmac;
-
-    ByteVector hmacInput;
-    hmacInput.insert(hmacInput.end(), v.begin(), v.end());
-    hmacInput.push_back(0x00);
-    hmacInput.insert(hmacInput.end(), x.begin(), x.end());
-    hmacInput.insert(hmacInput.end(), hash, hash + hashLen);
-
-    hmac.SetKey(k.data(), k.size());
-    hmac.CalculateDigest(k.data(), hmacInput.data(), hmacInput.size());
-
-    // V = HMAC_K(V)
-    hmac.SetKey(k.data(), k.size());
-    hmac.CalculateDigest(v.data(), v.data(), v.size());
-
-    // K = HMAC_K(V || 0x01 || int2octets(x) || bits2octets(h1))
-    hmacInput.clear();
-    hmacInput.insert(hmacInput.end(), v.begin(), v.end());
-    hmacInput.push_back(0x01);
-    hmacInput.insert(hmacInput.end(), x.begin(), x.end());
-    hmacInput.insert(hmacInput.end(), hash, hash + hashLen);
-
-    hmac.SetKey(k.data(), k.size());
-    hmac.CalculateDigest(k.data(), hmacInput.data(), hmacInput.size());
-
-    // V = HMAC_K(V)
-    hmac.SetKey(k.data(), k.size());
-    hmac.CalculateDigest(v.data(), v.data(), v.size());
-
-    // Generate k candidates
-    while (true) {
-        CryptoPP::SecByteBlock t;
-
-        while (t.size() < qLen) {
-            // V = HMAC_K(V)
-            hmac.SetKey(k.data(), k.size());
-            hmac.CalculateDigest(v.data(), v.data(), v.size());
-            t.Grow(t.size() + v.size());
-            std::memcpy(t.data() + t.size() - v.size(), v.data(), v.size());
-        }
-
-        CryptoPP::Integer candidate(t.data(), qLen);
-
-        if (candidate >= 1 && candidate < order) {
-            return candidate;
-        }
-
-        // K = HMAC_K(V || 0x00)
-        hmacInput.clear();
-        hmacInput.insert(hmacInput.end(), v.begin(), v.end());
-        hmacInput.push_back(0x00);
-
-        hmac.SetKey(k.data(), k.size());
-        hmac.CalculateDigest(k.data(), hmacInput.data(), hmacInput.size());
-
-        // V = HMAC_K(V)
-        hmac.SetKey(k.data(), k.size());
-        hmac.CalculateDigest(v.data(), v.data(), v.size());
+    switch (hashLen) {
+        case CryptoPP::SHA256::DIGESTSIZE:
+            return rfc6979Nonce<CryptoPP::SHA256>(privateKey, hash, hashLen, order);
+        case CryptoPP::SHA384::DIGESTSIZE:
+            return rfc6979Nonce<CryptoPP::SHA384>(privateKey, hash, hashLen, order);
+        case CryptoPP::SHA512::DIGESTSIZE:
+            return rfc6979Nonce<CryptoPP::SHA512>(privateKey, hash, hashLen, order);
+        default:
+            throw std::invalid_argument("Unsupported message hash length");
     }
 }
 
@@ -438,7 +476,7 @@ SignatureData signWithRecovery(
     }
 
     // Generate deterministic k (RFC 6979)
-    CryptoPP::Integer k = generateDeterministicK<CryptoPP::SHA256>(d, hash, hashLen, n);
+    CryptoPP::Integer k = generateDeterministicK(d, hash, hashLen, n);
 
     // Compute R = k * G
     CryptoPP::ECPPoint R = curve.ec().ScalarMultiply(curve.generator(), k);
@@ -458,8 +496,8 @@ SignatureData signWithRecovery(
         recoveryId |= 1;  // y is odd
     }
 
-    // z = hash (interpreted as integer)
-    CryptoPP::Integer z(hash, hashLen);
+    // z = the leftmost qlen bits of the hash
+    CryptoPP::Integer z = bits2int(hash, hashLen, n.BitCount());
 
     // s = k^-1 * (z + r*d) mod n
     CryptoPP::Integer kInv = k.InverseMod(n);
@@ -793,8 +831,8 @@ bool verifyCompact(
             return false;
         }
 
-        // z = hash
-        CryptoPP::Integer z(hash, hashLen);
+        // z = the leftmost qlen bits of the hash
+        CryptoPP::Integer z = bits2int(hash, hashLen, n.BitCount());
 
         // w = s^-1 mod n
         CryptoPP::Integer w = s.InverseMod(n);
@@ -945,8 +983,8 @@ bool recover(
             return false;
         }
 
-        // z = hash
-        CryptoPP::Integer z(hash, hashLen);
+        // z = the leftmost qlen bits of the hash
+        CryptoPP::Integer z = bits2int(hash, hashLen, n.BitCount());
 
         // rInv = r^-1 mod n
         CryptoPP::Integer rInv = r.InverseMod(n);

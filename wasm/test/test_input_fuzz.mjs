@@ -533,6 +533,48 @@ fuzz('verifyEPMSignature', 'false', [
 // Wrong types are programmer errors: they throw, verification included
 // ---------------------------------------------------------------------------
 
+// An Ethereum transaction never signs without a valid recipient, and its
+// integer fields are never wrapped modulo 2^64 (2.1.1).
+const signEth = (build) => () => {
+  const tx = build();
+  try { return tx.sign(K).serialize(); } finally { tx.destroy(); }
+};
+const eth1559 = (overrides) => signEth(() => wallet.ethereum.tx.createEIP1559({
+  chainId: 1, nonce: 0, maxPriorityFeePerGas: 1n, maxFeePerGas: 2n, gasLimit: 21000n,
+  to: '0x000000000000000000000000000000000000dEaD', value: 1n, ...overrides,
+}));
+const ethLegacy = (overrides) => signEth(() => wallet.ethereum.tx.create({
+  chainId: 1, nonce: 0, gasPrice: 1n, gasLimit: 21000n,
+  to: '0x000000000000000000000000000000000000dEaD', value: 1n, ...overrides,
+}));
+fuzz('ethereum.tx recipient and integer fields', 'throw', [
+  ...[
+    ['ENS name', 'vitalik.eth'],
+    ['39 hex', '0x' + 'ab'.repeat(19) + 'a'],
+    ['41 hex', '0x' + 'ab'.repeat(20) + 'a'],
+    ['extra character', '0x' + 'ab'.repeat(20) + 'x'],
+    ['non-hex', '0x' + 'zz'.repeat(20)],
+    ['bare 0x', '0x'],
+    ['Bitcoin address', 'bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq'],
+    ['Solana address', '7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV'],
+  ].flatMap(([label, to]) => [[`eip1559 to ${label}`, eth1559({ to })], [`legacy to ${label}`, ethLegacy({ to })]]),
+  ['eip1559 no to', eth1559({ to: undefined })],
+  ['eip1559 empty to', eth1559({ to: '' })],
+  ['legacy no to', ethLegacy({ to: undefined })],
+  ['legacy create({chainId}) only', signEth(() => wallet.ethereum.tx.create({ chainId: 1 }))],
+  ['value 2^256', eth1559({ value: 1n << 256n })],
+  ['value -1', eth1559({ value: -1n })],
+  ['value 0.5', eth1559({ value: 0.5 })],
+  ['value 2^53 + 1 as a number', eth1559({ value: 2 ** 53 + 2 })],
+  ['nonce 2^64', eth1559({ nonce: 1n << 64n })],
+  ['gasLimit 2^64 + 21000', eth1559({ gasLimit: (1n << 64n) + 21000n })],
+  ['maxFeePerGas 2^64', eth1559({ maxFeePerGas: 1n << 64n })],
+  ['maxPriorityFeePerGas -1', eth1559({ maxPriorityFeePerGas: -1n })],
+  ['chainId -1', eth1559({ chainId: -1 })],
+  ['legacy gasPrice 2^64', ethLegacy({ gasPrice: 1n << 64n })],
+  ['legacy value 2^256', ethLegacy({ value: 1n << 256n })],
+]);
+
 fuzz('wrong argument types', 'throw', [
   ['sha256(string)', () => wallet.utils.sha256('not bytes')],
   ['sha256(array)', () => wallet.utils.sha256([1, 2, 3])],

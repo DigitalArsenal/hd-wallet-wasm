@@ -326,6 +326,7 @@ EthereumTransaction::EthereumTransaction()
   , maxFeePerGas_(0)
   , gasLimit_(ETH_DEFAULT_GAS_LIMIT)
   , to_{}
+  , hasTo_(false)
   , isContractCreation_(false)
   , value_{}
   , data_()
@@ -344,6 +345,7 @@ EthereumTransaction::EthereumTransaction(uint64_t chainId)
   , maxFeePerGas_(0)
   , gasLimit_(ETH_DEFAULT_GAS_LIMIT)
   , to_{}
+  , hasTo_(false)
   , isContractCreation_(false)
   , value_{}
   , data_()
@@ -379,6 +381,7 @@ EthereumTransaction EthereumTransaction::createEIP2930(uint64_t chainId) {
 
 void EthereumTransaction::setTo(const std::array<uint8_t, 20>& to) {
   to_ = to;
+  hasTo_ = true;
   isContractCreation_ = false;
 }
 
@@ -388,6 +391,7 @@ Error EthereumTransaction::setToFromHex(const std::string& addressHex) {
     return result.error;
   }
   to_ = result.value;
+  hasTo_ = true;
   isContractCreation_ = false;
   return Error::OK;
 }
@@ -576,6 +580,9 @@ std::vector<ByteVector> EthereumTransaction::encodeFieldsForSigning() const {
 }
 
 Result<ByteVector> EthereumTransaction::serializeForSigning() const {
+  if (!hasRecipient()) {
+    return Result<ByteVector>::fail(Error::INVALID_ADDRESS);
+  }
   auto items = encodeFieldsForSigning();
   ByteVector encoded = rlp::encodeList(items);
 
@@ -591,6 +598,9 @@ Result<ByteVector> EthereumTransaction::serializeForSigning() const {
 }
 
 Result<ByteVector> EthereumTransaction::serialize() const {
+  if (!hasRecipient()) {
+    return Result<ByteVector>::fail(Error::INVALID_ADDRESS);
+  }
   auto items = encodeFields();
   ByteVector encoded = rlp::encodeList(items);
 
@@ -713,6 +723,11 @@ bool EthereumTransaction::verify() const {
 }
 
 Error EthereumTransaction::validate() const {
+  // A transfer needs a recipient; only an explicit contract creation has none.
+  if (!hasRecipient()) {
+    return Error::INVALID_ADDRESS;
+  }
+
   // Check gas limit
   if (gasLimit_ == 0) {
     return Error::INVALID_TRANSACTION;
@@ -743,6 +758,7 @@ std::unique_ptr<Transaction> EthereumTransaction::clone() const {
   tx->maxFeePerGas_ = maxFeePerGas_;
   tx->gasLimit_ = gasLimit_;
   tx->to_ = to_;
+  tx->hasTo_ = hasTo_;
   tx->isContractCreation_ = isContractCreation_;
   tx->value_ = value_;
   tx->data_ = data_;
@@ -797,6 +813,23 @@ Result<std::array<uint8_t, 20>> EthereumTransaction::getSender() const {
 
 // ----- Parsing -----
 
+// The 'to' field of an encoded transaction: 20 bytes is a recipient, empty is
+// a contract creation, anything else is malformed.
+bool EthereumTransaction::readRecipient(const ByteVector& field, EthereumTransaction& tx) {
+  if (field.size() == 20) {
+    std::copy(field.begin(), field.end(), tx.to_.begin());
+    tx.hasTo_ = true;
+    tx.isContractCreation_ = false;
+    return true;
+  }
+  if (field.empty()) {
+    tx.hasTo_ = false;
+    tx.isContractCreation_ = true;
+    return true;
+  }
+  return false;
+}
+
 Result<EthereumTransaction> EthereumTransaction::parse(const ByteVector& data) {
   if (data.empty()) {
     return Result<EthereumTransaction>::fail(Error::INVALID_TRANSACTION);
@@ -828,14 +861,11 @@ Result<EthereumTransaction> EthereumTransaction::parse(const ByteVector& data) {
       tx.maxFeePerGas_ = rlp::decodeInteger((*items)[3]);
       tx.gasLimit_ = rlp::decodeInteger((*items)[4]);
 
-      if ((*items)[5].size() == 20) {
-        std::copy((*items)[5].begin(), (*items)[5].end(), tx.to_.begin());
-        tx.isContractCreation_ = false;
-      } else {
-        tx.isContractCreation_ = true;
+      if (!readRecipient((*items)[5], tx) || (*items)[6].size() > 32) {
+        return Result<EthereumTransaction>::fail(Error::INVALID_TRANSACTION);
       }
 
-      if ((*items)[6].size() <= 32) {
+      {
         std::fill(tx.value_.begin(), tx.value_.end(), 0);
         size_t start = 32 - (*items)[6].size();
         std::copy((*items)[6].begin(), (*items)[6].end(), tx.value_.begin() + start);
@@ -868,14 +898,11 @@ Result<EthereumTransaction> EthereumTransaction::parse(const ByteVector& data) {
       tx.gasPrice_ = rlp::decodeInteger((*items)[2]);
       tx.gasLimit_ = rlp::decodeInteger((*items)[3]);
 
-      if ((*items)[4].size() == 20) {
-        std::copy((*items)[4].begin(), (*items)[4].end(), tx.to_.begin());
-        tx.isContractCreation_ = false;
-      } else {
-        tx.isContractCreation_ = true;
+      if (!readRecipient((*items)[4], tx) || (*items)[5].size() > 32) {
+        return Result<EthereumTransaction>::fail(Error::INVALID_TRANSACTION);
       }
 
-      if ((*items)[5].size() <= 32) {
+      {
         std::fill(tx.value_.begin(), tx.value_.end(), 0);
         size_t start = 32 - (*items)[5].size();
         std::copy((*items)[5].begin(), (*items)[5].end(), tx.value_.begin() + start);
@@ -915,14 +942,11 @@ Result<EthereumTransaction> EthereumTransaction::parse(const ByteVector& data) {
     tx.gasPrice_ = rlp::decodeInteger((*items)[1]);
     tx.gasLimit_ = rlp::decodeInteger((*items)[2]);
 
-    if ((*items)[3].size() == 20) {
-      std::copy((*items)[3].begin(), (*items)[3].end(), tx.to_.begin());
-      tx.isContractCreation_ = false;
-    } else {
-      tx.isContractCreation_ = true;
+    if (!readRecipient((*items)[3], tx) || (*items)[4].size() > 32) {
+      return Result<EthereumTransaction>::fail(Error::INVALID_TRANSACTION);
     }
 
-    if ((*items)[4].size() <= 32) {
+    {
       std::fill(tx.value_.begin(), tx.value_.end(), 0);
       size_t start = 32 - (*items)[4].size();
       std::copy((*items)[4].begin(), (*items)[4].end(), tx.value_.begin() + start);

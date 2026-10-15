@@ -681,3 +681,180 @@ TEST_CASE(Curves, KeyValidation_PrivateKeys) {
     ASSERT_FALSE(keys::isValidPrivateKey(Curve::P256, allFf.data(), 32));
     ASSERT_TRUE(keys::isValidPrivateKey(Curve::ED25519, allFf.data(), 32));
 }
+
+// =============================================================================
+// Test: RFC 6979 deterministic ECDSA known answers (2.1.1)
+// =============================================================================
+//
+// RFC 6979 Appendix A.2.5 (P-256) and A.2.6 (P-384), messages "sample" and
+// "test", with SHA-256, SHA-384 and SHA-512 message hashes. The HMAC in the
+// nonce derivation uses the message hash function. Before 2.1.1 every curve
+// used HMAC-SHA256 into hash-sized V and K, so each P-384 nonce ended in
+// sixteen 0x01 octets and none of the A.2.6 signatures were reproduced.
+
+#include "hd_wallet/ecdsa.h"
+
+#include <cryptopp/sha.h>
+
+namespace hd_wallet {
+namespace ecdsa {
+// Defined in src/ecdsa.cpp; the compact-signature core behind p256Sign,
+// p384Sign and secp256k1Sign, taking a message hash of any supported length.
+bool signCompact(Curve curve, const uint8_t* privateKey, size_t privateKeyLen,
+                 const uint8_t* hash, size_t hashLen, uint8_t* signature,
+                 size_t* signatureLen, int* recoveryId);
+bool verifyCompact(Curve curve, const uint8_t* publicKey, size_t publicKeyLen,
+                   const uint8_t* hash, size_t hashLen, const uint8_t* signature,
+                   size_t signatureLen);
+} // namespace ecdsa
+} // namespace hd_wallet
+
+namespace {
+
+struct Rfc6979Vector {
+    unsigned hashBits;     // 256, 384 or 512
+    const char* message;
+    const char* r;
+    const char* s;
+};
+
+const char* const kRfcP256Private = "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721";
+const char* const kRfcP256Public =
+    "04" "60fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6"
+    "7903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299";
+
+const Rfc6979Vector kRfcP256Vectors[] = {
+    {256, "sample", "efd48b2aacb6a8fd1140dd9cd45e81d69d2c877b56aaf991c34d0ea84eaf3716",
+                    "f7cb1c942d657c41d436c7a1b6e29f65f3e900dbb9aff4064dc4ab2f843acda8"},
+    {384, "sample", "0eafea039b20e9b42309fb1d89e213057cbf973dc0cfc8f129edddc800ef7719",
+                    "4861f0491e6998b9455193e34e7b0d284ddd7149a74b95b9261f13abde940954"},
+    {512, "sample", "8496a60b5e9b47c825488827e0495b0e3fa109ec4568fd3f8d1097678eb97f00",
+                    "2362ab1adbe2b8adf9cb9edab740ea6049c028114f2460f96554f61fae3302fe"},
+    {256, "test",   "f1abb023518351cd71d881567b1ea663ed3efcf6c5132b354f28d3b0b7d38367",
+                    "019f4113742a2b14bd25926b49c649155f267e60d3814b4c0cc84250e46f0083"},
+    {384, "test",   "83910e8b48bb0c74244ebdf7f07a1c5413d61472bd941ef3920e623fbccebeb6",
+                    "8ddbec54cf8cd5874883841d712142a56a8d0f218f5003cb0296b6b509619f2c"},
+    {512, "test",   "461d93f31b6540894788fd206c07cfa0cc35f46fa3c91816fff1040ad1581a04",
+                    "39af9f15de0db8d97e72719c74820d304ce5226e32dedae67519e840d1194e55"},
+};
+
+const char* const kRfcP384Private =
+    "6b9d3dad2e1b8c1c05b19875b6659f4de23c3b667bf297ba9aa47740787137d896d5724e4c70a825f872c9ea60d2edf5";
+const char* const kRfcP384Public =
+    "04" "ec3a4e415b4e19a4568618029f427fa5da9a8bc4ae92e02e06aae5286b300c64def8f0ea9055866064a254515480bc13"
+    "8015d9b72d7d57244ea8ef9ac0c621896708a59367f9dfb9f54ca84b3f1c9db1288b231c3ae0d4fe7344fd2533264720";
+
+const Rfc6979Vector kRfcP384Vectors[] = {
+    {256, "sample",
+     "21b13d1e013c7fa1392d03c5f99af8b30c570c6f98d4ea8e354b63a21d3daa33bde1e888e63355d92fa2b3c36d8fb2cd",
+     "f3aa443fb107745bf4bd77cb3891674632068a10ca67e3d45db2266fa7d1feebefdc63eccd1ac42ec0cb8668a4fa0ab0"},
+    {384, "sample",
+     "94edbb92a5ecb8aad4736e56c691916b3f88140666ce9fa73d64c4ea95ad133c81a648152e44acf96e36dd1e80fabe46",
+     "99ef4aeb15f178cea1fe40db2603138f130e740a19624526203b6351d0a3a94fa329c145786e679e7b82c71a38628ac8"},
+    {512, "sample",
+     "ed0959d5880ab2d869ae7f6c2915c6d60f96507f9cb3e047c0046861da4a799cfe30f35cc900056d7c99cd7882433709",
+     "512c8cceee3890a84058ce1e22dbc2198f42323ce8aca9135329f03c068e5112dc7cc3ef3446defceb01a45c2667fdd5"},
+    {256, "test",
+     "6d6defac9ab64dabafe36c6bf510352a4cc27001263638e5b16d9bb51d451559f918eedaf2293be5b475cc8f0188636b",
+     "2d46f3becbcc523d5f1a1256bf0c9b024d879ba9e838144c8ba6baeb4b53b47d51ab373f9845c0514eefb14024787265"},
+    {384, "test",
+     "8203b63d3c853e8d77227fb377bcf7b7b772e97892a80f36ab775d509d7a5feb0542a7f0812998da8f1dd3ca3cf023db",
+     "ddd0760448d42d8a43af45af836fce4de8be06b485e9b61b827c2f13173923e06a739f040649a667bf3b828246baa5a5"},
+    {512, "test",
+     "a0d5d090c9980faf3c2ce57b7ae951d31977dd11c775d314af55f76c676447d06fb6495cd21b4b6e340fc236584fb277",
+     "976984e59b4c77b0e8e4460dca3d9f20e07b9bb1f63beefaf576f6b2e8b224634a2092cd3792e0159ad9cee37659c736"},
+};
+
+ByteVector rfcMessageHash(unsigned bits, const char* message) {
+    const auto* data = reinterpret_cast<const uint8_t*>(message);
+    const size_t len = std::strlen(message);
+    ByteVector out;
+    if (bits == 256) {
+        out.resize(CryptoPP::SHA256::DIGESTSIZE);
+        CryptoPP::SHA256().CalculateDigest(out.data(), data, len);
+    } else if (bits == 384) {
+        out.resize(CryptoPP::SHA384::DIGESTSIZE);
+        CryptoPP::SHA384().CalculateDigest(out.data(), data, len);
+    } else {
+        out.resize(CryptoPP::SHA512::DIGESTSIZE);
+        CryptoPP::SHA512().CalculateDigest(out.data(), data, len);
+    }
+    return out;
+}
+
+std::string bytesHex(const uint8_t* data, size_t len) {
+    static const char* digits = "0123456789abcdef";
+    std::string out;
+    for (size_t i = 0; i < len; ++i) {
+        out.push_back(digits[data[i] >> 4]);
+        out.push_back(digits[data[i] & 0x0f]);
+    }
+    return out;
+}
+
+void checkRfc6979(Curve curve, const char* privateHex, const char* publicHex,
+                  const Rfc6979Vector* vectors, size_t count, size_t coordSize) {
+    auto priv = test::hexToBytes(privateHex);
+    auto pub = test::hexToBytes(publicHex);
+    for (size_t i = 0; i < count; ++i) {
+        const auto& vec = vectors[i];
+        auto hash = rfcMessageHash(vec.hashBits, vec.message);
+        std::vector<uint8_t> sig(coordSize * 2);
+        size_t sigLen = sig.size();
+        int recoveryId = -1;
+        ASSERT_TRUE(ecdsa::signCompact(curve, priv.data(), priv.size(), hash.data(), hash.size(),
+                                       sig.data(), &sigLen, &recoveryId));
+        ASSERT_EQ(coordSize * 2, sigLen);
+        ASSERT_STR_EQ(std::string(vec.r) + vec.s, bytesHex(sig.data(), sigLen));
+        ASSERT_TRUE(ecdsa::verifyCompact(curve, pub.data(), pub.size(), hash.data(), hash.size(),
+                                         sig.data(), sigLen));
+    }
+}
+
+} // namespace
+
+TEST_CASE(Curves, Rfc6979_P256_KnownAnswers) {
+    checkRfc6979(Curve::P256, kRfcP256Private, kRfcP256Public, kRfcP256Vectors,
+                 sizeof(kRfcP256Vectors) / sizeof(kRfcP256Vectors[0]), 32);
+}
+
+TEST_CASE(Curves, Rfc6979_P384_KnownAnswers) {
+    checkRfc6979(Curve::P384, kRfcP384Private, kRfcP384Public, kRfcP384Vectors,
+                 sizeof(kRfcP384Vectors) / sizeof(kRfcP384Vectors[0]), 48);
+}
+
+TEST_CASE(Curves, Rfc6979_PublicSignersMatchKnownAnswers) {
+    // p256Sign takes a SHA-256 hash, p384Sign a SHA-384 hash (the hashes the
+    // WASM hd_p256_sign / hd_p384_sign and X.509 signing compute).
+    auto p256Hash = rfcMessageHash(256, "sample");
+    Bytes32 p256Digest{};
+    std::copy(p256Hash.begin(), p256Hash.end(), p256Digest.begin());
+    auto p256 = ecdsa::p256Sign(test::hexToArray<32>(kRfcP256Private), p256Digest);
+    ASSERT_OK(p256);
+    ASSERT_STR_EQ(std::string(kRfcP256Vectors[0].r) + kRfcP256Vectors[0].s,
+                  bytesHex(p256.value.data(), p256.value.size()));
+
+    auto p384Hash = rfcMessageHash(384, "test");
+    std::array<uint8_t, 48> p384Digest{};
+    std::copy(p384Hash.begin(), p384Hash.end(), p384Digest.begin());
+    auto p384 = ecdsa::p384Sign(test::hexToArray<48>(kRfcP384Private), p384Digest);
+    ASSERT_OK(p384);
+    ASSERT_STR_EQ(std::string(kRfcP384Vectors[4].r) + kRfcP384Vectors[4].s,
+                  bytesHex(p384.value.data(), p384.value.size()));
+    ByteVector p384Pub = test::hexToBytes(kRfcP384Public);
+    ASSERT_TRUE(ecdsa::p384Verify(p384Pub, p384Digest, p384.value));
+}
+
+TEST_CASE(Curves, Rfc6979_RefusesUnsupportedHashLength) {
+    // The nonce HMAC must use the message hash, so a hash that is not
+    // SHA-256, SHA-384 or SHA-512 sized is refused instead of guessed.
+    auto priv = test::hexToBytes(kRfcP256Private);
+    for (size_t len : {size_t(0), size_t(20), size_t(28), size_t(33), size_t(47), size_t(65)}) {
+        ByteVector hash(len == 0 ? 1 : len, 0x5a);
+        uint8_t sig[96] = {};
+        size_t sigLen = sizeof(sig);
+        int recoveryId = -1;
+        ASSERT_FALSE(ecdsa::signCompact(Curve::P256, priv.data(), priv.size(), hash.data(), len,
+                                        sig, &sigLen, &recoveryId));
+    }
+}
