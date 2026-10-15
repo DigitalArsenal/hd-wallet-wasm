@@ -157,139 +157,116 @@ ByteVector encodeListRaw(const std::vector<ByteVector>& items) {
   return encodeList(encodedItems);
 }
 
-std::optional<ByteVector> decode(const ByteVector& data, size_t& offset) {
-  if (offset >= data.size()) {
-    return std::nullopt;
+namespace {
+
+// A big-endian length in `count` bytes at data[at]: 1 to sizeof(size_t) bytes,
+// no leading zero byte (canonical), within the input.
+bool readLength(const ByteVector& data, size_t at, size_t count, size_t& out) {
+  if (count == 0 || count > sizeof(size_t) || at > data.size() || count > data.size() - at ||
+      data[at] == 0) {
+    return false;
   }
-
-  uint8_t prefix = data[offset];
-
-  if (prefix < 0x80) {
-    // Single byte
-    ++offset;
-    return ByteVector{prefix};
+  size_t value = 0;
+  for (size_t i = 0; i < count; ++i) {
+    value = (value << 8) | data[at + i];
   }
-
-  if (prefix <= 0xb7) {
-    // Short string (0-55 bytes)
-    size_t length = prefix - 0x80;
-    if (offset + 1 + length > data.size()) {
-      return std::nullopt;
-    }
-    ByteVector result(data.begin() + offset + 1, data.begin() + offset + 1 + length);
-    offset += 1 + length;
-    return result;
-  }
-
-  if (prefix <= 0xbf) {
-    // Long string
-    size_t lenLen = prefix - 0xb7;
-    if (offset + 1 + lenLen > data.size()) {
-      return std::nullopt;
-    }
-
-    size_t length = 0;
-    for (size_t i = 0; i < lenLen; ++i) {
-      length = (length << 8) | data[offset + 1 + i];
-    }
-
-    if (offset + 1 + lenLen + length > data.size()) {
-      return std::nullopt;
-    }
-
-    ByteVector result(data.begin() + offset + 1 + lenLen,
-                      data.begin() + offset + 1 + lenLen + length);
-    offset += 1 + lenLen + length;
-    return result;
-  }
-
-  // List (0xc0 - 0xff)
-  // For decode(), we return the raw list data
-  if (prefix <= 0xf7) {
-    size_t length = prefix - 0xc0;
-    if (offset + 1 + length > data.size()) {
-      return std::nullopt;
-    }
-    ByteVector result(data.begin() + offset + 1, data.begin() + offset + 1 + length);
-    offset += 1 + length;
-    return result;
-  }
-
-  size_t lenLen = prefix - 0xf7;
-  if (offset + 1 + lenLen > data.size()) {
-    return std::nullopt;
-  }
-
-  size_t length = 0;
-  for (size_t i = 0; i < lenLen; ++i) {
-    length = (length << 8) | data[offset + 1 + i];
-  }
-
-  if (offset + 1 + lenLen + length > data.size()) {
-    return std::nullopt;
-  }
-
-  ByteVector result(data.begin() + offset + 1 + lenLen,
-                    data.begin() + offset + 1 + lenLen + length);
-  offset += 1 + lenLen + length;
-  return result;
+  out = value;
+  return true;
 }
 
-std::optional<std::vector<ByteVector>> decodeList(const ByteVector& data, size_t& offset) {
+}  // namespace
+
+std::optional<Item> decodeItem(const ByteVector& data, size_t& offset) {
   if (offset >= data.size()) {
     return std::nullopt;
   }
-
-  uint8_t prefix = data[offset];
-
-  if (prefix < 0xc0) {
-    return std::nullopt;  // Not a list
+  const uint8_t prefix = data[offset];
+  if (prefix < 0x80) {
+    ++offset;
+    return Item{false, ByteVector{prefix}};
   }
 
-  size_t listStart;
-  size_t listLen;
-
-  if (prefix <= 0xf7) {
-    listLen = prefix - 0xc0;
-    listStart = offset + 1;
+  const bool isList = prefix >= 0xc0;
+  const uint8_t base = isList ? 0xc0 : 0x80;
+  size_t header = 1;
+  size_t length = 0;
+  if (prefix <= base + 55) {
+    length = prefix - base;
   } else {
-    size_t lenLen = prefix - 0xf7;
-    if (offset + 1 + lenLen > data.size()) {
+    // Long form: the length in 1-8 bytes, only for lengths above 55.
+    const size_t count = prefix - base - 55;
+    if (!readLength(data, offset + 1, count, length) || length <= 55) {
       return std::nullopt;
     }
-
-    listLen = 0;
-    for (size_t i = 0; i < lenLen; ++i) {
-      listLen = (listLen << 8) | data[offset + 1 + i];
-    }
-    listStart = offset + 1 + lenLen;
+    header += count;
   }
-
-  if (listStart + listLen > data.size()) {
+  if (header > data.size() - offset || length > data.size() - offset - header) {
     return std::nullopt;
   }
+  ByteVector payload(data.begin() + offset + header, data.begin() + offset + header + length);
+  // A single byte below 0x80 is its own encoding, never a one-byte string.
+  if (!isList && length == 1 && payload[0] < 0x80) {
+    return std::nullopt;
+  }
+  offset += header + length;
+  return Item{isList, std::move(payload)};
+}
 
-  std::vector<ByteVector> items;
-  size_t pos = listStart;
-  size_t listEnd = listStart + listLen;
-
-  while (pos < listEnd) {
-    auto item = decode(data, pos);
+std::optional<std::vector<Item>> decodeListItems(const ByteVector& data, size_t& offset) {
+  auto list = decodeItem(data, offset);
+  if (!list || !list->isList) {
+    return std::nullopt;
+  }
+  std::vector<Item> items;
+  size_t pos = 0;
+  while (pos < list->payload.size()) {
+    auto item = decodeItem(list->payload, pos);
     if (!item) {
       return std::nullopt;
     }
     items.push_back(std::move(*item));
   }
-
-  offset = listEnd;
   return items;
 }
 
-uint64_t decodeInteger(const ByteVector& data) {
+std::optional<ByteVector> decode(const ByteVector& data, size_t& offset) {
+  auto item = decodeItem(data, offset);
+  if (!item) {
+    return std::nullopt;
+  }
+  return std::move(item->payload);
+}
+
+std::optional<std::vector<ByteVector>> decodeList(const ByteVector& data, size_t& offset) {
+  auto items = decodeListItems(data, offset);
+  if (!items) {
+    return std::nullopt;
+  }
+  std::vector<ByteVector> payloads;
+  for (auto& item : *items) {
+    payloads.push_back(std::move(item.payload));
+  }
+  return payloads;
+}
+
+std::optional<uint64_t> decodeInteger(const ByteVector& data) {
+  // Canonical: no leading zero byte (zero is the empty string), at most 8 bytes.
+  if (data.size() > 8 || (!data.empty() && data[0] == 0)) {
+    return std::nullopt;
+  }
   uint64_t result = 0;
   for (uint8_t byte : data) {
     result = (result << 8) | byte;
   }
+  return result;
+}
+
+std::optional<Bytes32> decodeInteger256(const ByteVector& data) {
+  if (data.size() > 32 || (!data.empty() && data[0] == 0)) {
+    return std::nullopt;
+  }
+  Bytes32 result{};
+  std::copy(data.begin(), data.end(), result.begin() + (32 - data.size()));
   return result;
 }
 
@@ -871,162 +848,137 @@ bool EthereumTransaction::readRecipient(const ByteVector& field, EthereumTransac
   return false;
 }
 
+namespace {
+
+// Typed readers of a decoded field: a string item (never a list) holding a
+// canonical integer of at most 8 (uint64) or 32 (uint256) bytes, or bytes.
+bool readUint64(const rlp::Item& item, uint64_t& out) {
+  if (item.isList) return false;
+  auto value = rlp::decodeInteger(item.payload);
+  if (!value) return false;
+  out = *value;
+  return true;
+}
+
+bool readUint256(const rlp::Item& item, Bytes32& out) {
+  if (item.isList) return false;
+  auto value = rlp::decodeInteger256(item.payload);
+  if (!value) return false;
+  out = *value;
+  return true;
+}
+
+bool readByteString(const rlp::Item& item, ByteVector& out) {
+  if (item.isList) return false;
+  out = item.payload;
+  return true;
+}
+
+// Access lists are not parsed: only the empty list is accepted (a parsed
+// transaction that dropped its access list would sign a different transaction).
+bool readEmptyAccessList(const rlp::Item& item) {
+  return item.isList && item.payload.empty();
+}
+
+}  // namespace
+
 Result<EthereumTransaction> EthereumTransaction::parse(const ByteVector& data) {
+  using R = Result<EthereumTransaction>;
   if (data.empty()) {
-    return Result<EthereumTransaction>::fail(Error::INVALID_TRANSACTION);
+    return R::fail(Error::INVALID_TRANSACTION);
   }
 
   EthereumTransaction tx;
-
-  // Check for typed transaction
-  if (data[0] <= 0x7f) {
-    // Typed transaction (EIP-2718)
-    tx.type_ = static_cast<EthTxType>(data[0]);
-
-    ByteVector payload(data.begin() + 1, data.end());
-    size_t offset = 0;
-    auto items = rlp::decodeList(payload, offset);
-
-    if (!items) {
-      return Result<EthereumTransaction>::fail(Error::INVALID_TRANSACTION);
-    }
-
-    if (tx.type_ == EthTxType::EIP1559) {
-      if (items->size() < 12) {
-        return Result<EthereumTransaction>::fail(Error::INVALID_TRANSACTION);
-      }
-
-      tx.chainId_ = rlp::decodeInteger((*items)[0]);
-      tx.nonce_ = rlp::decodeInteger((*items)[1]);
-      tx.hasNonce_ = true;
-      tx.maxPriorityFeePerGas_ = rlp::decodeInteger((*items)[2]);
-      tx.maxFeePerGas_ = rlp::decodeInteger((*items)[3]);
-      tx.gasLimit_ = rlp::decodeInteger((*items)[4]);
-
-      if (!readRecipient((*items)[5], tx) || (*items)[6].size() > 32) {
-        return Result<EthereumTransaction>::fail(Error::INVALID_TRANSACTION);
-      }
-
-      {
-        std::fill(tx.value_.begin(), tx.value_.end(), 0);
-        size_t start = 32 - (*items)[6].size();
-        std::copy((*items)[6].begin(), (*items)[6].end(), tx.value_.begin() + start);
-      }
-
-      tx.data_ = (*items)[7];
-      // TODO: Parse access list from (*items)[8]
-
-      tx.signatureV_ = rlp::decodeInteger((*items)[9]);
-
-      if ((*items)[10].size() <= 32) {
-        std::fill(tx.signatureR_.begin(), tx.signatureR_.end(), 0);
-        size_t start = 32 - (*items)[10].size();
-        std::copy((*items)[10].begin(), (*items)[10].end(), tx.signatureR_.begin() + start);
-      }
-
-      if ((*items)[11].size() <= 32) {
-        std::fill(tx.signatureS_.begin(), tx.signatureS_.end(), 0);
-        size_t start = 32 - (*items)[11].size();
-        std::copy((*items)[11].begin(), (*items)[11].end(), tx.signatureS_.begin() + start);
-      }
-
-    } else if (tx.type_ == EthTxType::ACCESS_LIST) {
-      if (items->size() < 11) {
-        return Result<EthereumTransaction>::fail(Error::INVALID_TRANSACTION);
-      }
-
-      tx.chainId_ = rlp::decodeInteger((*items)[0]);
-      tx.nonce_ = rlp::decodeInteger((*items)[1]);
-      tx.hasNonce_ = true;
-      tx.gasPrice_ = rlp::decodeInteger((*items)[2]);
-      tx.gasLimit_ = rlp::decodeInteger((*items)[3]);
-
-      if (!readRecipient((*items)[4], tx) || (*items)[5].size() > 32) {
-        return Result<EthereumTransaction>::fail(Error::INVALID_TRANSACTION);
-      }
-
-      {
-        std::fill(tx.value_.begin(), tx.value_.end(), 0);
-        size_t start = 32 - (*items)[5].size();
-        std::copy((*items)[5].begin(), (*items)[5].end(), tx.value_.begin() + start);
-      }
-
-      tx.data_ = (*items)[6];
-      // TODO: Parse access list from (*items)[7]
-
-      tx.signatureV_ = rlp::decodeInteger((*items)[8]);
-
-      if ((*items)[9].size() <= 32) {
-        std::fill(tx.signatureR_.begin(), tx.signatureR_.end(), 0);
-        size_t start = 32 - (*items)[9].size();
-        std::copy((*items)[9].begin(), (*items)[9].end(), tx.signatureR_.begin() + start);
-      }
-
-      if ((*items)[10].size() <= 32) {
-        std::fill(tx.signatureS_.begin(), tx.signatureS_.end(), 0);
-        size_t start = 32 - (*items)[10].size();
-        std::copy((*items)[10].begin(), (*items)[10].end(), tx.signatureS_.begin() + start);
-      }
-    } else {
-      return Result<EthereumTransaction>::fail(Error::NOT_SUPPORTED);
-    }
-  } else {
-    // Legacy transaction
+  ByteVector body;
+  if (data[0] >= 0xc0) {
     tx.type_ = EthTxType::LEGACY;
-
-    size_t offset = 0;
-    auto items = rlp::decodeList(data, offset);
-
-    if (!items || items->size() < 9) {
-      return Result<EthereumTransaction>::fail(Error::INVALID_TRANSACTION);
-    }
-
-    tx.nonce_ = rlp::decodeInteger((*items)[0]);
-
-    tx.hasNonce_ = true;
-    tx.gasPrice_ = rlp::decodeInteger((*items)[1]);
-    tx.gasLimit_ = rlp::decodeInteger((*items)[2]);
-
-    if (!readRecipient((*items)[3], tx) || (*items)[4].size() > 32) {
-      return Result<EthereumTransaction>::fail(Error::INVALID_TRANSACTION);
-    }
-
-    {
-      std::fill(tx.value_.begin(), tx.value_.end(), 0);
-      size_t start = 32 - (*items)[4].size();
-      std::copy((*items)[4].begin(), (*items)[4].end(), tx.value_.begin() + start);
-    }
-
-    tx.data_ = (*items)[5];
-
-    tx.signatureV_ = rlp::decodeInteger((*items)[6]);
-
-    if ((*items)[7].size() <= 32) {
-      std::fill(tx.signatureR_.begin(), tx.signatureR_.end(), 0);
-      size_t start = 32 - (*items)[7].size();
-      std::copy((*items)[7].begin(), (*items)[7].end(), tx.signatureR_.begin() + start);
-    }
-
-    if ((*items)[8].size() <= 32) {
-      std::fill(tx.signatureS_.begin(), tx.signatureS_.end(), 0);
-      size_t start = 32 - (*items)[8].size();
-      std::copy((*items)[8].begin(), (*items)[8].end(), tx.signatureS_.begin() + start);
-    }
-
-    // Unsigned (r = s = 0): the EIP-155 signing form carries the chain ID
-    // where v goes. Signed: the chain ID is in v (EIP-155).
-    if (!tx.hasSignature()) {
-      tx.chainId_ = tx.signatureV_;
-      tx.signatureV_ = 0;
-    } else if (tx.signatureV_ >= 35) {
-      tx.chainId_ = (tx.signatureV_ - 35) / 2;
-    } else if (tx.signatureV_ == 27 || tx.signatureV_ == 28) {
-      tx.chainId_ = 0;  // Pre-EIP-155
-    }
+    body = data;
+  } else if (data[0] == static_cast<uint8_t>(EthTxType::ACCESS_LIST) ||
+             data[0] == static_cast<uint8_t>(EthTxType::EIP1559)) {
+    // Typed transaction (EIP-2718): type byte, then one RLP list.
+    tx.type_ = static_cast<EthTxType>(data[0]);
+    body.assign(data.begin() + 1, data.end());
+  } else if (data[0] <= 0x7f) {
+    return R::fail(Error::NOT_SUPPORTED);
+  } else {
+    return R::fail(Error::INVALID_TRANSACTION);
   }
 
-  tx.status_ = tx.hasSignature() ? TxStatus::SIGNED : TxStatus::UNSIGNED;
-  return Result<EthereumTransaction>::success(std::move(tx));
+  // Exactly one canonical list, nothing after it.
+  size_t offset = 0;
+  auto items = rlp::decodeListItems(body, offset);
+  if (!items || offset != body.size()) {
+    return R::fail(Error::INVALID_TRANSACTION);
+  }
+  const std::vector<rlp::Item>& f = *items;
+
+  // Every integer field is canonical and within its bound: 8 bytes for the
+  // chain ID, nonce, gas and fees (uint64 here), 32 for value, r and s.
+  uint64_t v = 0;
+  bool ok = false;
+  bool accessListOk = true;
+  switch (tx.type_) {
+    case EthTxType::LEGACY:
+      ok = f.size() == 9 &&
+           readUint64(f[0], tx.nonce_) && readUint64(f[1], tx.gasPrice_) && readUint64(f[2], tx.gasLimit_) &&
+           !f[3].isList && readRecipient(f[3].payload, tx) && readUint256(f[4], tx.value_) &&
+           readByteString(f[5], tx.data_) &&
+           readUint64(f[6], v) && readUint256(f[7], tx.signatureR_) && readUint256(f[8], tx.signatureS_);
+      break;
+    // A typed transaction has its signature fields (y-parity, r, s; zero
+    // when unsigned) or none: the signing payload, as other libraries
+    // serialize an unsigned transaction.
+    case EthTxType::ACCESS_LIST:
+      ok = (f.size() == 11 || f.size() == 8) &&
+           readUint64(f[0], tx.chainId_) && readUint64(f[1], tx.nonce_) && readUint64(f[2], tx.gasPrice_) &&
+           readUint64(f[3], tx.gasLimit_) && !f[4].isList && readRecipient(f[4].payload, tx) &&
+           readUint256(f[5], tx.value_) && readByteString(f[6], tx.data_) &&
+           (f.size() == 8 ||
+            (readUint64(f[8], v) && readUint256(f[9], tx.signatureR_) && readUint256(f[10], tx.signatureS_)));
+      accessListOk = ok && readEmptyAccessList(f[7]);
+      break;
+    case EthTxType::EIP1559:
+      ok = (f.size() == 12 || f.size() == 9) &&
+           readUint64(f[0], tx.chainId_) && readUint64(f[1], tx.nonce_) &&
+           readUint64(f[2], tx.maxPriorityFeePerGas_) && readUint64(f[3], tx.maxFeePerGas_) &&
+           readUint64(f[4], tx.gasLimit_) && !f[5].isList && readRecipient(f[5].payload, tx) &&
+           readUint256(f[6], tx.value_) && readByteString(f[7], tx.data_) &&
+           (f.size() == 9 ||
+            (readUint64(f[9], v) && readUint256(f[10], tx.signatureR_) && readUint256(f[11], tx.signatureS_)));
+      accessListOk = ok && readEmptyAccessList(f[8]);
+      break;
+  }
+  if (!ok) {
+    return R::fail(Error::INVALID_TRANSACTION);
+  }
+  if (!accessListOk) {
+    return R::fail(Error::NOT_SUPPORTED);
+  }
+  tx.hasNonce_ = true;
+
+  const bool isSigned = tx.hasSignature();
+  if (tx.type_ == EthTxType::LEGACY) {
+    if (!isSigned) {
+      // Unsigned: the EIP-155 signing form carries the chain ID where v goes.
+      tx.chainId_ = v;
+      v = 0;
+    } else if (v >= 35) {
+      tx.chainId_ = (v - 35) / 2;  // EIP-155
+    } else if (v == 27 || v == 28) {
+      tx.chainId_ = 0;  // Pre-EIP-155
+    } else {
+      return R::fail(Error::INVALID_TRANSACTION);
+    }
+  } else if (v > 1 || (!isSigned && v != 0)) {
+    return R::fail(Error::INVALID_TRANSACTION);  // y-parity is 0 or 1
+  }
+  if (tx.chainId_ > ETH_MAX_CHAIN_ID) {
+    return R::fail(Error::INVALID_TRANSACTION);
+  }
+  tx.signatureV_ = v;
+
+  tx.status_ = isSigned ? TxStatus::SIGNED : TxStatus::UNSIGNED;
+  return R::success(std::move(tx));
 }
 
 Result<EthereumTransaction> EthereumTransaction::parseHex(const std::string& hex) {

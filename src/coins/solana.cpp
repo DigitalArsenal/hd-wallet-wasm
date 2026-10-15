@@ -837,15 +837,27 @@ int32_t hd_sol_find_pda(
   Bytes32 prog;
   std::copy(program_id, program_id + 32, prog.begin());
 
-  // Parse seeds
-  std::vector<ByteVector> seed_vec;
-  if (num_seeds > 0 && seeds && seed_lengths) {
-    size_t offset = 0;
-    for (size_t i = 0; i < num_seeds; i++) {
-      ByteVector seed(seeds + offset, seeds + offset + seed_lengths[i]);
-      seed_vec.push_back(std::move(seed));
-      offset += seed_lengths[i];
+  // Solana allows at most 16 seeds of at most 32 bytes each; the lengths must
+  // add up to exactly seeds_len (no seed read past the buffer).
+  if (num_seeds > 16 || (num_seeds > 0 && !seed_lengths) || (seeds_len > 0 && !seeds)) {
+    return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+  }
+  size_t total = 0;
+  for (size_t i = 0; i < num_seeds; i++) {
+    if (seed_lengths[i] > 32) {
+      return static_cast<int32_t>(Error::INVALID_ARGUMENT);
     }
+    total += seed_lengths[i];
+  }
+  if (total != seeds_len) {
+    return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+  }
+
+  std::vector<ByteVector> seed_vec;
+  size_t offset = 0;
+  for (size_t i = 0; i < num_seeds; i++) {
+    seed_vec.emplace_back(seeds + offset, seeds + offset + seed_lengths[i]);
+    offset += seed_lengths[i];
   }
 
   auto result = findProgramAddress(prog, seed_vec);

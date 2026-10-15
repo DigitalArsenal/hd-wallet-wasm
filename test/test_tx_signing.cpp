@@ -21,6 +21,7 @@
 #include "hd_wallet/coins/bitcoin.h"
 #include "hd_wallet/coins/coin.h"
 #include "hd_wallet/coins/ethereum.h"
+#include "hd_wallet/coins/solana.h"
 #include "hd_wallet/tx/bitcoin_tx.h"
 #include "hd_wallet/tx/ethereum_tx.h"
 
@@ -932,4 +933,172 @@ TEST_CASE(TxSigning, EthUnsignedLegacySerializesInEip155SigningFormAndParsesBack
   ASSERT_OK(noChain);
   ASSERT_EQ(static_cast<uint64_t>(0), noChain.value.chainId());
   ASSERT_TRUE(Error::INVALID_TRANSACTION == noChain.value.sign(key));
+}
+
+// =============================================================================
+// Strict transaction parsing (2.1.2, round 3)
+// =============================================================================
+//
+// RLP integers were read keeping only the low 64 bits and with leading zeros,
+// so with the unsigned legacy chain ID read back, parse then sign signed for a
+// truncated chain (2^64 + 1 signed for chain 1, 2^64 + 137 for Polygon) and a
+// 9-byte nonce 0x010000000000000009 signed as nonce 9. Now every field is a
+// canonical RLP item of its kind, integers within their bound, the field
+// count exact, nothing after the list, and the chain ID at most
+// ETH_MAX_CHAIN_ID. Vectors: produced with ethers 6.13.4 (its Transaction,
+// Wallet.signTransaction and encodeRlp), plus hand-made non-canonical forms.
+
+namespace {
+
+struct EthersVector {
+  const char* name;
+  const char* unsignedHex;
+  const char* signedHex;
+};
+
+const EthersVector kEthersVectors[] = {
+    {"legacy",
+     "ec098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a764000080018080",
+     "f86c098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a76400008025a028ef61340bd939bc2195fe537567866003e1a15d3c71ff63e1590620aa636276a067cbe9d8997f761aecb703304b3800ccf555c9f3dc64214b297fb1966a3b6d83"},
+    {"eip2930",
+     "01eb01098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a764000080c0",
+     "01f86e01098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a764000080c001a0a55f6a8616e3d6d2f09ee945cdad2a21a7d357225fcfc46df9e8421420954f43a01d7bd8c3892f4271f397c91e6c4216fb4284bc75c8d320b952bdb069aaa8120e"},
+    {"eip1559",
+     "02f00109843b9aca008506fc23ac00825208943535353535353535353535353535353535353535880de0b6b3a764000080c0",
+     "02f8730109843b9aca008506fc23ac00825208943535353535353535353535353535353535353535880de0b6b3a764000080c001a0ad4241a480b4069450d9bd1823a3afb8bd5a697e2135056f13fc85778785a013a0782c2fc38f01d18de96e4f5caeb077484ef6d844f2ce873a475515552460c075"},
+    {"legacyChain137",
+     "ed098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a76400008081898080",
+     "f86e098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a764000080820136a00d02a2ce7ed82574448f5581c0c45a2eb0b6e2ccf6971eff1dae61b6bb1cec81a00ce65a784c4aa7fe79935ec1fadee65e7a0238186fffd3848275dc275b26ccf1"},
+    {"eip1559BigValue",
+     "02f84c0109843b9aca008506fc23ac00825208943535353535353535353535353535353535353535a0800000000000000000000000000000000000000000000000000000000000000784deadbeefc0",
+     "02f88f0109843b9aca008506fc23ac00825208943535353535353535353535353535353535353535a0800000000000000000000000000000000000000000000000000000000000000784deadbeefc001a065a773b455bc59ec927a7c471daa4e3245272efe116ef9986ac75917c7cf5b06a023cc77354f88d45bfda4fc29182681c9748ef4660829fc69685ce40e86e73c66"},
+};
+
+struct BadTx {
+  const char* name;
+  const char* hex;
+};
+
+const BadTx kBadTransactions[] = {
+    {"legacy chainId 2^64+1 (ethers reads chain 1 after truncation)",
+     "f5098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a764000080890100000000000000018080"},
+    {"legacy chainId 2^64+137 (Polygon after truncation)",
+     "f5098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a764000080890100000000000000898080"},
+    {"legacy nonce 0x010000000000000009 (9 bytes)",
+     "f5890100000000000000098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a764000080018080"},
+    {"legacy nonce with a leading zero byte",
+     "ee8200098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a764000080018080"},
+    {"legacy gasPrice 9 bytes",
+     "f009890100000004a817c800825208943535353535353535353535353535353535353535880de0b6b3a764000080018080"},
+    {"legacy gasLimit 9 bytes",
+     "f3098504a817c80089010000000000005208943535353535353535353535353535353535353535880de0b6b3a764000080018080"},
+    {"legacy chainId ETH_MAX_CHAIN_ID + 1",
+     "f4098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a764000080887fffffffffffffdc8080"},
+    {"EIP-1559 chainId 2^64+1",
+     "02f83c8901000000000000000109843b9aca008506fc23ac00825208943535353535353535353535353535353535353535880de0b6b3a764000080c0808080"},
+    {"EIP-1559 maxFeePerGas 9 bytes",
+     "02f70109843b9aca00890100000006fc23ac00825208943535353535353535353535353535353535353535880de0b6b3a764000080c0808080"},
+    {"EIP-1559 value 33 bytes",
+     "02f84c0109843b9aca008506fc23ac00825208943535353535353535353535353535353535353535a101000000000000000000000000000000000000000000000000000000000000000080c0808080"},
+    {"EIP-1559 chainId with a leading zero byte",
+     "02f582000109843b9aca008506fc23ac00825208943535353535353535353535353535353535353535880de0b6b3a764000080c0808080"},
+    {"EIP-2930 chainId 2^64+1",
+     "01f789010000000000000001098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a764000080c0808080"},
+    {"legacy nonce 9 as a one-byte string (81 09)",
+     "ed81098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a764000080018080"},
+    {"legacy list in long form for 44 bytes",
+     "f82c098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a764000080018080"},
+    {"legacy trailing byte after the list",
+     "ec098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a76400008001808000"},
+    {"legacy tenth field",
+     "ed098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a76400008001808080"},
+    {"legacy nonce as a list",
+     "ecc08504a817c800825208943535353535353535353535353535353535353535880de0b6b3a764000080018080"},
+};
+
+}  // namespace
+
+TEST_CASE(TxSigning, EthParseAndSignMatchEthers) {
+  const auto key = test::hexToArray<32>(kEip155PrivateKey);
+  for (const auto& vector : kEthersVectors) {
+    // ethers' unsigned form parses and signs to ethers' signed bytes.
+    auto unsignedTx = tx::EthereumTransaction::parseHex(vector.unsignedHex);
+    ASSERT_OK(unsignedTx);
+    ASSERT_TRUE(Error::OK == unsignedTx.value.sign(key));
+    auto signedBytes = unsignedTx.value.serialize();
+    ASSERT_OK(signedBytes);
+    ASSERT_STR_EQ(std::string(vector.name) + ":" + vector.signedHex,
+                  std::string(vector.name) + ":" + toHex(signedBytes.value));
+    // ethers' signed bytes parse and serialize back unchanged.
+    auto signedTx = tx::EthereumTransaction::parseHex(vector.signedHex);
+    ASSERT_OK(signedTx);
+    auto again = signedTx.value.serialize();
+    ASSERT_OK(again);
+    ASSERT_STR_EQ(vector.signedHex, toHex(again.value));
+  }
+}
+
+TEST_CASE(TxSigning, EthParseRefusesTruncatedOverlongAndNonCanonicalFields) {
+  const auto key = test::hexToArray<32>(kEip155PrivateKey);
+  for (const auto& bad : kBadTransactions) {
+    auto parsed = tx::EthereumTransaction::parseHex(bad.hex);
+    ASSERT_STR_EQ(std::string(bad.name) + ": refused",
+                  std::string(bad.name) + (parsed.ok() ? ": parsed" : ": refused"));
+    const auto bytes = test::hexToBytes(bad.hex);
+    tx::eth_tx_handle handle = tx::hd_eth_tx_parse(bytes.data(), bytes.size());
+    ASSERT_TRUE(handle == nullptr);
+  }
+  // The bound itself parses and signs.
+  auto atBound = tx::EthereumTransaction::parseHex("f4098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a764000080887fffffffffffffdb8080");
+  ASSERT_OK(atBound);
+  ASSERT_EQ(tx::ETH_MAX_CHAIN_ID, atBound.value.chainId());
+  ASSERT_TRUE(Error::OK == atBound.value.sign(key));
+
+  // RLP decoding itself: one-byte strings below 0x80, short payloads in long
+  // form and long lengths with a leading zero are not canonical.
+  for (const char* hex : {"8105", "b80161", "b90038" , "f800"}) {
+    const auto bytes = test::hexToBytes(hex);
+    size_t offset = 0;
+    ASSERT_FALSE(tx::rlp::decodeItem(bytes, offset).has_value());
+  }
+  ASSERT_FALSE(tx::rlp::decodeInteger(test::hexToBytes("010000000000000009")).has_value());
+  ASSERT_FALSE(tx::rlp::decodeInteger(test::hexToBytes("0009")).has_value());
+  ASSERT_EQ(static_cast<uint64_t>(9), *tx::rlp::decodeInteger(test::hexToBytes("09")));
+}
+
+TEST_CASE(TxSigning, CoinNetworkIdsOtherThanMainnetAndTestnetAreRefused) {
+  const char* testnet = "tb1qqqqqp399et2xygdj5xreqhjjvcmzhxw4aywxecjdzew6hylgvsesrxh6hy";
+  ASSERT_EQ(0, coins::hd_coin_validate_address(0, 1, testnet));
+  const auto pub = test::hexToBytes("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798");
+  char address[128];
+  for (int32_t network : {2, 255, 257, -255, -1}) {
+    ASSERT_EQ(static_cast<int32_t>(Error::INVALID_ARGUMENT), coins::hd_coin_validate_address(0, network, testnet));
+    ASSERT_EQ(static_cast<int32_t>(Error::INVALID_ARGUMENT),
+              coins::hd_coin_address_from_pubkey(0, network, pub.data(), pub.size(), address, sizeof(address)));
+  }
+}
+
+TEST_CASE(TxSigning, SolanaFindPdaChecksSeedCountAndLengths) {
+  std::array<uint8_t, 32> program{};
+  program.fill(0x11);
+  std::array<uint8_t, 64> seeds{};
+  seeds.fill(0x22);
+  char address[64];
+  uint8_t bump = 0;
+  // Two seeds of 3 and 4 bytes: the lengths add up to seeds_len.
+  size_t lengths[17] = {3, 4};
+  ASSERT_EQ(0, coins::hd_sol_find_pda(program.data(), seeds.data(), 7, lengths, 2, address, sizeof(address), &bump));
+  // Lengths that add up to more (or less) than seeds_len were read past it.
+  ASSERT_EQ(static_cast<int32_t>(Error::INVALID_ARGUMENT),
+            coins::hd_sol_find_pda(program.data(), seeds.data(), 6, lengths, 2, address, sizeof(address), &bump));
+  ASSERT_EQ(static_cast<int32_t>(Error::INVALID_ARGUMENT),
+            coins::hd_sol_find_pda(program.data(), seeds.data(), 8, lengths, 2, address, sizeof(address), &bump));
+  // A seed over 32 bytes, or more than 16 seeds.
+  size_t longSeed[1] = {33};
+  ASSERT_EQ(static_cast<int32_t>(Error::INVALID_ARGUMENT),
+            coins::hd_sol_find_pda(program.data(), seeds.data(), 33, longSeed, 1, address, sizeof(address), &bump));
+  for (auto& length : lengths) length = 1;
+  ASSERT_EQ(static_cast<int32_t>(Error::INVALID_ARGUMENT),
+            coins::hd_sol_find_pda(program.data(), seeds.data(), 17, lengths, 17, address, sizeof(address), &bump));
+  ASSERT_EQ(0, coins::hd_sol_find_pda(program.data(), seeds.data(), 16, lengths, 16, address, sizeof(address), &bump));
 }

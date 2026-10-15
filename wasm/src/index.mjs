@@ -557,6 +557,9 @@ function decodeBech32Fallback(str) {
   return { hrp, data: out };
 }
 
+/** %TypedArray%.prototype.fill, captured at load (uses the internal length). */
+const TYPED_ARRAY_FILL = Object.getPrototypeOf(Uint8Array.prototype).fill;
+
 /** The largest Ethereum chain ID (EIP-2294). */
 const ETH_MAX_CHAIN_ID = 9223372036854775771n;
 
@@ -721,17 +724,10 @@ function callDynamicStringResult(wasm, invoke, options = {}) {
   }
 }
 
+// Binary data is a Uint8Array in every family: a DataView, an ArrayBuffer or
+// another typed array is refused, as everywhere else.
 function toUint8Array(data, name = 'data') {
-  if (data instanceof Uint8Array) {
-    return data;
-  }
-  if (ArrayBuffer.isView(data)) {
-    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength).slice();
-  }
-  if (data instanceof ArrayBuffer) {
-    return new Uint8Array(data.slice(0));
-  }
-  throw new HDWalletError(ErrorCode.INVALID_ARGUMENT, `${name} must be binary data`);
+  return V.bytes(data, name);
 }
 
 function curveToName(curve) {
@@ -2563,26 +2559,28 @@ function createModule(wasm) {
             if (input === null || typeof input !== 'object') {
               throw new HDWalletError(ErrorCode.INVALID_ARGUMENT, 'input must be an object');
             }
+            // Each field is read once; only these values are used below.
+            const { txid, vout, amount: amountArg, scriptType: scriptTypeArg, sequence: sequenceArg, pubkey } = input;
             // The txid: 32 bytes as 64 hex digits, in the given byte order.
-            const txidBytes = typeof input.txid === 'string' && input.txid.length === 64
-              ? hexOrNull(input.txid)
+            const txidBytes = typeof txid === 'string' && txid.length === 64
+              ? hexOrNull(txid)
               : null;
             if (txidBytes === null) {
               throw new HDWalletError(ErrorCode.INVALID_ARGUMENT, 'txid must be 64 hex digits');
             }
-            V.uint32(input.vout, 'vout');
-            const amount = V.unsignedBigInt(input.amount, 'amount', 64);
-            const scriptType = input.scriptType || 0;
+            V.uint32(vout, 'vout');
+            const amount = V.unsignedBigInt(amountArg, 'amount', 64);
+            const scriptType = scriptTypeArg || 0;
             V.integer(scriptType, 'scriptType', 0, BitcoinScriptType.MULTISIG);
-            const sequence = input.sequence || 0xffffffff;
+            const sequence = sequenceArg || 0xffffffff;
             V.uint32(sequence, 'sequence');
             // The export reads a 33-byte compressed key.
-            V.publicKey(wasm, input.pubkey, Curve.SECP256K1, 'pubkey', [33]);
-            const { ptr: txidPtr, len: txidLen } = allocAndCopy(wasm, txidBytes);
-            const { ptr: pubPtr, len: pubLen } = allocAndCopy(wasm, input.pubkey);
+            V.publicKey(wasm, pubkey, Curve.SECP256K1, 'pubkey', [33]);
+            const { ptr: txidPtr } = allocAndCopy(wasm, txidBytes);
+            const { ptr: pubPtr } = allocAndCopy(wasm, pubkey);
             try {
               const result = addInputFn(
-                this._handle, txidPtr, input.vout,
+                this._handle, txidPtr, vout,
                 amount, scriptType,
                 pubPtr, sequence
               );
@@ -3381,9 +3379,10 @@ function createModule(wasm) {
         if (args.length !== 5) {
           throw new HDWalletError(ErrorCode.INVALID_ARGUMENT, 'signDirect takes (signDocBytes, privateKey) or (bodyBytes, authInfoBytes, chainId, accountNumber, privateKey)');
         }
-        const [bodyBytes, authInfoBytes, chainId, accountNumber, privateKey] = args;
-        V.bytes(bodyBytes, 'bodyBytes');
-        V.bytes(authInfoBytes, 'authInfoBytes');
+        const [bodyArg, authInfoArg, chainId, accountNumber, privateKey] = args;
+        // Copies read once: the lengths below size the SignDoc.
+        const bodyBytes = V.snapshot(bodyArg, 'bodyBytes');
+        const authInfoBytes = V.snapshot(authInfoArg, 'authInfoBytes');
         V.string(chainId, 'chainId');
         V.unsignedBigInt(accountNumber, 'accountNumber', 64);
         V.privateKey(wasm, privateKey, Curve.SECP256K1);
@@ -3552,11 +3551,16 @@ function createModule(wasm) {
       // The export reads a 32-byte program id; Solana allows up to 16 seeds
       // of up to 32 bytes.
       V.bytesOfLength(programId, 32, 'programId', ErrorCode.INVALID_PUBLIC_KEY);
-      if (!Array.isArray(seeds) || seeds.length > 16) {
+      // The array and each seed are read once (an array or a Proxy could
+      // answer a second read differently): the copies' lengths go to the heap.
+      const count = Array.isArray(seeds) ? seeds.length : -1;
+      if (!Number.isInteger(count) || count < 0 || count > 16) {
         throw new HDWalletError(ErrorCode.INVALID_ARGUMENT, 'seeds must be an array of at most 16 seeds');
       }
-      // Copies of the seeds, read once: their lengths are written to the heap.
-      const seedCopies = Array.from(seeds, (seed) => new Uint8Array(V.bytesInRange(seed, 0, 32, 'seed')));
+      const seedCopies = [];
+      for (let i = 0; i < count; i++) {
+        seedCopies.push(V.snapshot(V.bytesInRange(seeds[i], 0, 32, 'seed'), 'seed'));
+      }
       const { ptr: progPtr } = allocAndCopy(wasm, programId);
       let totalLen = 0;
       for (const s of seedCopies) totalLen += s.length;
@@ -4416,9 +4420,12 @@ function createModule(wasm) {
     // Memory
     secureWipe(data) {
       if (data instanceof Uint8Array) {
-        // Wipe in-place
-        for (let i = 0; i < data.length; i++) {
-          data[i] = 0;
+        // Wipe in place, every byte the array really holds (the intrinsic
+        // fill, never the caller's `length` or an overridden fill).
+        try {
+          TYPED_ARRAY_FILL.call(data, 0);
+        } catch {
+          // Detached, or not really a typed array: nothing to wipe.
         }
       }
     }
@@ -4912,13 +4919,13 @@ function createModule(wasm) {
       // pre-computed peerID bytes and just do the CID wrapping + encoding here.
       // We still use WASM for base36 encoding.
       // A peer ID multihash: identity or SHA-256, at most 64 bytes.
-      V.bytesInRange(peerIdBytes, 2, 64, 'peerIdBytes');
+      const peerId = V.snapshot(V.bytesInRange(peerIdBytes, 2, 64, 'peerIdBytes'), 'peerIdBytes');
       const outPtr = wasm._hd_alloc(128);
       // Build CID in JS (trivial: 2-byte prefix + multihash)
-      const cid = new Uint8Array(2 + peerIdBytes.length);
+      const cid = new Uint8Array(2 + peerId.length);
       cid[0] = 0x01; // CIDv1
       cid[1] = 0x72; // libp2p-key codec
-      cid.set(peerIdBytes, 2);
+      cid.set(peerId, 2);
       const { ptr: cidPtr, len: cidLen } = allocAndCopy(wasm, cid);
       try {
         const result = wasm._hd_encode_base36lower(cidPtr, cidLen, outPtr, 128);
@@ -4936,11 +4943,11 @@ function createModule(wasm) {
      * @returns {string}
      */
     ipnsHashBase32(peerIdBytes) {
-      V.bytesInRange(peerIdBytes, 2, 64, 'peerIdBytes');
-      const cid = new Uint8Array(2 + peerIdBytes.length);
+      const peerId = V.snapshot(V.bytesInRange(peerIdBytes, 2, 64, 'peerIdBytes'), 'peerIdBytes');
+      const cid = new Uint8Array(2 + peerId.length);
       cid[0] = 0x01; // CIDv1
       cid[1] = 0x72; // libp2p-key codec
-      cid.set(peerIdBytes, 2);
+      cid.set(peerId, 2);
       const { ptr: cidPtr, len: cidLen } = allocAndCopy(wasm, cid);
       const outPtr = wasm._hd_alloc(128);
       try {

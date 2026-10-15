@@ -1084,6 +1084,11 @@ int32_t hd_coin_address_from_pubkey(
     return static_cast<int32_t>(Error::INVALID_ARGUMENT);
   }
 
+  // Network ids are 0 (mainnet) and 1 (testnet); any other id is refused,
+  // never narrowed to one of them.
+  if (network != 0 && network != 1) {
+    return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+  }
   auto coin = getCoin(static_cast<CoinType>(coin_type), static_cast<Network>(network));
   if (!coin) {
     return static_cast<int32_t>(Error::NOT_SUPPORTED);
@@ -1119,6 +1124,11 @@ int32_t hd_coin_validate_address(
     return static_cast<int32_t>(Error::INVALID_ARGUMENT);
   }
 
+  // Network ids are 0 (mainnet) and 1 (testnet); any other id is refused,
+  // never narrowed to one of them.
+  if (network != 0 && network != 1) {
+    return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+  }
   auto coin = getCoin(static_cast<CoinType>(coin_type), static_cast<Network>(network));
   if (!coin) {
     return static_cast<int32_t>(Error::NOT_SUPPORTED);

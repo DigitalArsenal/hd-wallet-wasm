@@ -219,3 +219,119 @@ test('lying lengths: transaction parse and sign, X.509 parse use the array\'s ow
   }
   assertEqual(problems.slice(0, 20).join('\n'), '', `${problems.length} lying inputs reached native code`);
 });
+
+// ---------------------------------------------------------------------------
+// 2.1.2 (round 3)
+// ---------------------------------------------------------------------------
+
+// A library error: HDWalletError, or the aligned API's error with a numeric code.
+const isLibraryError = (error) => error instanceof HDWalletError ||
+  (error?.name === 'AlignedError' && typeof error.code === 'number');
+function outcome(call) {
+  try {
+    return { value: canonical(call()) };
+  } catch (error) {
+    return { error };
+  }
+}
+
+test('networks: the generic coin API takes network ids 0 and 1 only', () => {
+  const testnet = 'tb1qqqqqp399et2xygdj5xreqhjjvcmzhxw4aywxecjdzew6hylgvsesrxh6hy';
+  assert(wallet.coin.validateAddress(0, testnet, 1), 'testnet address on testnet');
+  const accepted = [2, 255, 257, -255, -1].filter((network) => wallet.coin.validateAddress(0, testnet, network));
+  assertEqual(accepted.join(', '), '', 'network ids read as testnet');
+});
+
+test('re-reads: values read twice after the check (Proxy arrays, getters) are refused or used once', () => {
+  const problems = [];
+  // solana.findPDA: a Proxy whose length answers 2, then 40.
+  const programId = new Uint8Array(32).fill(0x11);
+  const seeds = [enc.encode('a'), enc.encode('b')];
+  const expected = canonical(wallet.solana.findPDA(programId, seeds));
+  let lengthReads = 0;
+  const shifty = new Proxy(seeds, {
+    get(target, key, receiver) {
+      if (key === 'length') return ++lengthReads === 1 ? 2 : 40;
+      return Reflect.get(target, key, receiver);
+    },
+  });
+  const pda = outcome(() => wallet.solana.findPDA(programId, shifty));
+  if (pda.error ? !isLibraryError(pda.error) : pda.value !== expected) problems.push('findPDA with a shifting seed count');
+
+  // aligned verifyBatch: an entry whose hash getter answers another array later.
+  const priv = new Uint8Array(32).fill(0x07);
+  const pub = wallet.curves.publicKeyFromPrivate(priv, Curve.SECP256K1);
+  const hash = wallet.utils.sha256(enc.encode('batch'));
+  const [signed] = wallet.aligned.signer.signBatch(priv, [hash]);
+  const honest = canonical(wallet.aligned.signer.verifyBatch(pub, [{ hash, signature: signed.signature }]));
+  let hashReads = 0;
+  const entry = { signature: signed.signature };
+  Object.defineProperty(entry, 'hash', { get: () => (++hashReads === 1 ? hash : new Uint8Array(32).fill(0x99)) });
+  const batch = outcome(() => wallet.aligned.signer.verifyBatch(pub, [entry]));
+  if (batch.error ? !isLibraryError(batch.error) : batch.value !== honest) problems.push('verifyBatch with a changing hash');
+
+  // Liars through cosmos.signDirect (5 arguments) and the IPNS hashes.
+  const body = enc.encode('body');
+  const authInfo = enc.encode('auth');
+  for (const [liarName, makeLiar] of LIARS) {
+    const direct = outcome(() => wallet.cosmos.signDirect(makeLiar(body, 4096), authInfo, 'chain', 1n, priv));
+    if (direct.error ? !isLibraryError(direct.error)
+      : direct.value !== canonical(wallet.cosmos.signDirect(body, authInfo, 'chain', 1n, priv))) {
+      problems.push(`cosmos.signDirect body, ${liarName}`);
+    }
+    const peerId = wallet.libp2p.peerIdFromPublicKey(pub, Curve.SECP256K1);
+    for (const name of ['ipnsHash', 'ipnsHashBase32']) {
+      const got = outcome(() => wallet.libp2p[name](makeLiar(peerId, 64)));
+      if (got.error ? !isLibraryError(got.error) : got.value !== canonical(wallet.libp2p[name](peerId))) {
+        problems.push(`libp2p.${name}, ${liarName}`);
+      }
+    }
+  }
+
+  // utils.secureWipe zeroes every byte the array holds, whatever it claims.
+  const secretBytes = constantLie(new Uint8Array(64).fill(0x5c), 1);
+  wallet.utils.secureWipe(secretBytes);
+  if (new Uint8Array(secretBytes).some((b) => b !== 0)) problems.push('secureWipe left bytes past a short length claim');
+  assertEqual(problems.join('\n'), '', 'every value is read once');
+});
+
+test('detached and non-Uint8Array inputs are the library\'s INVALID_ARGUMENT in every family', () => {
+  const detached = () => {
+    const bytes = new Uint8Array(16).fill(1);
+    structuredClone(bytes.buffer, { transfer: [bytes.buffer] });
+    return bytes;
+  };
+  const key = new Uint8Array(32).fill(0x33);
+  const iv = new Uint8Array(12).fill(0x44);
+  const certificate = enc.encode('-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n');
+  const families = [
+    ['utils.sha256', (x) => wallet.utils.sha256(x)],
+    ['aesGcm.encrypt plaintext', (x) => wallet.utils.aesGcm.encrypt(key, x, iv)],
+    ['aesGcm.encrypt aad', (x) => wallet.utils.aesGcm.encrypt(key, enc.encode('p'), iv, x)],
+    ['secp256k1.sign message', (x) => wallet.curves.secp256k1.sign(x, key)],
+    ['ethereum.tx.parse', (x) => wallet.ethereum.tx.parse(x)],
+  ];
+  if (wallet.x509.isAvailable()) {
+    families.push(['x509.parseCertificate', (x) => wallet.x509.parseCertificate(x, X509Encoding.PEM)]);
+  }
+  const problems = [];
+  for (const [name, call] of families) {
+    const inputs = [
+      ['detached', detached()],
+      ['ArrayBuffer', name.startsWith('x509') ? certificate.slice().buffer : new Uint8Array(16).buffer],
+      ['DataView', new DataView(new ArrayBuffer(16))],
+      ['Int8Array', new Int8Array(16)],
+    ];
+    for (const [kind, input] of inputs) {
+      try {
+        call(input);
+        problems.push(`${name}: ${kind} accepted`);
+      } catch (error) {
+        if (!(error instanceof HDWalletError) || error.code !== 2) {
+          problems.push(`${name}: ${kind} threw ${error?.constructor?.name} ${error?.code ?? ''} ${error?.message}`);
+        }
+      }
+    }
+  }
+  assertEqual(problems.join('\n'), '', 'refused with INVALID_ARGUMENT');
+});

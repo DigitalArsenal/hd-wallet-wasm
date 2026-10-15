@@ -442,9 +442,14 @@ export class AlignedSigner {
   signBatch(privateKey, hashes, curve = AlignedCurve.SECP256K1) {
     const wasm = this.#wasm;
     V.curve(curve, BATCH_CURVES);
-    if (!Array.isArray(hashes) || hashes.length > MAX_BATCH) {
+    // The array and each entry are read once (a Proxy or a getter could answer
+    // a second read differently); only the copies are used below.
+    const hashCount = Array.isArray(hashes) ? hashes.length : -1;
+    if (!Number.isInteger(hashCount) || hashCount < 0 || hashCount > MAX_BATCH) {
       throw new AlignedError(AlignedErrorCode.INVALID_ARGUMENT, `hashes must be an array of at most ${MAX_BATCH}`);
     }
+    const hashCopies = [];
+    for (let i = 0; i < hashCount; i++) hashCopies.push(V.snapshot(hashes[i], 'hash'));
     // The request holds a 32-byte key: secp256k1 and P-256 keys must be
     // 0 < d < n; Ed25519 seeds are any 32 bytes. P-384 and X25519 entries
     // report NOT_SUPPORTED.
@@ -453,8 +458,8 @@ export class AlignedSigner {
     } else {
       V.bytesOfLength(privateKey, 32, 'privateKey', AlignedErrorCode.INVALID_PRIVATE_KEY);
     }
-    for (const hash of hashes) V.bytesOfLength(hash, 32, 'hash');
-    const count = hashes.length;
+    for (const hash of hashCopies) V.bytesOfLength(hash, 32, 'hash');
+    const count = hashCopies.length;
 
     // Allocate request
     const requestPtr = allocZeroed(wasm, BATCHSIGNREQUEST_SIZE);
@@ -474,7 +479,7 @@ export class AlignedSigner {
         for (let i = 0; i < count; i++) {
           const entry = hashesArray.at(i);
           entry.index = i;
-          entry.hash_data.set(hashes[i]);
+          entry.hash_data.set(hashCopies[i]);
         }
 
         // Allocate results
@@ -533,38 +538,43 @@ export class AlignedSigner {
   verifyBatch(publicKey, entries, curve = AlignedCurve.SECP256K1) {
     const wasm = this.#wasm;
     V.curve(curve, BATCH_CURVES);
-    if (!Array.isArray(entries) || entries.length > MAX_BATCH) {
+    // The array, each entry and each field are read once (a Proxy or a getter
+    // could answer a second read differently); only the copies are used below.
+    const entryCount = Array.isArray(entries) ? entries.length : -1;
+    if (!Number.isInteger(entryCount) || entryCount < 0 || entryCount > MAX_BATCH) {
       throw new AlignedError(AlignedErrorCode.INVALID_ARGUMENT, `entries must be an array of at most ${MAX_BATCH}`);
     }
     // Types are programmer errors (throw); wrong lengths or an invalid key
     // only make the affected entries invalid.
-    V.bytes(publicKey, 'publicKey');
-    for (const entry of entries) {
+    const publicKeyCopy = V.snapshot(publicKey, 'publicKey');
+    const entryCopies = [];
+    for (let i = 0; i < entryCount; i++) {
+      const entry = entries[i];
       if (entry === null || typeof entry !== 'object') {
         throw new AlignedError(AlignedErrorCode.INVALID_ARGUMENT, 'each entry must be { hash, signature }');
       }
-      V.bytes(entry.hash, 'hash');
-      V.bytes(entry.signature, 'signature');
+      const { hash, signature } = entry;
+      entryCopies.push({ hash: V.snapshot(hash, 'hash'), signature: V.snapshot(signature, 'signature') });
     }
-    const count = entries.length;
+    const count = entryCopies.length;
 
     // The request holds a 33-byte key: a compressed secp256k1 or P-256 key,
     // or an Ed25519 key after one padding byte.
     let keyBytes = null;
     if (curve === AlignedCurve.ED25519) {
-      if (publicKey.length === 32) {
+      if (publicKeyCopy.length === 32) {
         keyBytes = new Uint8Array(33);
-        keyBytes.set(publicKey, 1);
-      } else if (publicKey.length === 33) {
-        keyBytes = publicKey;
+        keyBytes.set(publicKeyCopy, 1);
+      } else if (publicKeyCopy.length === 33) {
+        keyBytes = publicKeyCopy;
       }
     } else if (curve === AlignedCurve.SECP256K1 || curve === AlignedCurve.P256) {
-      if (V.isPublicKey(wasm, publicKey, curve, [33])) keyBytes = publicKey;
+      if (V.isPublicKey(wasm, publicKeyCopy, curve, [33])) keyBytes = publicKeyCopy;
     } else {
       // P-384 / X25519: the export reports NOT_SUPPORTED for every entry.
       keyBytes = new Uint8Array(33);
     }
-    const entryValid = entries.map((entry) => keyBytes !== null &&
+    const entryValid = entryCopies.map((entry) => keyBytes !== null &&
       entry.hash.length === 32 && entry.signature.length === 64);
 
     // Allocate request
@@ -587,8 +597,8 @@ export class AlignedSigner {
           const view = entriesArray.at(i);
           view.index = i;
           if (entryValid[i]) {
-            view.hash_data.set(entries[i].hash);
-            view.signature_data.set(entries[i].signature);
+            view.hash_data.set(entryCopies[i].hash);
+            view.signature_data.set(entryCopies[i].signature);
           }
         }
 

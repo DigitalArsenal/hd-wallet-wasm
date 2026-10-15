@@ -157,28 +157,52 @@ ByteVector encodeListRaw(const std::vector<ByteVector>& items);
  */
 ByteVector lengthPrefix(size_t length, uint8_t offset);
 
+/// One decoded RLP item: a byte string or a list (its payload undecoded).
+struct Item {
+  bool isList;
+  ByteVector payload;
+};
+
 /**
- * Decode RLP data
+ * Decode one RLP item strictly: canonical sizes only (a single byte below
+ * 0x80 is never a one-byte string; the long forms only for more than 55
+ * bytes, with no leading zero in the length), within the input.
  * @param data RLP-encoded data
  * @param offset Current offset (updated after decode)
- * @return Decoded byte vector
+ */
+std::optional<Item> decodeItem(const ByteVector& data, size_t& offset);
+
+/**
+ * Decode one RLP list strictly (see decodeItem) into its items.
+ */
+std::optional<std::vector<Item>> decodeListItems(const ByteVector& data, size_t& offset);
+
+/**
+ * Decode RLP data (strict, see decodeItem)
+ * @param data RLP-encoded data
+ * @param offset Current offset (updated after decode)
+ * @return Decoded byte vector (a list's payload for a list)
  */
 std::optional<ByteVector> decode(const ByteVector& data, size_t& offset);
 
 /**
- * Decode RLP list
+ * Decode RLP list (strict, see decodeItem)
  * @param data RLP-encoded data
  * @param offset Current offset (updated after decode)
- * @return Vector of decoded items
+ * @return Vector of decoded items' payloads
  */
 std::optional<std::vector<ByteVector>> decodeList(const ByteVector& data, size_t& offset);
 
 /**
- * Decode RLP integer
- * @param data RLP-decoded byte string
- * @return Decoded integer
+ * Decode a canonical RLP integer: at most 8 bytes, no leading zero byte (zero
+ * is the empty string). nullopt for anything else, never the low 64 bits.
  */
-uint64_t decodeInteger(const ByteVector& data);
+std::optional<uint64_t> decodeInteger(const ByteVector& data);
+
+/**
+ * Decode a canonical RLP integer of at most 32 bytes into a big-endian Bytes32.
+ */
+std::optional<Bytes32> decodeInteger256(const ByteVector& data);
 
 /**
  * Convert integer to bytes (big-endian, no leading zeros)

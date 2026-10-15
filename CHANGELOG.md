@@ -6,10 +6,22 @@
 
 Defects found by the 2.1.1 verifiers, present in 2.1.1 and every earlier
 release, are fixed. Upgrade; no data migration is needed. **Behaviour
-changes:** Ethereum transactions need an explicit `nonce` and `chainId`, a
-Bitcoin output must be of the transaction's network, and an unsigned legacy
-Ethereum transaction serializes in its EIP-155 signing form (all below).
+changes:** Ethereum transactions need an explicit `nonce` and `chainId`;
+transaction parsing is strict; each Bitcoin output names its network and
+refuses an address of another; an unsigned legacy Ethereum transaction
+serializes in its EIP-155 signing form; binary inputs are `Uint8Array`s only,
+in every family (all below).
 
+- **Transaction parsing truncated integers (blocker).** `rlp::decodeInteger`
+  kept only the low 64 bits of an integer field and accepted leading zeros.
+  Parse then sign of an unsigned legacy transaction for chain 2^64 + 1 signed
+  for chain 1 (Ethereum mainnet; 2^64 + 137 signed for Polygon), an unsigned
+  EIP-1559 or EIP-2930 transaction with that chain ID did the same, and a 9-byte
+  nonce `0x010000000000000009` (or gas price, gas limit, fee) signed as 9. The
+  decoder also took non-canonical RLP (a single byte below 0x80 as a one-byte
+  string, short payloads in the long form), extra or nested fields, bytes after
+  the transaction, r or s over 32 bytes (read as zero), and dropped a typed
+  transaction's access list, so re-signing it signed a different transaction.
 - **Binary inputs whose `length` lied read or overwrote the WASM heap (high).**
   The wrappers copied an input into the heap with `HEAPU8.set`, which copies
   the array's own bytes, but sized the allocation and told native code the
@@ -22,8 +34,16 @@ Ethereum transaction serializes in its EIP-155 signing form (all below).
   smaller allocation, so the copy wrote past it (65,536 bytes claiming 1
   overwrote 64 KiB of heap and later trapped). Every byte input was affected:
   hashes, HKDF/PBKDF2/scrypt, AES-GCM/CTR, ECIES, signing, verification and
-  ECDH, transaction parsing and signing, X.509. The Ethereum builders also read
-  `params.data` and `params.to` more than once.
+  ECDH, transaction parsing and signing, X.509. Some inputs were read again
+  after their check: the Ethereum builders' `params.data` and `params.to`,
+  `bitcoin.tx.addInput`'s `input.pubkey` (a getter could answer a short array,
+  completed from the heap), `cosmos.signDirect`'s body and auth info (five
+  arguments), `libp2p.ipnsHash` / `ipnsHashBase32`, the aligned `signBatch` /
+  `verifyBatch` arrays and entries, and `solana.findPDA`'s seed array (a Proxy
+  could report 2 seeds, then 40). `utils.secureWipe` wiped only the claimed
+  length. A detached array threw a raw `TypeError`, and AES-GCM took a detached
+  AAD as empty. X.509 alone converted a `DataView`, an `ArrayBuffer` or another
+  typed array; every other family refused them.
 - **A Bitcoin output could pay a different script than its address encodes.**
   `bitcoin.tx.addOutput` (and the C++ `decodeToScriptPubKey`,
   `detectBitcoinAddressType`, `hd_btc_decode_address`) chose the output type
@@ -40,7 +60,9 @@ Ethereum transaction serializes in its EIP-155 signing form (all below).
 - **A Bitcoin output's network was not checked.** `addOutput(address, amount,
   network)` ignored `network`: a mainnet transaction paid testnet `tb1…`, `m…`
   and `n…` addresses. At the C ABI every network id other than 0 was read as
-  testnet, so id 2 (as for regtest) validated and made testnet addresses.
+  testnet (`hd_btc_*`), or narrowed to 8 bits and then read as testnet
+  (`hd_coin_validate_address`, `hd_coin_address_from_pubkey`), so ids 2, 255,
+  257 and -255 validated and made testnet addresses.
 - **A missing Ethereum nonce or chain ID was defaulted, not refused.**
   `ethereum.tx.create` and `ethereum.tx.createEIP1559` signed nonce 0 when
   `nonce` was missing, `create` signed for chain 1 when `chainId` was missing,
@@ -57,19 +79,47 @@ Ethereum transaction serializes in its EIP-155 signing form (all below).
 
 The fix:
 
-- **Every byte input is copied once, by its own length.** `allocAndCopy`
+- **Strict transaction parsing.** RLP is decoded strictly: canonical sizes
+  only (a byte below 0x80 is its own encoding; the long forms only above 55
+  bytes, with no leading zero in the length), within the input, and a parsed
+  transaction is exactly one list with nothing after it. Each field is an item
+  of its kind (a list only for the access list) and every integer is canonical
+  (no leading zero byte) and within its bound: 8 bytes for the chain ID, nonce,
+  gas price, gas limit and fees, 32 for value, r and s; the chain ID is at most
+  `ETH_MAX_CHAIN_ID`; legacy v is 27, 28 or EIP-155's 35 and above, typed
+  y-parity 0 or 1. The field count is exact: 9 for legacy; 11 for EIP-2930 and
+  12 for EIP-1559 (signed, or unsigned with zero v, r, s) or 8 and 9 (the
+  unsigned signing payload other libraries serialize). Anything else is
+  INVALID_TRANSACTION. A typed transaction with a non-empty access list is
+  NOT_SUPPORTED (access lists are not parsed; it used to parse without one).
+  Native and WASM tests check parse then sign of ethers 6.13.4's unsigned
+  legacy, EIP-2930 and EIP-1559 transactions against ethers' signatures, and
+  refuse ethers-encoded chain IDs of 2^64 + 1 and 2^64 + 137, 9-byte nonce, gas
+  and fee fields, a 33-byte value, leading zeros and the non-canonical forms
+  above. C++ API change: `rlp::decodeInteger` returns `std::optional<uint64_t>`
+  (no value for an over-long or non-canonical integer); `rlp::decodeItem`,
+  `decodeListItems` and `decodeInteger256` are new.
+- **Every byte input is a plain `Uint8Array`, copied once by its own length.**
+  Binary data must be a `Uint8Array` (Node `Buffer`s included) whose `length`
+  is %TypedArray%.prototype's (no subclass getter and no own `length`
+  property, so no read can answer differently), over a buffer that is attached
+  and cannot be resized; anything else, a detached array, a `DataView`, an
+  `ArrayBuffer` or another typed array included, is INVALID_ARGUMENT in every
+  family (X.509 no longer converts the latter: behaviour change). `allocAndCopy`
   copies an input into a fresh `Uint8Array` from the array's own bytes and
-  length (its internal slot, which a subclass getter or an own `length`
-  property cannot change), copies that into the heap, zeroes it and returns the
-  pointer with that length; every call passes the returned length to native
-  code and sizes its outputs from it, never from the caller's `length`. The
-  validators measure arrays the same way and refuse one whose `length` is not
-  its own, and one backed by a resizable or growable buffer, with
-  INVALID_ARGUMENT. The Ethereum builders read each `params` field once. A WASM
-  test runs liars (always, only after the first read, own property; longer and
-  shorter claims) through every family above: each is refused or gives exactly
-  the honest array's result, and the module still signs and verifies after the
-  overflow case.
+  length (its internal slot), copies that into the heap, zeroes it and returns
+  the pointer with that length; every call passes the returned length to native
+  code, and outputs are sized from the array's own length, never from the
+  caller's `length`. Inputs inside objects and arrays are read once into copies
+  (`addInput`, `signDirect`, the IPNS hashes, the aligned batches,
+  `findPDA`'s seeds, the Ethereum builders' `params`); `secureWipe` zeroes every
+  byte the array holds. `hd_sol_find_pda` takes at most 16 seeds of at most 32
+  bytes whose lengths add up to `seeds_len` (INVALID_ARGUMENT otherwise). WASM
+  tests run liars (always, only after the first read, own property; longer and
+  shorter claims), Proxy arrays, changing getters, detached arrays and other
+  binary types through every family above: each is refused with a library
+  error or gives exactly the honest array's result, and the module still signs
+  and verifies after the overflow case.
 - **SegWit addresses decoded by BIP-173/BIP-350.** One decoder
   (`coins::decodeSegwitAddress`) checks one case, at most 90 characters, the
   checksum variant the witness version requires (bech32 for v0, bech32m for
@@ -88,11 +138,13 @@ The fix:
   BIP-350's valid and invalid SegWit addresses and v1/20, v2/32 and v3/20
   addresses made with BIP-350's reference encoder through every entry point;
   on 2.1.1 the v1/20 address paid `0014751e76e8199196d454941c45d1b3a323f1433bd6`.
-- **One network per output (behaviour change).** `addOutput` takes
-  `Network.MAINNET` (the default) or `Network.TESTNET` and throws
-  INVALID_ADDRESS for an address of the other network. The C ABI takes network
-  ids 0 and 1 only; any other id is INVALID_ARGUMENT (`hd_btc_detect_address_type`:
-  -1; `hd_btc_verify_message`: -INVALID_ARGUMENT). Regtest is not supported:
+- **Each output names its network (behaviour change).** `addOutput(address,
+  amount, network)` takes `Network.MAINNET` (the default) or `Network.TESTNET`
+  for that output and throws INVALID_ADDRESS for an address of the other
+  network. Every C ABI export that takes a network id (`hd_btc_*`,
+  `hd_coin_validate_address`, `hd_coin_address_from_pubkey`) takes 0 and 1
+  only; any other id is INVALID_ARGUMENT (`hd_btc_detect_address_type`: -1;
+  `hd_btc_verify_message`: -INVALID_ARGUMENT). Regtest is not supported:
   `bcrt1…` addresses are refused on both networks (its Base58 versions are
   testnet's, so a regtest `m…`/`n…`/`2…` address reads as testnet).
 - **The nonce and the chain ID are required (behaviour change).**
@@ -120,8 +172,11 @@ Every key, address and signature, and every signed transaction, this library
 made for an accepted input is unchanged byte for byte (the EIP-155 example and
 the BIP-143 vector still match). The one output that changes is the
 serialization (and so the hash) of an unsigned legacy Ethereum transaction,
-which now carries its chain ID as above. Inputs that used to be mapped to the
-wrong script, defaulted, wrapped or read past their length now throw.
+which now carries its chain ID as above. Addresses that used to be mapped to
+the wrong script or network, defaulted nonces and chain IDs, chain IDs that
+wrapped v, binary inputs whose `length` lied or that were detached or not a
+`Uint8Array`, and transactions that used to parse truncated or non-canonical
+now throw (or, for `validateAddress`, return false).
 
 ### Release workflow
 

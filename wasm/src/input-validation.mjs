@@ -52,6 +52,7 @@ const TYPED_ARRAY_PROTOTYPE = Object.getPrototypeOf(Uint8Array.prototype);
 const TYPED_ARRAY_LENGTH = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, 'length').get;
 const TYPED_ARRAY_BUFFER = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, 'buffer').get;
 const BUFFER_RESIZABLE = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'resizable')?.get;
+const BUFFER_DETACHED = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'detached')?.get;
 const SHARED_BUFFER_GROWABLE = typeof SharedArrayBuffer === 'function'
   ? Object.getOwnPropertyDescriptor(SharedArrayBuffer.prototype, 'growable')?.get
   : undefined;
@@ -62,6 +63,38 @@ function intrinsicLength(value) {
     return TYPED_ARRAY_LENGTH.call(value);
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * Whether reading `value.length` reaches %TypedArray%.prototype's getter: no
+ * own `length` property and none on a subclass prototype, so no later read
+ * can answer differently from the check.
+ */
+function hasIntrinsicLengthProperty(value) {
+  for (let object = value; object !== null && object !== TYPED_ARRAY_PROTOTYPE;
+    object = Object.getPrototypeOf(object)) {
+    if (Object.prototype.hasOwnProperty.call(object, 'length')) return false;
+  }
+  return true;
+}
+
+/** Whether a typed array's buffer is detached (transferred). */
+function isDetached(value) {
+  const buffer = TYPED_ARRAY_BUFFER.call(value);
+  if (BUFFER_DETACHED) {
+    try {
+      return BUFFER_DETACHED.call(buffer);
+    } catch {
+      return false;  // A SharedArrayBuffer cannot be detached.
+    }
+  }
+  if (TYPED_ARRAY_LENGTH.call(value) !== 0) return false;
+  try {
+    new Uint8Array(value);
+    return false;
+  } catch {
+    return true;
   }
 }
 
@@ -113,14 +146,23 @@ export function createInputValidation(makeError) {
   }
 
   /**
-   * True when `value` is a Uint8Array (Node Buffers included) that reports its
-   * own length (a subclass or an own `length` property that claims another
-   * length is refused) over a buffer that cannot be resized.
+   * True when `value` is a Uint8Array (Node Buffers included) whose `length`
+   * is its own (no subclass getter or own property can answer, then or later)
+   * over a buffer that is attached and cannot be resized. A DataView, an
+   * ArrayBuffer or another typed array is not binary data here.
    */
   function isBytes(value) {
-    if (!(value instanceof Uint8Array)) return false;
-    const length = intrinsicLength(value);
-    return length !== undefined && value.length === length && hasFixedSize(value);
+    if (intrinsicLength(value) === undefined || !(value instanceof Uint8Array)) return false;
+    return hasIntrinsicLengthProperty(value) && !isDetached(value) && hasFixedSize(value);
+  }
+
+  /**
+   * Binary data checked as by bytes(), returned as a copy made once from the
+   * array's own bytes: later reads of the caller's array cannot change it.
+   */
+  function snapshot(value, name = 'data', code = INVALID_ARGUMENT) {
+    bytes(value, name, code);
+    return new Uint8Array(value);
   }
 
   /**
@@ -304,6 +346,7 @@ export function createInputValidation(makeError) {
   return Object.freeze({
     isBytes,
     byteLength,
+    snapshot,
     hasLength,
     bytes,
     bytesOfLength,
