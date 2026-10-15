@@ -105,9 +105,9 @@ function signLogEntry(entry) {
 function buildPublishBundle({ integratedTime, name, sha512 }) {
   const statement = {
     _type: 'https://in-toto.io/Statement/v0.1',
-    predicate: { name, registry: 'https://registry.npmjs.org', version: '2.1.1' },
+    predicate: { name, registry: 'https://registry.npmjs.org', version: '2.1.2' },
     predicateType: PUBLISH_PREDICATE,
-    subject: [{ digest: { sha512 }, name: `pkg:npm/${name}@2.1.1` }],
+    subject: [{ digest: { sha512 }, name: `pkg:npm/${name}@2.1.2` }],
   };
   const payloadType = 'application/vnd.in-toto+json';
   const payload = Buffer.from(canonicalizeJson(statement), 'utf8');
@@ -417,8 +417,8 @@ function syntheticTrustPolicy() {
       repository: 'https://github.com/DigitalArsenal/hd-wallet-wasm',
       repositoryId: '1142529413',
       repositoryOwnerId: '29587475',
-      sourceTag: 'v2.1.1',
-      version: '2.1.1',
+      sourceTag: 'v2.1.2',
+      version: '2.1.2',
       workflow: '.github/workflows/npm-publish.yml',
     },
     schemaVersion: 1,
@@ -606,6 +606,40 @@ test('rejects a digest, signature key, or audit package mismatch', () => {
     ({ name }) => name !== 'hd-wallet-wasm',
   );
   assert.throws(() => buildRegistryEvidenceEnvelopes(auditInput), /audit row/u);
+});
+
+test('keeps every npm registry signature: two by the same key (October 2026), at least one, none repeated', () => {
+  const input = validInput();
+  for (const dist of Object.values(input.distRecords)) {
+    const [first] = dist.signatures;
+    // A second signature by the same registry key (structure only here; the
+    // offline verifier checks each signature against the key).
+    dist.signatures.push({ keyid: first.keyid, sig: Buffer.from('second signature').toString('base64') });
+  }
+  const evidence = buildRegistryEvidenceEnvelopes(input);
+  for (const name of ['hd-wallet-ui', 'hd-wallet-wasm']) {
+    assert.deepEqual(evidence[name].dist.signatures, input.distRecords[name].signatures);
+    assert.equal(evidence[name].dist.signatures.length, 2);
+    // One registry key for both signatures, plus the publish key.
+    assert.deepEqual(evidence[name].registryKeys, expectedRegistryEvidence(input)[name].registryKeys);
+  }
+
+  const none = validInput();
+  none.distRecords['hd-wallet-ui'].signatures = [];
+  assert.throws(() => buildRegistryEvidenceEnvelopes(none), /at least one registry signature/u);
+
+  const repeated = validInput();
+  repeated.distRecords['hd-wallet-ui'].signatures.push(
+    structuredClone(repeated.distRecords['hd-wallet-ui'].signatures[0]),
+  );
+  assert.throws(() => buildRegistryEvidenceEnvelopes(repeated), /duplicate registry signature/u);
+
+  const unknown = validInput();
+  unknown.distRecords['hd-wallet-ui'].signatures.push({
+    keyid: 'SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    sig: Buffer.from('other key').toString('base64'),
+  });
+  assert.throws(() => buildRegistryEvidenceEnvelopes(unknown), /registry.*key|key selection/iu);
 });
 
 test('rejects expired, wrong-usage, unpinned, and wrong-effective-ID trust material', () => {

@@ -125,7 +125,7 @@ test('Ethereum tx (legacy): build, sign, serialize, parse via create()', () => {
 
   // A legacy transfer needs a recipient (2.1.1): without one it used to sign
   // a transaction to 0x00..00. The declared fields now reach the signed bytes.
-  const recipientless = wallet.ethereum.tx.create({ chainId: 1 });
+  const recipientless = wallet.ethereum.tx.create({ chainId: 1, nonce: 0 });
   let recipientlessSigned = true;
   try {
     recipientless.sign(priv);
@@ -530,6 +530,202 @@ test('Ethereum tx: the zero address and a double prefix are refused when the tra
   // The C setter refuses both, so the wrapper throws at build time.
   for (const to of ['0x0000000000000000000000000000000000000000', '0x0x52908400098527886E0F7030069857D2E4169E']) {
     assertThrows(() => wallet.ethereum.tx.createEIP1559(ethParams({ to })), `createEIP1559 to ${to}`);
-    assertThrows(() => wallet.ethereum.tx.create({ chainId: 1, gasLimit: 21_000n, to, value: 1n }), `create to ${to}`);
+    assertThrows(() => wallet.ethereum.tx.create({ chainId: 1, nonce: 7, gasLimit: 21_000n, to, value: 1n }), `create to ${to}`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// 2.1.2: Ethereum nonce and chainId are required
+// ---------------------------------------------------------------------------
+// A missing nonce signed nonce 0 and a missing chainId (legacy) chain 1; chain
+// 0 signed a pre-EIP-155 transaction valid on every chain. Both are required,
+// an explicit nonce 0 is a nonce, and chainId is at least 1.
+
+const EIP155_NONCE0 = 'f86c808504a817c800825208943535353535353535353535353535353535353535880de0b6b3a76400008026a0f3d5a389'
+  + '0fbcbd1f1f7c9affab932af4062e4f03e3ac8cea31ed36f705390da6a03cef06a6742d436a0c36ac89ca98197d44e12292'
+  + '5ce59947d398172d97ce41cb';
+const eip155Params = (overrides = {}) => ({
+  chainId: 1,
+  nonce: 0,
+  gasPrice: 20_000_000_000n,
+  gasLimit: 21_000n,
+  to: '0x3535353535353535353535353535353535353535',
+  value: 10n ** 18n,
+  ...overrides,
+});
+
+// The signed bytes, or null when the builder or the signer refuses.
+function signedOrNull(build) {
+  let tx = null;
+  try {
+    tx = build();
+    return bytesToHex(tx.sign(hexToBytes('46'.repeat(32))).serialize());
+  } catch {
+    return null;
+  } finally {
+    tx?.destroy();
+  }
+}
+
+test('Ethereum tx: a missing nonce or chainId is refused, never defaulted', () => {
+  const builders = [
+    ['create', (o) => () => wallet.ethereum.tx.create(eip155Params(o))],
+    ['createEIP1559', (o) => () => wallet.ethereum.tx.createEIP1559(ethParams(o))],
+  ];
+  const problems = [];
+  for (const [name, build] of builders) {
+    for (const [label, overrides] of [
+      ['no nonce', { nonce: undefined }],
+      ['nonce null', { nonce: null }],
+      ['no chainId', { chainId: undefined }],
+      ['chainId null', { chainId: null }],
+      ['chainId 0', { chainId: 0 }],
+      ['chainId 0n', { chainId: 0n }],
+      ['chainId "0"', { chainId: '0' }],
+    ]) {
+      const signed = signedOrNull(build(overrides));
+      if (signed !== null) problems.push(`${name} ${label} signed ${signed.slice(0, 24)}...`);
+    }
+    // Without the property at all (not only undefined).
+    for (const key of ['nonce', 'chainId']) {
+      const params = name === 'create' ? eip155Params() : ethParams();
+      delete params[key];
+      const signed = signedOrNull(() => wallet.ethereum.tx[name](params));
+      if (signed !== null) problems.push(`${name} without ${key} signed ${signed.slice(0, 24)}...`);
+    }
+  }
+  assertEqual(problems.join('\n'), '', 'every missing nonce/chainId must be refused');
+
+  // An explicit nonce 0 signs: the EIP-155 example transaction at nonce 0.
+  assertEqual(signedOrNull(() => wallet.ethereum.tx.create(eip155Params({ nonce: 0 }))), EIP155_NONCE0, 'nonce 0 (number)');
+  assertEqual(signedOrNull(() => wallet.ethereum.tx.create(eip155Params({ nonce: 0n }))), EIP155_NONCE0, 'nonce 0n');
+  assert(signedOrNull(() => wallet.ethereum.tx.createEIP1559(ethParams({ nonce: 0 }))) !== null, 'EIP-1559 nonce 0 signs');
+});
+
+test('Ethereum tx: each field is read once (a Uint8Array with a lying length signs its own bytes)', () => {
+  const data = hexToBytes('deadbeef');
+  const reference = signedOrNull(() => wallet.ethereum.tx.createEIP1559(ethParams({ data })));
+  assert(reference !== null && reference.includes('84deadbeef'), 'reference transaction carries 0x84 deadbeef');
+
+  // A subclass whose length claims 64 bytes: 60 of them would come from the heap.
+  class LyingLength extends Uint8Array {
+    get length() { return 64; }
+  }
+  const lying = new LyingLength(data);
+  assertEqual(signedOrNull(() => wallet.ethereum.tx.createEIP1559(ethParams({ data: lying }))), reference,
+    'createEIP1559 with a lying length');
+  assertEqual(
+    signedOrNull(() => wallet.ethereum.tx.create(eip155Params({ data: lying }))),
+    signedOrNull(() => wallet.ethereum.tx.create(eip155Params({ data }))),
+    'create with a lying length');
+
+  // A getter that answers one array when checked and another, longer one later.
+  let reads = 0;
+  const params = ethParams();
+  Object.defineProperty(params, 'data', {
+    enumerable: true,
+    get() { reads++; return reads === 1 ? data : new Uint8Array(4096).fill(0x41); },
+  });
+  assertEqual(signedOrNull(() => wallet.ethereum.tx.createEIP1559(params)), reference, 'data getter read once');
+  assertEqual(reads, 1, 'params.data read exactly once');
+
+  // The same for the recipient: the address checked is the address signed.
+  let toReads = 0;
+  const toParams = ethParams();
+  Object.defineProperty(toParams, 'to', {
+    enumerable: true,
+    get() { toReads++; return toReads === 1 ? ETH_TO : '0x000000000000000000000000000000000000dEaD'; },
+  });
+  assertEqual(signedOrNull(() => wallet.ethereum.tx.createEIP1559(toParams)),
+    signedOrNull(() => wallet.ethereum.tx.createEIP1559(ethParams())), 'to getter read once');
+  assertEqual(toReads, 1, 'params.to read exactly once');
+});
+
+// ---------------------------------------------------------------------------
+// 2.1.2: a Bitcoin output pays the script its address encodes (BIP-350)
+// ---------------------------------------------------------------------------
+// The type came from the program length alone: a witness-v1 address with a
+// 20-byte program paid P2WPKH 0014..., witness v2..16 with 32 bytes paid P2WSH
+// 0020... (a burn). Only v0/20, v0/32 and v1/32 are paid now. Vectors: BIP-350
+// valid and invalid segwit addresses, and v1/20, v2/32, v3/20 encoded with
+// BIP-350's reference encoder.
+
+const BIP350_OUTPUTS = [
+  // [address, network, scriptPubKey or null (refused)]
+  ['BC1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KV8F3T4', Network.MAINNET, '0014751e76e8199196d454941c45d1b3a323f1433bd6'],
+  ['tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sl5k7', Network.TESTNET,
+    '00201863143c14c5166804bd19203356da136c985678cd4d27a1b8c6329604903262'],
+  ['bc1pw508d6qejxtdg4y5r3zarvary0c5xw7kw508d6qejxtdg4y5r3zarvary0c5xw7kt5nd6y', Network.MAINNET, null],
+  ['BC1SW50QGDZ25J', Network.MAINNET, null],
+  ['bc1zw508d6qejxtdg4y5r3zarvaryvaxxpcs', Network.MAINNET, null],
+  ['tb1qqqqqp399et2xygdj5xreqhjjvcmzhxw4aywxecjdzew6hylgvsesrxh6hy', Network.TESTNET,
+    '0020000000c4a5cad46221b2a187905e5266362b99d5e91c6ce24d165dab93e86433'],
+  ['tb1pqqqqp399et2xygdj5xreqhjjvcmzhxw4aywxecjdzew6hylgvsesf3hn0c', Network.TESTNET,
+    '5120000000c4a5cad46221b2a187905e5266362b99d5e91c6ce24d165dab93e86433'],
+  ['bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0', Network.MAINNET,
+    '512079be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'],
+  // Valid encodings this wallet does not pay (before 2.1.2: 0014..., 0020..., 0014..., 0020..., 0014...).
+  ['bc1pw508d6qejxtdg4y5r3zarvary0c5xw7kj9wkru', Network.MAINNET, null],
+  ['bc1z0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vq2tdauy', Network.MAINNET, null],
+  ['bc1rw508d6qejxtdg4y5r3zarvary0c5xw7kysfqe2', Network.MAINNET, null],
+  ['tb1z0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqarmjxt', Network.TESTNET, null],
+  ['tb1pw508d6qejxtdg4y5r3zarvary0c5xw7kcr49c0', Network.TESTNET, null],
+  // BIP-350 invalid segwit addresses.
+  ...[
+    'tc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vq5zuyut',
+    'bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqh2y7hd',
+    'tb1z0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqglt7rf',
+    'BC1S0XLXVLHEMJA6C4DQV22UAPCTQUPFHLXM9H8Z3K2E72Q4K9HCZ7VQ54WELL',
+    'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kemeawh',
+    'tb1q0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vq24jc47',
+    'bc1p38j9r5y49hruaue7wxjce0updqjuyyx0kh56v8s25huc6995vvpql3jow4',
+    'BC130XLXVLHEMJA6C4DQV22UAPCTQUPFHLXM9H8Z3K2E72Q4K9HCZ7VQ7ZWS8R',
+    'bc1pw5dgrnzv',
+    'bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7v8n0nx0muaewav253zgeav',
+    'BC1QR508D6QEJXTDG4Y5R3ZARVARYV98GJ9P',
+    'tb1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vq47Zagq',
+    'bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7v07qwwzcrf',
+    'tb1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vpggkg4j',
+    'bc1gmk9yu',
+  ].map((address) => [address, address.toLowerCase().startsWith('tb') ? Network.TESTNET : Network.MAINNET, null]),
+];
+
+// The serialized output (8-byte amount, script length, script) or null when
+// addOutput refuses the address.
+function paidScript(address, network) {
+  const priv = hexToBytes('0000000000000000000000000000000000000000000000000000000000000001');
+  const pub = wallet.curves.publicKeyFromPrivate(priv, Curve.SECP256K1);
+  let tx = null;
+  try {
+    tx = wallet.bitcoin.tx.create().addInput({
+      txid: '11'.repeat(32), vout: 0, amount: 100_000n, scriptType: BitcoinScriptType.P2WPKH, pubkey: pub,
+    });
+    try {
+      tx.addOutput(address, 54_321n, network);
+    } catch {
+      return null;
+    }
+    const raw = bytesToHex(tx.sign(priv).serialize());
+    const amount = '31d4000000000000'; // 54321 little-endian
+    const at = raw.indexOf(amount);
+    assert(at >= 0, `${address}: output amount in the serialized transaction`);
+    const length = parseInt(raw.slice(at + 16, at + 18), 16);
+    return raw.slice(at + 18, at + 18 + 2 * length);
+  } finally {
+    tx?.destroy();
+  }
+}
+
+test('Bitcoin tx: addOutput pays only v0/20, v0/32 and v1/32 SegWit addresses (BIP-350)', () => {
+  const problems = [];
+  for (const [address, network, script] of BIP350_OUTPUTS) {
+    const paid = paidScript(address, network);
+    if (paid !== script) problems.push(`${address}: paid ${paid ?? 'nothing (refused)'}, expected ${script ?? 'a refusal'}`);
+    // The validator and decoder agree with addOutput.
+    if (wallet.bitcoin.validateAddress(address, network) !== (script !== null)) problems.push(`${address}: validateAddress disagrees`);
+    let decoded = null;
+    try { decoded = wallet.bitcoin.decodeAddress(address); } catch { /* refused */ }
+    if ((decoded !== null) !== (script !== null)) problems.push(`${address}: decodeAddress disagrees`);
+  }
+  assertEqual(problems.join('\n'), '', 'every output pays the script its address encodes, or is refused');
 });

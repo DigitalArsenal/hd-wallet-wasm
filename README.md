@@ -308,6 +308,12 @@ const ethTx = wallet.ethereum.tx.createEIP1559({
 const ethRawTx = ethTx.serialize();
 ```
 
+`addOutput` pays P2PKH, P2SH, P2WPKH (SegWit v0, 20 bytes), P2WSH (v0, 32
+bytes) and P2TR (v1, 32 bytes) addresses and throws on any other address,
+including valid SegWit addresses of other witness versions or program lengths
+(BIP-350). Ethereum `create` and `createEIP1559` require `nonce` (0 is a nonce)
+and `chainId` (at least 1); neither has a default.
+
 ### X.509 PKI and Wallet Attestations
 
 `hd-wallet-wasm` now ships a native X.509 stack because regular Web PKI is still

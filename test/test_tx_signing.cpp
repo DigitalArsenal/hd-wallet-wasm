@@ -18,6 +18,7 @@
 
 #include "test_framework.h"
 #include "hd_wallet/types.h"
+#include "hd_wallet/coins/bitcoin.h"
 #include "hd_wallet/coins/coin.h"
 #include "hd_wallet/coins/ethereum.h"
 #include "hd_wallet/tx/bitcoin_tx.h"
@@ -604,5 +605,231 @@ TEST_CASE(TxSigning, EthAddressFromPublicKeyRefusesNonPoints) {
     ASSERT_EQ(static_cast<int32_t>(Error::INVALID_PUBLIC_KEY),
               tx::hd_eth_pubkey_to_address(key->data(), key->size(), out));
     ASSERT_STR_EQ("a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5", toHex(out, 20));  // output untouched
+  }
+}
+
+// =============================================================================
+// Ethereum nonce and chain ID are required (2.1.2)
+// =============================================================================
+//
+// A builder that was never given a nonce signed nonce 0, and chain ID 0 signed
+// a pre-EIP-155 transaction that replays on every chain. Both are now required:
+// an explicit nonce 0 is valid, a missing one is refused; the chain ID is at
+// least 1. Parsed transactions carry their own nonce.
+
+namespace {
+
+void setTransfer(tx::EthereumTransaction& transaction) {
+  transaction.setGasPrice(20000000000ULL);
+  transaction.setGasLimit(21000);
+  transaction.setTo(test::hexToArray<20>("3535353535353535353535353535353535353535"));
+  transaction.setValue(1000000000000000000ULL);
+}
+
+}  // namespace
+
+TEST_CASE(TxSigning, EthMissingNonceIsRefused) {
+  const auto key = test::hexToArray<32>(kEip155PrivateKey);
+
+  tx::EthereumTransaction legacy(1);
+  setTransfer(legacy);
+  auto eip1559 = tx::EthereumTransaction::createEIP1559(1, 2000000000ULL, 30000000000ULL);
+  setTransfer(eip1559);
+  auto eip2930 = tx::EthereumTransaction::createEIP2930(1);
+  setTransfer(eip2930);
+  for (auto* transaction : {&legacy, &eip1559, &eip2930}) {
+    ASSERT_ERROR(transaction->serializeForSigning(), Error::INVALID_TRANSACTION);
+    ASSERT_ERROR(transaction->serialize(), Error::INVALID_TRANSACTION);
+    ASSERT_TRUE(Error::INVALID_TRANSACTION == transaction->validate());
+    ASSERT_TRUE(Error::INVALID_TRANSACTION == transaction->sign(key));
+    ASSERT_FALSE(transaction->hasSignature());
+    // An explicit nonce 0 is a nonce.
+    transaction->setNonce(0);
+    ASSERT_TRUE(Error::OK == transaction->sign(key));
+  }
+  // The explicit nonce 0 signs the published EIP-155 vector.
+  auto serialized = legacy.serialize();
+  ASSERT_OK(serialized);
+  ASSERT_STR_EQ(kEip155SignedNonce0, toHex(serialized.value));
+
+  // The C API the WASM wrapper uses: no hd_eth_tx_set_nonce, no signature.
+  for (tx::eth_tx_handle handle : {tx::hd_eth_tx_create(1), tx::hd_eth_tx_create_eip1559(1, 1, 2)}) {
+    ASSERT_TRUE(handle != nullptr);
+    tx::hd_eth_tx_set_gas_price(handle, 1);
+    tx::hd_eth_tx_set_gas_limit(handle, 21000);
+    ASSERT_EQ(0, tx::hd_eth_tx_set_to_hex(handle, "0x3535353535353535353535353535353535353535"));
+    uint8_t out[512];
+    size_t outLen = 0;
+    ASSERT_EQ(static_cast<int32_t>(Error::INVALID_TRANSACTION), tx::hd_eth_tx_sign(handle, key.data()));
+    ASSERT_EQ(static_cast<int32_t>(Error::INVALID_TRANSACTION), tx::hd_eth_tx_serialize(handle, out, sizeof(out), &outLen));
+    tx::hd_eth_tx_set_nonce(handle, 0);
+    ASSERT_EQ(0, tx::hd_eth_tx_sign(handle, key.data()));
+    ASSERT_EQ(0, tx::hd_eth_tx_serialize(handle, out, sizeof(out), &outLen));
+    tx::hd_eth_tx_destroy(handle);
+  }
+}
+
+TEST_CASE(TxSigning, EthChainIdZeroOrMissingIsRefused) {
+  const auto key = test::hexToArray<32>(kEip155PrivateKey);
+
+  tx::EthereumTransaction legacy(0);
+  auto eip1559 = tx::EthereumTransaction::createEIP1559(0, 2000000000ULL, 30000000000ULL);
+  auto eip2930 = tx::EthereumTransaction::createEIP2930(0);
+  tx::EthereumTransaction unset;  // no chain ID given
+  for (auto* transaction : {&legacy, &eip1559, &eip2930, &unset}) {
+    setTransfer(*transaction);
+    transaction->setNonce(9);
+    ASSERT_TRUE(Error::INVALID_TRANSACTION == transaction->sign(key));
+    ASSERT_FALSE(transaction->hasSignature());
+    transaction->setChainId(1);
+    ASSERT_TRUE(Error::OK == transaction->sign(key));
+  }
+
+  // The C API refuses to create a transaction for chain 0.
+  ASSERT_TRUE(tx::hd_eth_tx_create(0) == nullptr);
+  ASSERT_TRUE(tx::hd_eth_tx_create_eip1559(0, 1, 2) == nullptr);
+
+  // A parsed transaction keeps its own nonce and chain ID.
+  auto parsed = tx::EthereumTransaction::parseHex(kEip155SignedNonce0);
+  ASSERT_OK(parsed);
+  ASSERT_EQ(static_cast<uint64_t>(0), parsed.value.nonce());
+  ASSERT_EQ(static_cast<uint64_t>(1), parsed.value.chainId());
+  auto reserialized = parsed.value.serialize();
+  ASSERT_OK(reserialized);
+  ASSERT_STR_EQ(kEip155SignedNonce0, toHex(reserialized.value));
+}
+
+// =============================================================================
+// Bitcoin outputs pay the script the address encodes (2.1.2)
+// =============================================================================
+//
+// The address type was chosen from the program length alone: a bech32m
+// witness-v1 address with a 20-byte program paid P2WPKH 0014..., one with
+// witness version 2..16 and 32 bytes paid P2WSH 0020... (a burn). Now the
+// witness version and checksum variant are decoded (BIP-350: bech32 for v0,
+// bech32m for v1+) and only v0/20 (P2WPKH), v0/32 (P2WSH) and v1/32 (P2TR) are
+// accepted; every other address is refused. Vectors: BIP-350's valid and
+// invalid segwit addresses, and v1/20, v2/32 and v3/20 addresses encoded with
+// BIP-350's reference encoder.
+
+namespace {
+
+struct BtcVector {
+  const char* address;
+  bool testnet;
+  const char* script;  // nullptr: refused
+};
+
+const BtcVector kBtcVectors[] = {
+    // BIP-350 valid segwit addresses.
+    {"BC1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KV8F3T4", false, "0014751e76e8199196d454941c45d1b3a323f1433bd6"},
+    {"tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sl5k7", true,
+     "00201863143c14c5166804bd19203356da136c985678cd4d27a1b8c6329604903262"},
+    {"bc1pw508d6qejxtdg4y5r3zarvary0c5xw7kw508d6qejxtdg4y5r3zarvary0c5xw7kt5nd6y", false, nullptr},  // v1, 40 bytes
+    {"BC1SW50QGDZ25J", false, nullptr},                                                              // v16, 2 bytes
+    {"bc1zw508d6qejxtdg4y5r3zarvaryvaxxpcs", false, nullptr},                                        // v2, 16 bytes
+    {"tb1qqqqqp399et2xygdj5xreqhjjvcmzhxw4aywxecjdzew6hylgvsesrxh6hy", true,
+     "0020000000c4a5cad46221b2a187905e5266362b99d5e91c6ce24d165dab93e86433"},
+    {"tb1pqqqqp399et2xygdj5xreqhjjvcmzhxw4aywxecjdzew6hylgvsesf3hn0c", true,
+     "5120000000c4a5cad46221b2a187905e5266362b99d5e91c6ce24d165dab93e86433"},
+    {"bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0", false,
+     "512079be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"},
+    // Valid bech32m encodings this wallet does not pay. Before 2.1.2 the
+    // first paid 0014751e..., the second and fourth 0020..., the third 0014.
+    {"bc1pw508d6qejxtdg4y5r3zarvary0c5xw7kj9wkru", false, nullptr},                               // v1, 20 bytes
+    {"bc1z0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vq2tdauy", false, nullptr},          // v2, 32 bytes
+    {"bc1rw508d6qejxtdg4y5r3zarvary0c5xw7kysfqe2", false, nullptr},                               // v3, 20 bytes
+    {"tb1z0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqarmjxt", true, nullptr},           // v2, 32 bytes
+    {"tb1pw508d6qejxtdg4y5r3zarvary0c5xw7kcr49c0", true, nullptr},                                // v1, 20 bytes
+    // The same programs as v0 and v1 addresses this wallet does pay.
+    {"bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", false, "0014751e76e8199196d454941c45d1b3a323f1433bd6"},
+    {"bc1q0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqgp5m2n", false,
+     "002079be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"},
+};
+
+// BIP-350 invalid segwit addresses (refused on both networks).
+const char* const kBip350Invalid[] = {
+    "tc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vq5zuyut",   // invalid human-readable part
+    "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqh2y7hd",   // bech32 instead of bech32m
+    "tb1z0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqglt7rf",   // bech32 instead of bech32m
+    "BC1S0XLXVLHEMJA6C4DQV22UAPCTQUPFHLXM9H8Z3K2E72Q4K9HCZ7VQ54WELL",   // bech32 instead of bech32m
+    "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kemeawh",                       // bech32m instead of bech32
+    "tb1q0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vq24jc47",   // bech32m instead of bech32
+    "bc1p38j9r5y49hruaue7wxjce0updqjuyyx0kh56v8s25huc6995vvpql3jow4",   // invalid character in checksum
+    "BC130XLXVLHEMJA6C4DQV22UAPCTQUPFHLXM9H8Z3K2E72Q4K9HCZ7VQ7ZWS8R",   // invalid witness version
+    "bc1pw5dgrnzv",                                                     // invalid program length (1 byte)
+    "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7v8n0nx0muaewav253zgeav",  // 41 bytes
+    "BC1QR508D6QEJXTDG4Y5R3ZARVARYV98GJ9P",                             // v0 program length 16
+    "tb1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vq47Zagq",   // mixed case
+    "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7v07qwwzcrf", // zero padding of more than 4 bits
+    "tb1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vpggkg4j",   // non-zero padding in 8-to-5
+    "bc1gmk9yu",                                                        // empty data section
+};
+
+// Every entry point that reads an address agrees; returns "" or a description.
+std::string checkBtcAddress(const std::string& address, bool testnet, const char* script) {
+  const auto& params = testnet ? coins::BITCOIN_TESTNET : coins::BITCOIN_MAINNET;
+  const bool accept = script != nullptr;
+  auto decoded = coins::decodeToScriptPubKey(address, params);
+  if (decoded.ok() != accept) return address + (accept ? ": refused" : ": paid " + toHex(decoded.value));
+  if (accept && toHex(decoded.value) != script) return address + ": paid " + toHex(decoded.value);
+  if (coins::detectBitcoinAddressType(address, params).ok() != accept) return address + ": detect disagrees";
+  if (coins::validateBitcoinAddress(address, params).ok() != accept) return address + ": validate disagrees";
+  if ((coins::hd_btc_validate_address(address.c_str(), testnet ? 1 : 0) == 0) != accept) {
+    return address + ": hd_btc_validate_address disagrees";
+  }
+
+  // hd_btc_decode_address, which the WASM wrapper's addOutput uses.
+  int32_t type = -1, network = -1;
+  uint8_t hash[64];
+  size_t hashLen = sizeof(hash);
+  const int32_t rc = coins::hd_btc_decode_address(address.c_str(), &type, hash, &hashLen, &network);
+  if ((rc == 0) != accept) return address + ": hd_btc_decode_address disagrees";
+  if (accept) {
+    const std::string expected(script);
+    const std::string program = toHex(hash, hashLen);
+    if (expected.substr(4) != program) return address + ": hd_btc_decode_address program " + program;
+    const int32_t expectedType = expected.substr(0, 4) == "0014" ? 2 : expected.substr(0, 4) == "0020" ? 3 : 4;
+    if (type != expectedType) return address + ": hd_btc_decode_address type " + std::to_string(type);
+    if (network != (testnet ? 1 : 0)) return address + ": hd_btc_decode_address network";
+  }
+  return "";
+}
+
+}  // namespace
+
+TEST_CASE(TxSigning, BtcSegwitOutputScriptsFollowBip350) {
+  for (const auto& vector : kBtcVectors) {
+    ASSERT_STR_EQ("", checkBtcAddress(vector.address, vector.testnet, vector.script));
+    // Never on the other network.
+    ASSERT_FALSE(coins::decodeToScriptPubKey(vector.address,
+                                             vector.testnet ? coins::BITCOIN_MAINNET : coins::BITCOIN_TESTNET).ok());
+  }
+  for (const char* address : kBip350Invalid) {
+    ASSERT_STR_EQ("", checkBtcAddress(address, false, nullptr));
+    ASSERT_STR_EQ("", checkBtcAddress(address, true, nullptr));
+  }
+}
+
+TEST_CASE(TxSigning, BtcBase58OutputNeedsTwentyBytePayload) {
+  // Version byte 0x00 / 0x05 then 20 bytes; anything longer or shorter was
+  // read as P2PKH/P2SH and paid a script with the wrong push.
+  ByteVector p2pkh = {0x00};
+  ByteVector p2sh = {0x05};
+  for (int i = 0; i < 20; ++i) { p2pkh.push_back(0x11); p2sh.push_back(0x22); }
+  auto script = coins::decodeToScriptPubKey(coins::base58CheckEncode(p2pkh), coins::BITCOIN_MAINNET);
+  ASSERT_OK(script);
+  ASSERT_STR_EQ("76a914111111111111111111111111111111111111111188ac", toHex(script.value));
+  script = coins::decodeToScriptPubKey(coins::base58CheckEncode(p2sh), coins::BITCOIN_MAINNET);
+  ASSERT_OK(script);
+  ASSERT_STR_EQ("a914222222222222222222222222222222222222222287", toHex(script.value));
+
+  for (size_t length : {0u, 19u, 21u, 32u}) {
+    for (uint8_t version : {static_cast<uint8_t>(0x00), static_cast<uint8_t>(0x05)}) {
+      ByteVector payload(1 + length, 0x33);
+      payload[0] = version;
+      const std::string address = coins::base58CheckEncode(payload);
+      ASSERT_STR_EQ("", checkBtcAddress(address, false, nullptr));
+    }
   }
 }

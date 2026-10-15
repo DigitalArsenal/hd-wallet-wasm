@@ -11,7 +11,7 @@ import { pathToFileURL } from 'node:url';
 import { TextDecoder } from 'node:util';
 
 const SCHEMA_VERSION = 1;
-const RELEASE_VERSION = '2.1.1';
+const RELEASE_VERSION = '2.1.2';
 const PACKAGE_NAMES = Object.freeze(['hd-wallet-ui', 'hd-wallet-wasm']);
 const NPM_REGISTRY = 'https://registry.npmjs.org/';
 const EXPECTED_REPOSITORY = 'https://github.com/DigitalArsenal/hd-wallet-wasm';
@@ -19,7 +19,7 @@ const EXPECTED_REPOSITORY_ID = '1142529413';
 const EXPECTED_REPOSITORY_OWNER_ID = '29587475';
 const EXPECTED_OIDC_ISSUER = 'https://token.actions.githubusercontent.com';
 const EXPECTED_WORKFLOW = 'npm-publish.yml';
-const EXPECTED_SOURCE_TAG = 'v2.1.1';
+const EXPECTED_SOURCE_TAG = 'v2.1.2';
 const PROVENANCE_PREDICATE = 'https://slsa.dev/provenance/v1';
 const PUBLISH_PREDICATE = 'https://github.com/npm/attestation/tree/main/specs/publish/v0.1';
 const STATEMENT_TYPE = 'https://in-toto.io/Statement/v1';
@@ -453,29 +453,24 @@ function requireTrustedPublishMaterials({ bundle, name, registryKey, trust, trus
 
 export function verifyRegistryEvidenceTrust({ auditRow, packageName, registryEvidence, trustPolicy }) {
   const { provenance, publish } = selectAttestations(auditRow?.attestationBundles, packageName);
-  const signatures = requireArray(registryEvidence?.dist?.signatures,
-    `${packageName} registry signatures`);
-  if (signatures.length !== 1) fail(`${packageName} must have exactly one registry signature`);
-  const signatureKey = selectRegistryKey(
-    registryEvidence?.registryKeys,
-    signatures[0]?.keyid,
-    packageName,
-    'registry signature',
-  );
-  requireTrustedPackageMaterials({
-    bundle: provenance.bundle,
-    name: packageName,
-    registryKey: signatureKey,
-    trust: registryEvidence.sigstoreTrust,
-    trustPolicy,
-  });
+  const signatures = requireRegistrySignatures(registryEvidence?.dist?.signatures, packageName);
+  const signatureKeyids = [...new Set(signatures.map(({ keyid }) => keyid))];
+  for (const keyid of signatureKeyids) {
+    requireTrustedPackageMaterials({
+      bundle: provenance.bundle,
+      name: packageName,
+      registryKey: selectRegistryKey(registryEvidence?.registryKeys, keyid, packageName, 'registry signature'),
+      trust: registryEvidence.sigstoreTrust,
+      trustPolicy,
+    });
+  }
   const publishSignatures = requireArray(publish.bundle?.dsseEnvelope?.signatures,
     `${packageName} publish DSSE signatures`);
   if (publishSignatures.length !== 1) {
     fail(`${packageName} publish attestation must have exactly one DSSE signature`);
   }
   requireExactlyBoundRegistryKeys(registryEvidence.registryKeys, [
-    signatures[0]?.keyid,
+    ...signatureKeyids,
     publishSignatures[0]?.keyid,
   ], packageName);
   const publishKey = selectRegistryKey(
@@ -752,26 +747,48 @@ function verifyRegistrySignature({ name, integrity, registrySignature }) {
   requireValidSignature(key, message, signature, `${name} registry signature`);
 }
 
-function normalizeRegistrySignature(evidence, name, integrity) {
+// npm signs a version with one or more ECDSA signatures over
+// `${name}@${version}:${integrity}` (October 2026: two, the same key ID and
+// distinct sig values). There is at least one; each is well formed, none is
+// repeated, and each verifies under an authorized npm registry key.
+export function requireRegistrySignatures(value, name) {
+  const signatures = requireArray(value, `${name} registry signatures`);
+  if (signatures.length === 0) fail(`${name} must have at least one registry signature`);
+  if (signatures.length > 8) fail(`${name} registry signatures are unbounded`);
+  signatures.forEach((signature, index) => {
+    requireExactKeys(signature, ['keyid', 'sig'], `${name} registry signature ${index}`);
+    requireString(signature.keyid, `${name} registry signature ${index}.keyid`);
+    requireString(signature.sig, `${name} registry signature ${index}.sig`);
+  });
+  const distinct = new Set(signatures.map(({ keyid, sig }) => `${keyid}\n${sig}`));
+  if (distinct.size !== signatures.length) fail(`${name} has a duplicate registry signature`);
+  return signatures;
+}
+
+function normalizeRegistrySignatures(evidence, name, integrity) {
   requireExactKeys(evidence, [
     'dist', 'registryKeys', 'sigstoreTrust', 'workflowTarball',
   ], `${name} registry evidence`);
   requireExactKeys(evidence.dist, ['attestations', 'integrity', 'signatures', 'tarball'], `${name} registry dist`);
-  const signatures = requireArray(evidence.dist.signatures, `${name} registry signatures`);
-  if (signatures.length !== 1) fail(`${name} must have exactly one registry signature`);
-  requireExactKeys(signatures[0], ['keyid', 'sig'], `${name} registry signature`);
-  const key = selectRegistryKey(
-    evidence.registryKeys,
-    signatures[0].keyid,
-    name,
-    'registry signature',
-  );
-  const result = {
-    key: clone(key),
-    signature: clone(signatures[0]),
-  };
-  verifyRegistrySignature({ name, integrity, registrySignature: result });
-  return result;
+  return requireRegistrySignatures(evidence.dist.signatures, name).map((signature) => {
+    const result = {
+      key: clone(selectRegistryKey(evidence.registryKeys, signature.keyid, name, 'registry signature')),
+      signature: clone(signature),
+    };
+    verifyRegistrySignature({ name, integrity, registrySignature: result });
+    return result;
+  });
+}
+
+// The verified registry signatures of a package's evidence: at least one,
+// each verified; the distinct keys they were made with.
+function requireVerifiedRegistrySignatures(value, name, integrity) {
+  const signatures = requireArray(value, `${name} registry signatures`);
+  if (signatures.length === 0) fail(`${name} must have at least one registry signature`);
+  requireRegistrySignatures(signatures.map((entry) => entry?.signature), name);
+  signatures.forEach((registrySignature) => verifyRegistrySignature({ name, integrity, registrySignature }));
+  const keys = new Map(signatures.map(({ key }) => [canonicalizeJson(key), key]));
+  return [...keys.values()];
 }
 
 function dssePreAuthenticationEncoding(payloadType, payload) {
@@ -1589,7 +1606,7 @@ function verifyPublishBundle(value, trust, registryKey, expected, trustPolicy) {
 
 function requireNormalizedPackage(value, expected, trustPolicy) {
   requireExactKeys(value, [
-    'attestations', 'integrity', 'name', 'provenance', 'registrySignature',
+    'attestations', 'integrity', 'name', 'provenance', 'registrySignatures',
     'run', 'subject', 'tarball', 'version',
   ], `${expected.name} package evidence`);
   if (value.name !== expected.name || value.version !== RELEASE_VERSION) {
@@ -1601,11 +1618,9 @@ function requireNormalizedPackage(value, expected, trustPolicy) {
   if (value.tarball.sha512 !== integrity.sha512) fail(`${expected.name} tarball SHA-512 does not match integrity`);
   if (value.tarball.url !== expectedTarballUrl(expected.name)) fail(`${expected.name} tarball URL is wrong`);
   requireAttestations(value.attestations, expected.name, `${expected.name} attestations`);
-  verifyRegistrySignature({
-    name: expected.name,
-    integrity: value.integrity,
-    registrySignature: value.registrySignature,
-  });
+  const registrySignatureKeys = requireVerifiedRegistrySignatures(
+    value.registrySignatures, expected.name, value.integrity,
+  );
   requireExactKeys(value.run, ['attempt', 'id'], `${expected.name} package run`);
   if (value.run.id !== expected.run.id) fail(`${expected.name} package run ID is wrong`);
   if (!Number.isSafeInteger(value.run.attempt) || !expected.run.attempts.includes(value.run.attempt)) {
@@ -1624,13 +1639,15 @@ function requireNormalizedPackage(value, expected, trustPolicy) {
   if (value.provenance.predicateType !== PROVENANCE_PREDICATE) {
     fail(`${expected.name} provenance predicate type is wrong`);
   }
-  requireTrustedPackageMaterials({
-    bundle: value.provenance.bundle,
-    name: expected.name,
-    registryKey: value.registrySignature.key,
-    trust: value.provenance.trust,
-    trustPolicy,
-  });
+  for (const registryKey of registrySignatureKeys) {
+    requireTrustedPackageMaterials({
+      bundle: value.provenance.bundle,
+      name: expected.name,
+      registryKey,
+      trust: value.provenance.trust,
+      trustPolicy,
+    });
+  }
   const verified = verifyBundle(value.provenance.bundle, value.provenance.trust, {
     ...expected,
     sha512: value.tarball.sha512,
@@ -1770,7 +1787,8 @@ function buildPackageEvidence({ auditRow, name, packageLock, registry, release, 
   if (canonicalizeJson(auditRow.attestations) !== canonicalizeJson(registry.dist.attestations)) {
     fail(`${name} audit and registry attestations metadata do not match`);
   }
-  const registrySignature = normalizeRegistrySignature(registry, name, registry.dist.integrity);
+  const registrySignatures = normalizeRegistrySignatures(registry, name, registry.dist.integrity);
+  const registrySignatureKeyids = [...new Set(registrySignatures.map(({ key }) => key.keyid))];
   const { provenance, publish } = selectAttestations(auditRow.attestationBundles, name);
   if (provenance.predicateType !== auditRow.attestations.provenance.predicateType) {
     fail(`${name} provenance predicate type does not match attestations metadata`);
@@ -1781,7 +1799,7 @@ function buildPackageEvidence({ auditRow, name, packageLock, registry, release, 
     fail(`${name} publish attestation must have exactly one DSSE signature`);
   }
   requireExactlyBoundRegistryKeys(registry.registryKeys, [
-    registry.dist.signatures[0]?.keyid,
+    ...registrySignatureKeyids,
     publishSignature[0]?.keyid,
   ], name);
   const publishKey = selectRegistryKey(
@@ -1800,13 +1818,15 @@ function buildPackageEvidence({ auditRow, name, packageLock, registry, release, 
     name,
     sha512: integrity.sha512,
   }, trustPolicy);
-  requireTrustedPackageMaterials({
-    bundle: provenance.bundle,
-    name,
-    registryKey: registrySignature.key,
-    trust: registry.sigstoreTrust,
-    trustPolicy,
-  });
+  for (const keyid of registrySignatureKeyids) {
+    requireTrustedPackageMaterials({
+      bundle: provenance.bundle,
+      name,
+      registryKey: selectRegistryKey(registry.registryKeys, keyid, name, 'registry signature'),
+      trust: registry.sigstoreTrust,
+      trustPolicy,
+    });
+  }
   return {
     attestations: clone(auditRow.attestations),
     integrity: registry.dist.integrity,
@@ -1817,7 +1837,7 @@ function buildPackageEvidence({ auditRow, name, packageLock, registry, release, 
       statement: clone(verified.statement),
       trust: clone(registry.sigstoreTrust),
     },
-    registrySignature,
+    registrySignatures,
     run: { attempt: verified.binding.attempt, id: run.id },
     subject: clone(verified.binding.subject),
     tarball: { sha512: integrity.sha512, url: registry.dist.tarball },

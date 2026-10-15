@@ -321,8 +321,9 @@ ByteVector AccessListEntry::encode() const {
 
 EthereumTransaction::EthereumTransaction()
   : type_(EthTxType::LEGACY)
-  , chainId_(ETH_CHAIN_ID_MAINNET)
+  , chainId_(0)
   , nonce_(0)
+  , hasNonce_(false)
   , gasPrice_(0)
   , maxPriorityFeePerGas_(0)
   , maxFeePerGas_(0)
@@ -342,6 +343,7 @@ EthereumTransaction::EthereumTransaction(uint64_t chainId)
   : type_(EthTxType::LEGACY)
   , chainId_(chainId)
   , nonce_(0)
+  , hasNonce_(false)
   , gasPrice_(0)
   , maxPriorityFeePerGas_(0)
   , maxFeePerGas_(0)
@@ -603,6 +605,9 @@ Result<ByteVector> EthereumTransaction::serializeForSigning() const {
   if (!hasRecipient()) {
     return Result<ByteVector>::fail(Error::INVALID_ADDRESS);
   }
+  if (!hasNonce_) {
+    return Result<ByteVector>::fail(Error::INVALID_TRANSACTION);
+  }
   auto items = encodeFieldsForSigning();
   ByteVector encoded = rlp::encodeList(items);
 
@@ -620,6 +625,9 @@ Result<ByteVector> EthereumTransaction::serializeForSigning() const {
 Result<ByteVector> EthereumTransaction::serialize() const {
   if (!hasRecipient()) {
     return Result<ByteVector>::fail(Error::INVALID_ADDRESS);
+  }
+  if (!hasNonce_) {
+    return Result<ByteVector>::fail(Error::INVALID_TRANSACTION);
   }
   auto items = encodeFields();
   ByteVector encoded = rlp::encodeList(items);
@@ -696,10 +704,14 @@ static bool signECDSARecoverable(
 
 Error EthereumTransaction::sign(const Bytes32& privateKey, int /* inputIndex */) {
 #if HD_WALLET_USE_CRYPTOPP
-  // Get the signing hash
+  // Get the signing hash (it needs a recipient and a nonce)
   auto forSigning = serializeForSigning();
   if (!forSigning.ok()) {
     return forSigning.error;
+  }
+  // Chain ID 0 would sign a pre-EIP-155 transaction, valid on every chain.
+  if (chainId_ == 0) {
+    return Error::INVALID_TRANSACTION;
   }
 
   Bytes32 sigHash = keccak256(forSigning.value);
@@ -714,12 +726,7 @@ Error EthereumTransaction::sign(const Bytes32& privateKey, int /* inputIndex */)
   switch (type_) {
     case EthTxType::LEGACY:
       // EIP-155: v = chain_id * 2 + 35 + recovery_id
-      // Or without EIP-155: v = 27 + recovery_id
-      if (chainId_ > 0) {
-        signatureV_ = chainId_ * 2 + 35 + recoveryId;
-      } else {
-        signatureV_ = 27 + recoveryId;
-      }
+      signatureV_ = chainId_ * 2 + 35 + recoveryId;
       break;
 
     case EthTxType::ACCESS_LIST:
@@ -748,6 +755,11 @@ Error EthereumTransaction::validate() const {
     return Error::INVALID_ADDRESS;
   }
 
+  // The nonce has no default.
+  if (!hasNonce_) {
+    return Error::INVALID_TRANSACTION;
+  }
+
   // Check gas limit
   if (gasLimit_ == 0) {
     return Error::INVALID_TRANSACTION;
@@ -773,6 +785,7 @@ std::unique_ptr<Transaction> EthereumTransaction::clone() const {
   tx->type_ = type_;
   tx->chainId_ = chainId_;
   tx->nonce_ = nonce_;
+  tx->hasNonce_ = hasNonce_;
   tx->gasPrice_ = gasPrice_;
   tx->maxPriorityFeePerGas_ = maxPriorityFeePerGas_;
   tx->maxFeePerGas_ = maxFeePerGas_;
@@ -877,6 +890,7 @@ Result<EthereumTransaction> EthereumTransaction::parse(const ByteVector& data) {
 
       tx.chainId_ = rlp::decodeInteger((*items)[0]);
       tx.nonce_ = rlp::decodeInteger((*items)[1]);
+      tx.hasNonce_ = true;
       tx.maxPriorityFeePerGas_ = rlp::decodeInteger((*items)[2]);
       tx.maxFeePerGas_ = rlp::decodeInteger((*items)[3]);
       tx.gasLimit_ = rlp::decodeInteger((*items)[4]);
@@ -915,6 +929,7 @@ Result<EthereumTransaction> EthereumTransaction::parse(const ByteVector& data) {
 
       tx.chainId_ = rlp::decodeInteger((*items)[0]);
       tx.nonce_ = rlp::decodeInteger((*items)[1]);
+      tx.hasNonce_ = true;
       tx.gasPrice_ = rlp::decodeInteger((*items)[2]);
       tx.gasLimit_ = rlp::decodeInteger((*items)[3]);
 
@@ -959,6 +974,8 @@ Result<EthereumTransaction> EthereumTransaction::parse(const ByteVector& data) {
     }
 
     tx.nonce_ = rlp::decodeInteger((*items)[0]);
+
+    tx.hasNonce_ = true;
     tx.gasPrice_ = rlp::decodeInteger((*items)[1]);
     tx.gasLimit_ = rlp::decodeInteger((*items)[2]);
 
@@ -1138,6 +1155,9 @@ Result<std::array<uint8_t, 20>> parseAddress(const std::string& addressHex) {
 extern "C" {
 
 eth_tx_handle hd_eth_tx_create(uint64_t chain_id) {
+  if (chain_id == 0) {
+    return nullptr;
+  }
   return reinterpret_cast<eth_tx_handle>(new EthereumTransaction(chain_id));
 }
 
@@ -1146,6 +1166,9 @@ eth_tx_handle hd_eth_tx_create_eip1559(
   uint64_t max_priority_fee,
   uint64_t max_fee
 ) {
+  if (chain_id == 0) {
+    return nullptr;
+  }
   auto tx = new EthereumTransaction(EthereumTransaction::createEIP1559(chain_id, max_priority_fee, max_fee));
   return reinterpret_cast<eth_tx_handle>(tx);
 }

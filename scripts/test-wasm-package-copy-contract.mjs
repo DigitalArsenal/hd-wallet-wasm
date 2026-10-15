@@ -155,7 +155,7 @@ assert.match(
 );
 for (const packageName of ['hd-wallet-wasm', 'hd-wallet-ui']) {
   assert.ok(
-    publishCi.includes(`$artifact_root/npm-tarballs/${packageName}-2.1.1.tgz`),
+    publishCi.includes(`$artifact_root/npm-tarballs/${packageName}-2.1.2.tgz`),
     `publish workflow must consume the exact ${packageName} tarball`,
   );
 }

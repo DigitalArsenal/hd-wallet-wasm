@@ -818,6 +818,10 @@ export interface BitcoinTxBuilder {
 
 export interface BitcoinTx {
   addInput(txid: string, vout: number, sequence?: number): this;
+  /**
+   * Pay `address`: P2PKH, P2SH, P2WPKH (v0, 20 bytes), P2WSH (v0, 32 bytes)
+   * or P2TR (v1, 32 bytes). Any other address throws (BIP-350).
+   */
   addOutput(address: string, amount: bigint): this;
   sign(inputIndex: number, privateKey: Uint8Array, redeemScript?: Uint8Array): this;
   serialize(): Uint8Array;
@@ -867,6 +871,10 @@ export interface EthereumAPI {
   tx: EthereumTxBuilder;
 }
 
+/**
+ * `nonce` and `chainId` are required: a missing nonce, a missing chainId or
+ * chainId 0 throws (an explicit nonce 0 is valid). Each field is read once.
+ */
 export interface EthereumTxBuilder {
   create(params: {
     nonce: number;

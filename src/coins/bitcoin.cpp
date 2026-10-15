@@ -184,248 +184,150 @@ Result<Bytes32> toXOnlyPublicKey(const Bytes33& public_key) {
 // Bitcoin Address Validation
 // =============================================================================
 
+namespace {
+
+// The one reading of an address this wallet pays to: its type and payload
+// (the 20-byte hash of P2PKH, P2SH and P2WPKH; the 32-byte program of P2WSH
+// and P2TR). A SegWit address is typed by its witness version and program
+// length together (BIP-141, BIP-350): v0/20 P2WPKH, v0/32 P2WSH, v1/32 P2TR.
+// Every other address is refused, never mapped to a script it does not encode.
+struct BitcoinPayee {
+  BitcoinAddressType type;
+  ByteVector payload;
+};
+
+Result<BitcoinPayee> decodeBitcoinPayee(const std::string& address, const BitcoinParams& params) {
+  using R = Result<BitcoinPayee>;
+  if (address.empty()) {
+    return R::fail(Error::INVALID_ADDRESS);
+  }
+
+  std::string lower_address = address;
+  std::transform(lower_address.begin(), lower_address.end(), lower_address.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+  if (lower_address.rfind(std::string(params.bech32_hrp) + "1", 0) == 0) {
+    auto decoded = decodeSegwitAddress(address);
+    if (!decoded.ok() || decoded.value.hrp != params.bech32_hrp) {
+      return R::fail(Error::INVALID_ADDRESS);
+    }
+    const uint8_t version = decoded.value.witness_version;
+    const size_t length = decoded.value.program.size();
+    BitcoinAddressType type;
+    if (version == 0 && length == 20) {
+      type = BitcoinAddressType::P2WPKH;
+    } else if (version == 0 && length == 32) {
+      type = BitcoinAddressType::P2WSH;
+    } else if (version == 1 && length == 32) {
+      type = BitcoinAddressType::P2TR;
+    } else {
+      return R::fail(Error::INVALID_ADDRESS);
+    }
+    return R::success(BitcoinPayee{type, std::move(decoded.value.program)});
+  }
+
+  // Base58Check: one version byte and a 20-byte hash.
+  auto decoded = base58CheckDecode(address);
+  if (!decoded.ok() || decoded.value.size() != 21) {
+    return R::fail(Error::INVALID_ADDRESS);
+  }
+  BitcoinAddressType type;
+  if (decoded.value[0] == params.p2pkh_version) {
+    type = BitcoinAddressType::P2PKH;
+  } else if (decoded.value[0] == params.p2sh_version) {
+    type = BitcoinAddressType::P2SH;
+  } else {
+    return R::fail(Error::INVALID_ADDRESS);
+  }
+  return R::success(BitcoinPayee{type, ByteVector(decoded.value.begin() + 1, decoded.value.end())});
+}
+
+Result<void> validateAs(const std::string& address, const BitcoinParams& params, BitcoinAddressType type) {
+  auto payee = decodeBitcoinPayee(address, params);
+  if (!payee.ok()) {
+    return Result<void>::fail(payee.error);
+  }
+  if (payee.value.type != type) {
+    return Result<void>::fail(Error::INVALID_ADDRESS);
+  }
+  return Result<void>::success();
+}
+
+}  // namespace
+
 Result<BitcoinAddressType> detectBitcoinAddressType(
   const std::string& address,
   const BitcoinParams& params
 ) {
-  if (address.empty()) {
-    return Result<BitcoinAddressType>::fail(Error::INVALID_ADDRESS);
+  auto payee = decodeBitcoinPayee(address, params);
+  if (!payee.ok()) {
+    return Result<BitcoinAddressType>::fail(payee.error);
   }
-
-  // Check for Bech32/Bech32m addresses
-  std::string lower_address = address;
-  std::transform(lower_address.begin(), lower_address.end(), lower_address.begin(),
-                 [](unsigned char c) { return std::tolower(c); });
-
-  if (lower_address.find(std::string(params.bech32_hrp) + "1") == 0) {
-    // Bech32 address - decode to check witness version
-    auto decoded = bech32Decode(address);
-    if (!decoded.ok()) {
-      return Result<BitcoinAddressType>::fail(Error::INVALID_ADDRESS);
-    }
-
-    // Check data length to determine type
-    if (decoded.value.second.size() == 20) {
-      return Result<BitcoinAddressType>::success(BitcoinAddressType::P2WPKH);
-    } else if (decoded.value.second.size() == 32) {
-      // Could be P2WSH (v0) or P2TR (v1) - check witness version
-      // The witness version is encoded as the first data character after the separator.
-      // In bech32 charset, 'q' = 0 (v0/P2WSH), 'p' = 1 (v1/P2TR).
-      // The character is at index strlen(bech32_hrp) + 1 (right after "bc1" or "tb1").
-      size_t wit_ver_idx = std::strlen(params.bech32_hrp) + 1;
-      if (wit_ver_idx < lower_address.size() && lower_address[wit_ver_idx] == 'p') {
-        return Result<BitcoinAddressType>::success(BitcoinAddressType::P2TR);
-      }
-      return Result<BitcoinAddressType>::success(BitcoinAddressType::P2WSH);
-    }
-
-    return Result<BitcoinAddressType>::fail(Error::INVALID_ADDRESS);
-  }
-
-  // Check for Base58Check addresses
-  auto decoded = base58CheckDecode(address);
-  if (!decoded.ok()) {
-    return Result<BitcoinAddressType>::fail(Error::INVALID_ADDRESS);
-  }
-
-  if (decoded.value.empty()) {
-    return Result<BitcoinAddressType>::fail(Error::INVALID_ADDRESS);
-  }
-
-  uint8_t version = decoded.value[0];
-
-  if (version == params.p2pkh_version) {
-    return Result<BitcoinAddressType>::success(BitcoinAddressType::P2PKH);
-  } else if (version == params.p2sh_version) {
-    return Result<BitcoinAddressType>::success(BitcoinAddressType::P2SH);
-  }
-
-  return Result<BitcoinAddressType>::fail(Error::INVALID_ADDRESS);
+  return Result<BitcoinAddressType>::success(BitcoinAddressType{payee.value.type});
 }
 
 Result<void> validateP2PKH(const std::string& address, const BitcoinParams& params) {
-  auto decoded = base58CheckDecode(address);
-  if (!decoded.ok()) {
-    return Result<void>::fail(decoded.error);
-  }
-
-  // Should be 1 version byte + 20 hash bytes
-  if (decoded.value.size() != 21) {
-    return Result<void>::fail(Error::INVALID_ADDRESS);
-  }
-
-  if (decoded.value[0] != params.p2pkh_version) {
-    return Result<void>::fail(Error::INVALID_ADDRESS);
-  }
-
-  return Result<void>::success();
+  return validateAs(address, params, BitcoinAddressType::P2PKH);
 }
 
 Result<void> validateP2SH(const std::string& address, const BitcoinParams& params) {
-  auto decoded = base58CheckDecode(address);
-  if (!decoded.ok()) {
-    return Result<void>::fail(decoded.error);
-  }
-
-  // Should be 1 version byte + 20 hash bytes
-  if (decoded.value.size() != 21) {
-    return Result<void>::fail(Error::INVALID_ADDRESS);
-  }
-
-  if (decoded.value[0] != params.p2sh_version) {
-    return Result<void>::fail(Error::INVALID_ADDRESS);
-  }
-
-  return Result<void>::success();
+  return validateAs(address, params, BitcoinAddressType::P2SH);
 }
 
 Result<void> validateP2WPKH(const std::string& address, const BitcoinParams& params) {
-  auto decoded = bech32Decode(address);
-  if (!decoded.ok()) {
-    return Result<void>::fail(decoded.error);
-  }
-
-  // Check HRP
-  if (decoded.value.first != params.bech32_hrp) {
-    return Result<void>::fail(Error::INVALID_ADDRESS);
-  }
-
-  // Should be 20 bytes for P2WPKH
-  if (decoded.value.second.size() != 20) {
-    return Result<void>::fail(Error::INVALID_ADDRESS);
-  }
-
-  return Result<void>::success();
+  return validateAs(address, params, BitcoinAddressType::P2WPKH);
 }
 
 Result<void> validateP2WSH(const std::string& address, const BitcoinParams& params) {
-  auto decoded = bech32Decode(address);
-  if (!decoded.ok()) {
-    return Result<void>::fail(decoded.error);
-  }
-
-  // Check HRP
-  if (decoded.value.first != params.bech32_hrp) {
-    return Result<void>::fail(Error::INVALID_ADDRESS);
-  }
-
-  // Should be 32 bytes for P2WSH
-  if (decoded.value.second.size() != 32) {
-    return Result<void>::fail(Error::INVALID_ADDRESS);
-  }
-
-  return Result<void>::success();
+  return validateAs(address, params, BitcoinAddressType::P2WSH);
 }
 
 Result<void> validateP2TR(const std::string& address, const BitcoinParams& params) {
-  auto decoded = bech32mDecode(address);
-  if (!decoded.ok()) {
-    return Result<void>::fail(decoded.error);
-  }
-
-  // Check HRP
-  if (decoded.value.first != params.bech32_hrp) {
-    return Result<void>::fail(Error::INVALID_ADDRESS);
-  }
-
-  // Should be 32 bytes for P2TR
-  if (decoded.value.second.size() != 32) {
-    return Result<void>::fail(Error::INVALID_ADDRESS);
-  }
-
-  return Result<void>::success();
+  return validateAs(address, params, BitcoinAddressType::P2TR);
 }
 
 Result<void> validateBitcoinAddress(const std::string& address, const BitcoinParams& params) {
-  auto type = detectBitcoinAddressType(address, params);
-  if (!type.ok()) {
-    return Result<void>::fail(type.error);
-  }
-
-  switch (type.value) {
-    case BitcoinAddressType::P2PKH:
-      return validateP2PKH(address, params);
-    case BitcoinAddressType::P2SH:
-      return validateP2SH(address, params);
-    case BitcoinAddressType::P2WPKH:
-      return validateP2WPKH(address, params);
-    case BitcoinAddressType::P2WSH:
-      return validateP2WSH(address, params);
-    case BitcoinAddressType::P2TR:
-      return validateP2TR(address, params);
-    default:
-      return Result<void>::fail(Error::INVALID_ADDRESS);
-  }
+  auto payee = decodeBitcoinPayee(address, params);
+  return payee.ok() ? Result<void>::success() : Result<void>::fail(payee.error);
 }
 
 Result<ByteVector> decodeToScriptPubKey(const std::string& address, const BitcoinParams& params) {
-  auto type = detectBitcoinAddressType(address, params);
-  if (!type.ok()) {
-    return Result<ByteVector>::fail(type.error);
+  auto payee = decodeBitcoinPayee(address, params);
+  if (!payee.ok()) {
+    return Result<ByteVector>::fail(payee.error);
   }
+  const ByteVector& payload = payee.value.payload;
 
   ByteVector script;
-
-  switch (type.value) {
-    case BitcoinAddressType::P2PKH: {
-      auto decoded = base58CheckDecode(address);
-      if (!decoded.ok()) return Result<ByteVector>::fail(decoded.error);
-
+  switch (payee.value.type) {
+    case BitcoinAddressType::P2PKH:
       // OP_DUP OP_HASH160 <20 bytes> OP_EQUALVERIFY OP_CHECKSIG
-      script.push_back(0x76);  // OP_DUP
-      script.push_back(0xA9);  // OP_HASH160
-      script.push_back(0x14);  // Push 20 bytes
-      script.insert(script.end(), decoded.value.begin() + 1, decoded.value.end());
-      script.push_back(0x88);  // OP_EQUALVERIFY
-      script.push_back(0xAC);  // OP_CHECKSIG
+      script = {0x76, 0xA9, 0x14};
+      script.insert(script.end(), payload.begin(), payload.end());
+      script.push_back(0x88);
+      script.push_back(0xAC);
       break;
-    }
-
-    case BitcoinAddressType::P2SH: {
-      auto decoded = base58CheckDecode(address);
-      if (!decoded.ok()) return Result<ByteVector>::fail(decoded.error);
-
+    case BitcoinAddressType::P2SH:
       // OP_HASH160 <20 bytes> OP_EQUAL
-      script.push_back(0xA9);  // OP_HASH160
-      script.push_back(0x14);  // Push 20 bytes
-      script.insert(script.end(), decoded.value.begin() + 1, decoded.value.end());
-      script.push_back(0x87);  // OP_EQUAL
+      script = {0xA9, 0x14};
+      script.insert(script.end(), payload.begin(), payload.end());
+      script.push_back(0x87);
       break;
-    }
-
-    case BitcoinAddressType::P2WPKH: {
-      auto decoded = bech32Decode(address);
-      if (!decoded.ok()) return Result<ByteVector>::fail(decoded.error);
-
+    case BitcoinAddressType::P2WPKH:
       // OP_0 <20 bytes>
-      script.push_back(0x00);  // OP_0 (witness version 0)
-      script.push_back(0x14);  // Push 20 bytes
-      script.insert(script.end(), decoded.value.second.begin(), decoded.value.second.end());
+      script = {0x00, 0x14};
+      script.insert(script.end(), payload.begin(), payload.end());
       break;
-    }
-
-    case BitcoinAddressType::P2WSH: {
-      auto decoded = bech32Decode(address);
-      if (!decoded.ok()) return Result<ByteVector>::fail(decoded.error);
-
+    case BitcoinAddressType::P2WSH:
       // OP_0 <32 bytes>
-      script.push_back(0x00);  // OP_0 (witness version 0)
-      script.push_back(0x20);  // Push 32 bytes
-      script.insert(script.end(), decoded.value.second.begin(), decoded.value.second.end());
+      script = {0x00, 0x20};
+      script.insert(script.end(), payload.begin(), payload.end());
       break;
-    }
-
-    case BitcoinAddressType::P2TR: {
-      auto decoded = bech32mDecode(address);
-      if (!decoded.ok()) return Result<ByteVector>::fail(decoded.error);
-
+    case BitcoinAddressType::P2TR:
       // OP_1 <32 bytes>
-      script.push_back(0x51);  // OP_1 (witness version 1)
-      script.push_back(0x20);  // Push 32 bytes
-      script.insert(script.end(), decoded.value.second.begin(), decoded.value.second.end());
+      script = {0x51, 0x20};
+      script.insert(script.end(), payload.begin(), payload.end());
       break;
-    }
-
     default:
       return Result<ByteVector>::fail(Error::INVALID_ADDRESS);
   }
@@ -673,46 +575,21 @@ Error Bitcoin::validateAddress(const std::string& address) const {
 }
 
 Result<DecodedAddress> Bitcoin::decodeAddress(const std::string& address) const {
-  auto type = detectBitcoinAddressType(address, *params_);
-  if (!type.ok()) {
-    return Result<DecodedAddress>::fail(type.error);
+  auto payee = decodeBitcoinPayee(address, *params_);
+  if (!payee.ok()) {
+    return Result<DecodedAddress>::fail(payee.error);
   }
 
   DecodedAddress decoded;
   decoded.address = address;
   decoded.network = network_;
-
-  switch (type.value) {
-    case BitcoinAddressType::P2PKH:
-    case BitcoinAddressType::P2SH: {
-      auto result = base58CheckDecode(address);
-      if (!result.ok()) return Result<DecodedAddress>::fail(result.error);
-      decoded.version = result.value[0];
-      decoded.data = ByteVector(result.value.begin() + 1, result.value.end());
-      break;
-    }
-
-    case BitcoinAddressType::P2WPKH:
-    case BitcoinAddressType::P2WSH: {
-      auto result = bech32Decode(address);
-      if (!result.ok()) return Result<DecodedAddress>::fail(result.error);
-      decoded.version = 0;
-      decoded.data = result.value.second;
-      break;
-    }
-
-    case BitcoinAddressType::P2TR: {
-      auto result = bech32mDecode(address);
-      if (!result.ok()) return Result<DecodedAddress>::fail(result.error);
-      decoded.version = 1;
-      decoded.data = result.value.second;
-      break;
-    }
-
-    default:
-      return Result<DecodedAddress>::fail(Error::INVALID_ADDRESS);
+  switch (payee.value.type) {
+    case BitcoinAddressType::P2PKH: decoded.version = params_->p2pkh_version; break;
+    case BitcoinAddressType::P2SH:  decoded.version = params_->p2sh_version; break;
+    case BitcoinAddressType::P2TR:  decoded.version = 1; break;
+    default:                        decoded.version = 0; break;  // P2WPKH, P2WSH
   }
-
+  decoded.data = std::move(payee.value.payload);
   return Result<DecodedAddress>::success(std::move(decoded));
 }
 
@@ -952,82 +829,19 @@ int32_t hd_btc_decode_address(
     return static_cast<int32_t>(Error::INVALID_ARGUMENT);
   }
 
-  std::string addr(address);
-  if (addr.empty()) {
-    return static_cast<int32_t>(Error::INVALID_ADDRESS);
-  }
-
-  // Detect network from HRP (Bech32) or version byte (Base58Check).
-  const BitcoinParams* params = nullptr;
+  // The network is the one whose HRP or version bytes the address decodes
+  // under (they differ, so at most one does).
+  const std::string addr(address);
   Network net = Network::MAINNET;
-
-  std::string lower = addr;
-  std::transform(lower.begin(), lower.end(), lower.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-
-  if (lower.rfind("bc1", 0) == 0) {
-    params = &BITCOIN_MAINNET;
-    net = Network::MAINNET;
-  } else if (lower.rfind("tb1", 0) == 0) {
-    params = &BITCOIN_TESTNET;
+  auto payee = decodeBitcoinPayee(addr, BITCOIN_MAINNET);
+  if (!payee.ok()) {
     net = Network::TESTNET;
-  } else {
-    auto decoded = base58CheckDecode(addr);
-    if (!decoded.ok() || decoded.value.empty()) {
-      return static_cast<int32_t>(Error::INVALID_ADDRESS);
-    }
-
-    uint8_t version = decoded.value[0];
-    if (version == BITCOIN_MAINNET.p2pkh_version || version == BITCOIN_MAINNET.p2sh_version) {
-      params = &BITCOIN_MAINNET;
-      net = Network::MAINNET;
-    } else if (version == BITCOIN_TESTNET.p2pkh_version || version == BITCOIN_TESTNET.p2sh_version) {
-      params = &BITCOIN_TESTNET;
-      net = Network::TESTNET;
-    } else {
-      return static_cast<int32_t>(Error::INVALID_ADDRESS);
-    }
+    payee = decodeBitcoinPayee(addr, BITCOIN_TESTNET);
   }
-
-  auto type = detectBitcoinAddressType(addr, *params);
-  if (!type.ok()) {
-    return static_cast<int32_t>(type.error);
+  if (!payee.ok()) {
+    return static_cast<int32_t>(payee.error);
   }
-
-  ByteVector payload;
-  switch (type.value) {
-    case BitcoinAddressType::P2PKH:
-    case BitcoinAddressType::P2SH: {
-      auto decoded = base58CheckDecode(addr);
-      if (!decoded.ok() || decoded.value.size() < 21) {
-        return static_cast<int32_t>(Error::INVALID_ADDRESS);
-      }
-      payload.assign(decoded.value.begin() + 1, decoded.value.end());
-      break;
-    }
-
-    case BitcoinAddressType::P2WPKH:
-    case BitcoinAddressType::P2WSH: {
-      auto decoded = bech32Decode(addr);
-      if (!decoded.ok()) {
-        return static_cast<int32_t>(decoded.error);
-      }
-      payload = decoded.value.second;
-      break;
-    }
-
-    case BitcoinAddressType::P2TR: {
-      auto decoded = bech32mDecode(addr);
-      if (!decoded.ok()) {
-        return static_cast<int32_t>(decoded.error);
-      }
-      payload = decoded.value.second;
-      break;
-    }
-
-    default:
-      return static_cast<int32_t>(Error::INVALID_ADDRESS);
-  }
+  const ByteVector& payload = payee.value.payload;
 
   if (payload.size() > *hash_len) {
     *hash_len = payload.size();
@@ -1036,7 +850,7 @@ int32_t hd_btc_decode_address(
 
   std::copy(payload.begin(), payload.end(), hash_out);
   *hash_len = payload.size();
-  *type_out = static_cast<int32_t>(type.value);
+  *type_out = static_cast<int32_t>(payee.value.type);
   *network_out = static_cast<int32_t>(net);
   return static_cast<int32_t>(Error::OK);
 }

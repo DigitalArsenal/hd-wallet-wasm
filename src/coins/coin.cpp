@@ -498,62 +498,78 @@ std::string bech32Encode(const std::string& hrp, const ByteVector& data, uint8_t
   return result;
 }
 
-Result<std::pair<std::string, ByteVector>> bech32Decode(const std::string& str) {
-  // Find separator
+Result<SegwitAddress> decodeSegwitAddress(const std::string& str) {
+  using R = Result<SegwitAddress>;
+
+  // BIP-173: at most 90 characters, printable US-ASCII, one case.
+  if (str.size() > 90) {
+    return R::fail(Error::INVALID_ADDRESS);
+  }
+  bool has_lower = false;
+  bool has_upper = false;
+  for (unsigned char c : str) {
+    if (c < 33 || c > 126) return R::fail(Error::INVALID_ADDRESS);
+    has_lower |= (c >= 'a' && c <= 'z');
+    has_upper |= (c >= 'A' && c <= 'Z');
+  }
+  if (has_lower && has_upper) {
+    return R::fail(Error::INVALID_ADDRESS);
+  }
+
+  // The last '1' separates the HRP (1+ characters) from the data (6+ checksum).
   size_t pos = str.rfind('1');
   if (pos == std::string::npos || pos == 0 || pos + 7 > str.size()) {
-    return Result<std::pair<std::string, ByteVector>>::fail(Error::INVALID_ADDRESS);
+    return R::fail(Error::INVALID_ADDRESS);
   }
 
-  // Extract HRP (lowercase)
   std::string hrp;
   for (size_t i = 0; i < pos; i++) {
-    hrp += std::tolower(static_cast<unsigned char>(str[i]));
+    hrp += static_cast<char>(std::tolower(static_cast<unsigned char>(str[i])));
   }
 
-  // Decode data
   std::vector<uint8_t> data;
   for (size_t i = pos + 1; i < str.size(); i++) {
-    unsigned char c = static_cast<unsigned char>(str[i]);
-    if (c >= 128 || BECH32_CHARSET_REV[c] == -1) {
-      return Result<std::pair<std::string, ByteVector>>::fail(Error::INVALID_ADDRESS);
+    const int8_t v = BECH32_CHARSET_REV[static_cast<unsigned char>(str[i])];
+    if (v == -1) {
+      return R::fail(Error::INVALID_ADDRESS);
     }
-    data.push_back(BECH32_CHARSET_REV[c]);
+    data.push_back(static_cast<uint8_t>(v));
   }
 
-  // Verify checksum
   bool is_bech32m;
   if (!bech32VerifyChecksum(hrp, data, is_bech32m)) {
-    return Result<std::pair<std::string, ByteVector>>::fail(Error::INVALID_CHECKSUM);
+    return R::fail(Error::INVALID_CHECKSUM);
   }
-
-  // Remove checksum and convert back to 8-bit
   data.resize(data.size() - 6);
-
-  // First byte is witness version
   if (data.empty()) {
-    return Result<std::pair<std::string, ByteVector>>::fail(Error::INVALID_ADDRESS);
+    return R::fail(Error::INVALID_ADDRESS);
   }
 
-  uint8_t witness_version = data[0];
-  data.erase(data.begin());
-
-  // Check bech32m requirement
-  if (witness_version > 0 && !is_bech32m) {
-    return Result<std::pair<std::string, ByteVector>>::fail(Error::INVALID_ADDRESS);
-  }
-  if (witness_version == 0 && is_bech32m) {
-    return Result<std::pair<std::string, ByteVector>>::fail(Error::INVALID_ADDRESS);
+  // BIP-350: witness version 0-16; bech32 for v0, bech32m for v1 and above.
+  const uint8_t witness_version = data[0];
+  if (witness_version > 16 || (witness_version == 0) == is_bech32m) {
+    return R::fail(Error::INVALID_ADDRESS);
   }
 
-  // Convert 5-bit to 8-bit
-  std::vector<uint8_t> conv = convertBits(data, 5, 8, false);
-  if (conv.empty() && !data.empty()) {
-    return Result<std::pair<std::string, ByteVector>>::fail(Error::INVALID_ADDRESS);
+  // BIP-141: a 2-40 byte program, 20 or 32 for v0; padding of at most 4 zero bits.
+  std::vector<uint8_t> program = convertBits(
+    std::vector<uint8_t>(data.begin() + 1, data.end()), 5, 8, false
+  );
+  if (program.size() < 2 || program.size() > 40 ||
+      (witness_version == 0 && program.size() != 20 && program.size() != 32)) {
+    return R::fail(Error::INVALID_ADDRESS);
   }
 
+  return R::success(SegwitAddress{std::move(hrp), witness_version, ByteVector(program.begin(), program.end())});
+}
+
+Result<std::pair<std::string, ByteVector>> bech32Decode(const std::string& str) {
+  auto decoded = decodeSegwitAddress(str);
+  if (!decoded.ok()) {
+    return Result<std::pair<std::string, ByteVector>>::fail(decoded.error);
+  }
   return Result<std::pair<std::string, ByteVector>>::success(
-    std::make_pair(hrp, ByteVector(conv.begin(), conv.end()))
+    std::make_pair(std::move(decoded.value.hrp), std::move(decoded.value.program))
   );
 }
 

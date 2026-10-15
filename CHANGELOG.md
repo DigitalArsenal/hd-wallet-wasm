@@ -1,5 +1,97 @@
 # Changelog
 
+## 2.1.2 (2026-10-15)
+
+### Security
+
+Defects found by the 2.1.1 verifier, present in 2.1.1 and every earlier
+release, are fixed. Upgrade; no data migration is needed. **Behaviour change:**
+Ethereum transactions need an explicit `nonce` and `chainId` (below).
+
+- **A Bitcoin output could pay a different script than its address encodes.**
+  `bitcoin.tx.addOutput` (and the C++ `decodeToScriptPubKey`,
+  `detectBitcoinAddressType`, `hd_btc_decode_address`) chose the output type
+  from the SegWit program length alone and never read the witness version. A
+  valid bech32m witness-v1 address with a 20-byte program
+  (`bc1pw508d6qejxtdg4y5r3zarvary0c5xw7kj9wkru`) paid P2WPKH
+  `0014751e…3bd6`, an address of witness version 2 to 16 with a 32-byte program
+  (`bc1z0xlx…q2tdauy`) paid P2WSH `0020…`, and BIP-350's invalid witness
+  version 17 (`BC130XLX…7ZWS8R`) paid P2WSH too: outputs to scripts nobody
+  holds the key or script for, so the coins are burnt. The decoder also took
+  mixed-case addresses and did not bound the length or the witness version, and
+  a Base58Check address of the right version but not 20 bytes became a
+  P2PKH/P2SH script with a wrong-length push.
+- **A missing Ethereum nonce or chain ID was defaulted, not refused.**
+  `ethereum.tx.create` and `ethereum.tx.createEIP1559` signed nonce 0 when
+  `nonce` was missing, `create` signed for chain 1 when `chainId` was missing,
+  and chain ID 0 (both builders, the C ABI, C++) signed a pre-EIP-155
+  transaction or a typed transaction for chain 0, which replay on every chain.
+  In C++ and at the C ABI (`hd_eth_tx_create`, `hd_eth_tx_create_eip1559`) a
+  transaction whose nonce was never set signed nonce 0.
+- **A Uint8Array with a lying length put heap memory into a signed Ethereum
+  transaction.** The Ethereum builders read `params.data` more than once and
+  passed its `length` to native code, so a `Uint8Array` subclass whose `length`
+  getter claimed more bytes than it held (or a `data` getter that answered a
+  different array the second time) signed bytes of the WASM heap as calldata.
+  Other fields were read more than once too (`to` was checked from one read and
+  set from another).
+
+The fix:
+
+- **SegWit addresses decoded by BIP-173/BIP-350.** One decoder
+  (`coins::decodeSegwitAddress`) checks one case, at most 90 characters, the
+  checksum variant the witness version requires (bech32 for v0, bech32m for
+  v1-v16), a 2-40 byte program (20 or 32 for v0) and at most 4 zero padding
+  bits, and returns the witness version with the program. A Bitcoin address is
+  typed by version and length together, and only v0/20 (P2WPKH), v0/32 (P2WSH)
+  and v1/32 (P2TR) are paid; every other address, valid SegWit addresses of
+  other versions or lengths included, is INVALID_ADDRESS (502), never mapped to
+  a script. A Base58Check address must be one version byte and 20 bytes.
+  `detectBitcoinAddressType`, `validateBitcoinAddress`, the `validateP2*`
+  functions, `decodeToScriptPubKey`, `Bitcoin::decodeAddress` and
+  `hd_btc_decode_address` all read an address through that one rule, and the
+  WASM wrapper checks the payload length of each type before building the
+  script. Native and WASM tests run BIP-350's valid and invalid SegWit
+  addresses and v1/20, v2/32 and v3/20 addresses made with BIP-350's reference
+  encoder through every entry point; on 2.1.1 the v1/20 address paid
+  `0014751e76e8199196d454941c45d1b3a323f1433bd6`.
+- **The nonce and the chain ID are required (behaviour change).**
+  `ethereum.tx.create` and `ethereum.tx.createEIP1559` throw INVALID_ARGUMENT
+  when `nonce` or `chainId` is missing or null, or `chainId` is 0; an explicit
+  nonce 0 is valid. In C++ a transaction has no nonce until `setNonce` (or
+  parsing) gives it one: `serialize`, `serializeForSigning`, `sign` and
+  `validate` fail with INVALID_TRANSACTION (500) without one, and `sign`
+  refuses chain ID 0 with INVALID_TRANSACTION (the default constructor no
+  longer assumes chain 1). `hd_eth_tx_create` and `hd_eth_tx_create_eip1559`
+  return NULL for chain 0, and a handle without `hd_eth_tx_set_nonce` does not
+  serialize or sign. Parsed transactions keep their own nonce and chain ID.
+  Callers that relied on the defaults must pass both; the wallet UI already
+  does.
+- **Each builder field is read once.** The Ethereum builders destructure
+  `params` once and copy `data` from the array's own bytes and length
+  (`new Uint8Array(data)`), so the bytes checked are the bytes signed. A WASM
+  test signs with a `length`-lying subclass and with getters that change
+  answers, and checks the signed bytes; on 2.1.1 the lying subclass signed 64
+  bytes of calldata, 60 of them from the heap.
+
+Every key, address, signature and transaction this library made for an
+accepted input is unchanged byte for byte (the EIP-155 example and the BIP-143
+vector still match); only inputs that used to be mapped to the wrong script or
+defaulted now throw.
+
+### Release workflow
+
+- npm now returns two registry signatures for a version (the same key ID,
+  `SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U`, distinct `sig`
+  values), so the 2.1.1 run's final registry check, which required exactly one,
+  failed although the packages were published correctly. The workflow and
+  `scripts/collect-provenance-inputs.mjs` / `scripts/verify-provenance-evidence.mjs`
+  now require at least one signature (at most 8, none repeated), each made with
+  a registry key pinned in `release/provenance-trust.v1.json` and, in the
+  provenance evidence, each verified over `name@version:integrity`; the
+  attestations are still required. The evidence records every signature
+  (`registrySignatures`).
+
 ## 2.1.1 (2026-10-15)
 
 ### Security

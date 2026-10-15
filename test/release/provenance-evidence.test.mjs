@@ -32,13 +32,13 @@ const clone = (value) => structuredClone(value);
 
 const PUBLISH_PREDICATE =
   'https://github.com/npm/attestation/tree/main/specs/publish/v0.1';
-const RELEASE_VERSION = '2.1.1';
+const RELEASE_VERSION = '2.1.2';
 const EXPECTED_REPOSITORY_ID = '1142529413';
 const EXPECTED_REPOSITORY_OWNER_ID = '29587475';
 const EXPECTED_REPOSITORY = 'https://github.com/DigitalArsenal/hd-wallet-wasm';
-const EXPECTED_REF = 'refs/tags/v2.1.1';
+const EXPECTED_REF = 'refs/tags/v2.1.2';
 const EXPECTED_WORKFLOW_IDENTITY =
-  'https://github.com/DigitalArsenal/hd-wallet-wasm/.github/workflows/npm-publish.yml@refs/tags/v2.1.1';
+  'https://github.com/DigitalArsenal/hd-wallet-wasm/.github/workflows/npm-publish.yml@refs/tags/v2.1.2';
 const EXPECTED_OIDC_ISSUER = 'https://token.actions.githubusercontent.com';
 // Deterministic test-only fixture keys. They protect no production identity or material.
 const PUBLISH_PRIVATE_KEY_PEM = `-----BEGIN PRIVATE KEY-----
@@ -318,7 +318,7 @@ function buildFulcioLeaf(overrides = {}) {
     ),
     tokenSubject: leafExtension(
       OID.tokenSubject,
-      derUtf8String('repo:DigitalArsenal/hd-wallet-wasm:ref:refs/tags/v2.1.1'),
+      derUtf8String('repo:DigitalArsenal/hd-wallet-wasm:ref:refs/tags/v2.1.2'),
     ),
     ...fieldOverrides,
   };
@@ -461,10 +461,10 @@ function buildPublishBundle({ integratedTime, name, sha512, statementMutator }) 
     predicate: {
       name,
       registry: 'https://registry.npmjs.org',
-      version: '2.1.1',
+      version: '2.1.2',
     },
     predicateType: PUBLISH_PREDICATE,
-    subject: [{ digest: { sha512 }, name: `pkg:npm/${name}@2.1.1` }],
+    subject: [{ digest: { sha512 }, name: `pkg:npm/${name}@2.1.2` }],
   };
   if (statementMutator) statementMutator(statement);
   const payloadType = 'application/vnd.in-toto+json';
@@ -595,8 +595,8 @@ const fixtureTrustPolicy = {
     repository: 'https://github.com/DigitalArsenal/hd-wallet-wasm',
     repositoryId: EXPECTED_REPOSITORY_ID,
     repositoryOwnerId: EXPECTED_REPOSITORY_OWNER_ID,
-    sourceTag: 'v2.1.1',
-    version: '2.1.1',
+    sourceTag: 'v2.1.2',
+    version: '2.1.2',
     workflow: '.github/workflows/npm-publish.yml',
   },
   schemaVersion: 1,
@@ -824,11 +824,11 @@ test('synthetic input mirrors the exact npm 11.16 keyed publish bundle shape', (
       'base64',
     ).toString('utf8'));
     assert.equal(statement._type, 'https://in-toto.io/Statement/v0.1');
-    assert.equal(statement.subject[0].name, `pkg:npm/${row.name}@2.1.1`);
+    assert.equal(statement.subject[0].name, `pkg:npm/${row.name}@2.1.2`);
     assert.deepEqual(statement.predicate, {
       name: row.name,
       registry: 'https://registry.npmjs.org',
-      version: '2.1.1',
+      version: '2.1.2',
     });
   }
 });
@@ -1036,10 +1036,10 @@ test('builds deterministic sanitized JCS evidence and revalidates it offline', (
     id: '9876543210',
   });
   assert.deepEqual(evidence.workflow, {
-    identity: 'https://github.com/DigitalArsenal/hd-wallet-wasm/.github/workflows/npm-publish.yml@refs/tags/v2.1.1',
+    identity: 'https://github.com/DigitalArsenal/hd-wallet-wasm/.github/workflows/npm-publish.yml@refs/tags/v2.1.2',
     name: 'npm-publish.yml',
     path: '.github/workflows/npm-publish.yml',
-    ref: 'refs/tags/v2.1.1',
+    ref: 'refs/tags/v2.1.2',
   });
   assert.deepEqual(evidence.packages.map(({ name }) => name), [
     'hd-wallet-ui', 'hd-wallet-wasm',
@@ -1047,16 +1047,17 @@ test('builds deterministic sanitized JCS evidence and revalidates it offline', (
 
   for (const entry of evidence.packages) {
     assert.deepEqual(Object.keys(entry).sort(), [
-      'attestations', 'integrity', 'name', 'provenance', 'registrySignature',
+      'attestations', 'integrity', 'name', 'provenance', 'registrySignatures',
       'run', 'subject', 'tarball', 'version',
     ]);
-    assert.equal(entry.version, '2.1.1');
+    assert.equal(entry.version, '2.1.2');
     assert.deepEqual(Object.keys(entry.tarball).sort(), ['sha512', 'url']);
     assert.match(entry.tarball.sha512, /^[0-9a-f]{128}$/u);
     assert.equal(entry.subject.digest.sha512, entry.tarball.sha512);
     assert.equal(entry.run.id, evidence.run.id);
     assert.ok(evidence.run.attempts.includes(entry.run.attempt));
-    assert.deepEqual(Object.keys(entry.registrySignature).sort(), ['key', 'signature']);
+    assert.equal(entry.registrySignatures.length, 1);
+    assert.deepEqual(Object.keys(entry.registrySignatures[0]).sort(), ['key', 'signature']);
     assert.deepEqual(Object.keys(entry.provenance).sort(), [
       'bundle', 'predicateType', 'statement', 'trust',
     ]);
@@ -1074,11 +1075,45 @@ test('builds deterministic sanitized JCS evidence and revalidates it offline', (
   assertForbiddenKeysAbsent(evidence);
 });
 
+// A fresh registry signature over `${name}@${version}:${integrity}` (ECDSA
+// P-256 signatures are randomized: each call gives a distinct valid sig).
+function registrySig(name, input) {
+  return signData(
+    'sha256',
+    Buffer.from(`${name}@${RELEASE_VERSION}:${input.registryEvidence[name].dist.integrity}`, 'utf8'),
+    registryPrivateKey,
+  ).toString('base64');
+}
+
+test('accepts npm registry records with two signatures by the same registry key (October 2026)', () => {
+  const input = validInput();
+  for (const name of ['hd-wallet-ui', 'hd-wallet-wasm']) {
+    const signatures = input.registryEvidence[name].dist.signatures;
+    signatures.push({ keyid: signatures[0].keyid, sig: registrySig(name, input) });
+    assert.notEqual(signatures[0].sig, signatures[1].sig);
+  }
+  const evidence = buildProvenanceEvidence(input);
+  for (const entry of evidence.packages) {
+    assert.equal(entry.registrySignatures.length, 2);
+    assert.equal(entry.registrySignatures[0].signature.keyid, entry.registrySignatures[1].signature.keyid);
+  }
+  assert.deepEqual(verifyProvenanceEvidence(clone(evidence)), evidence);
+
+  // After generation, a second signature that does not verify is refused.
+  const tampered = clone(evidence);
+  tampered.packages[0].registrySignatures[1].signature.sig =
+    flipBase64(tampered.packages[0].registrySignatures[1].signature.sig);
+  assert.throws(() => verifyProvenanceEvidence(tampered), /registry signature.*invalid/iu);
+  const emptied = clone(evidence);
+  emptied.packages[0].registrySignatures = [];
+  assert.throws(() => verifyProvenanceEvidence(emptied), /at least one registry signature/iu);
+});
+
 test('validates either exact package independently for idempotent same-run recovery', () => {
   const complete = buildProvenanceEvidence(validInput());
   for (const packageName of ['hd-wallet-ui', 'hd-wallet-wasm']) {
     const input = validInput();
-    input.packageLock.packages[''].dependencies = { [packageName]: '2.1.1' };
+    input.packageLock.packages[''].dependencies = { [packageName]: '2.1.2' };
     if (packageName === 'hd-wallet-wasm') {
       delete input.packageLock.packages['node_modules/hd-wallet-ui'];
     }
@@ -1175,7 +1210,7 @@ test('accepts one deduplicated public key for production npm signature and attes
       keyid: publishKeyId,
       sig: signData(
         'sha256',
-        Buffer.from(`${row.name}@2.1.1:${registry.dist.integrity}`, 'utf8'),
+        Buffer.from(`${row.name}@2.1.2:${registry.dist.integrity}`, 'utf8'),
         publishPrivateKey,
       ).toString('base64'),
     }];
@@ -1198,7 +1233,7 @@ test('rejects validly re-signed npm publish statements with wrong exact bindings
     ['predicate type', /publish predicate type/iu,
       (statement) => { statement.predicateType = 'https://example.invalid/publish'; }],
     ['subject name', /publish subject name/iu,
-      (statement) => { statement.subject[0].name = 'pkg:npm/not-the-wallet@2.1.1'; }],
+      (statement) => { statement.subject[0].name = 'pkg:npm/not-the-wallet@2.1.2'; }],
     ['subject digest', /publish subject digest/iu,
       (statement) => { statement.subject[0].digest.sha512 = '0'.repeat(128); }],
     ['package name', /publish package name/iu,
@@ -1314,8 +1349,11 @@ test('rejects malformed, missing, duplicate, and npm-schema-drifted evidence', a
     ['missing package row', /exactly one audit row/iu, (input) => { input.audit.verified = input.audit.verified.filter(({ name }) => name !== 'hd-wallet-wasm'); }],
     ['duplicate package row', /exactly one audit row/iu, (input) => { input.audit.verified.push(clone(auditRow(input))); }],
     ['wrong version', /exact package version/iu, (input) => { auditRow(input).version = '2.0.21'; }],
-    ['missing registry signature', /exactly one registry signature/iu, (input) => { input.registryEvidence['hd-wallet-wasm'].dist.signatures = []; }],
-    ['duplicate registry signature', /exactly one registry signature/iu, (input) => { input.registryEvidence['hd-wallet-wasm'].dist.signatures.push(clone(input.registryEvidence['hd-wallet-wasm'].dist.signatures[0])); }],
+    ['missing registry signature', /at least one registry signature/iu, (input) => { input.registryEvidence['hd-wallet-wasm'].dist.signatures = []; }],
+    ['duplicate registry signature', /duplicate registry signature/iu, (input) => { input.registryEvidence['hd-wallet-wasm'].dist.signatures.push(clone(input.registryEvidence['hd-wallet-wasm'].dist.signatures[0])); }],
+    ['second registry signature invalid', /registry signature.*invalid/iu, (input) => { const signatures = input.registryEvidence['hd-wallet-wasm'].dist.signatures; signatures.push({ ...clone(signatures[0]), sig: flipBase64(registrySig('hd-wallet-wasm', input)) }); }],
+    ['second registry signature by an unknown key', /registry signature key|exactly one registry signature key|registry keys must be exactly bound/iu, (input) => { const signatures = input.registryEvidence['hd-wallet-wasm'].dist.signatures; signatures.push({ keyid: `SHA256:${'A'.repeat(43)}`, sig: registrySig('hd-wallet-wasm', input) }); }],
+    ['unbounded registry signatures', /registry signatures are unbounded/iu, (input) => { const signatures = input.registryEvidence['hd-wallet-wasm'].dist.signatures; for (let i = 0; i < 8; i++) signatures.push({ ...clone(signatures[0]), sig: registrySig('hd-wallet-wasm', input) }); }],
     ['invalid registry signature', /registry signature.*invalid/iu, (input) => { const signature = input.registryEvidence['hd-wallet-wasm'].dist.signatures[0]; signature.sig = flipBase64(signature.sig); }],
     ['wrong registry key', /registry signature.*invalid/iu, (input) => {
       const evidence = input.registryEvidence['hd-wallet-wasm'];
@@ -1338,7 +1376,7 @@ test('rejects malformed, missing, duplicate, and npm-schema-drifted evidence', a
     ['integrity mismatch', /integrity.*package lock/iu, (input) => { input.registryEvidence['hd-wallet-wasm'].dist.integrity = input.registryEvidence['hd-wallet-ui'].dist.integrity; }],
     ['tarball mismatch', /tarball.*package lock/iu, (input) => { input.registryEvidence['hd-wallet-wasm'].dist.tarball += '?changed=1'; }],
     ['workflow tarball mismatch', /workflow tarball.*integrity/iu, (input) => { input.registryEvidence['hd-wallet-wasm'].workflowTarball.sha512 = '0'.repeat(128); }],
-    ['UI dependency drift', /exact core dependency/iu, (input) => { input.packageLock.packages['node_modules/hd-wallet-ui'].dependencies['hd-wallet-wasm'] = '^2.1.1'; }],
+    ['UI dependency drift', /exact core dependency/iu, (input) => { input.packageLock.packages['node_modules/hd-wallet-ui'].dependencies['hd-wallet-wasm'] = '^2.1.2'; }],
     ['run attempts out of order', /strictly increasing/iu, (input) => { input.runMetadata.attempts = [2, 1]; }],
     ['duplicate run attempt', /strictly increasing/iu, (input) => { input.runMetadata.attempts = [1, 1, 2]; }],
     ['wrong final run attempt', /finalAttempt.*last/iu, (input) => { input.runMetadata.finalAttempt = 1; }],

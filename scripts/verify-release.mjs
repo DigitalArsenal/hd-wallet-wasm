@@ -523,7 +523,7 @@ export function validateCiLocalScript(script) {
     'npm run test:relay',
     'npm run test:browser',
     'npm run test:packed',
-    'npm run verify:release -- --version 2.1.1 --source-ref HEAD --skip-tag',
+    'npm run verify:release -- --version 2.1.2 --source-ref HEAD --skip-tag',
     'git diff --exit-code',
   ];
   let prior = -1;
@@ -691,7 +691,7 @@ export function validatePublishWorkflow(yaml) {
     '--workflow-artifact-attestation',
   ]) if (!yaml.includes(text)) fail(`publish workflow is missing ${text}`);
   const exactSubjects = `subject-path: |
-            \${{ runner.temp }}/sdn-wallet-artifacts/origin-service/sdn-wallet-origin-2.1.1-node24-linux-x64.tar.gz
+            \${{ runner.temp }}/sdn-wallet-artifacts/origin-service/sdn-wallet-origin-2.1.2-node24-linux-x64.tar.gz
             \${{ runner.temp }}/sdn-wallet-artifacts/wallet-release-report/release-report.v1.json`;
   if (!yaml.includes(exactSubjects)
       || (yaml.match(/actions\/attest@/gu) ?? []).length !== 1) {

@@ -28,12 +28,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
   canonicalizeJson,
+  requireRegistrySignatures,
   validateProvenanceTrustPolicy,
   verifyRegistryEvidenceTrust,
 } from './verify-provenance-evidence.mjs';
 
 const PACKAGE_NAMES = Object.freeze(['hd-wallet-ui', 'hd-wallet-wasm']);
-const RELEASE_VERSION = '2.1.1';
+const RELEASE_VERSION = '2.1.2';
 const NPM_VERSION = '11.16.0';
 const NPM_REGISTRY = 'https://registry.npmjs.org/';
 const TUF_BOOTSTRAP_ROOT_VERSION = 14;
@@ -366,18 +367,24 @@ function selectDistRecord(distRecords, name) {
 
 function normalizeDistRecord(value, name) {
   const dist = requireRecord(value, `${name} dist`);
-  const signatures = requireArray(dist.signatures, `${name} dist.signatures`);
-  if (signatures.length !== 1) fail(`${name} must have exactly one registry signature`);
-  const signature = requireRecord(signatures[0], `${name} registry signature`);
-  requireString(signature.keyid, `${name} registry signature.keyid`);
-  requireString(signature.sig, `${name} registry signature.sig`);
+  // At least one registry signature (npm returns two since October 2026);
+  // each is checked against an authorized registry key below.
+  const signatures = requireArray(dist.signatures, `${name} dist.signatures`)
+    .map((signature, index) => {
+      const row = requireRecord(signature, `${name} registry signature ${index}`);
+      return {
+        keyid: requireString(row.keyid, `${name} registry signature ${index}.keyid`),
+        sig: requireString(row.sig, `${name} registry signature ${index}.sig`),
+      };
+    });
+  requireRegistrySignatures(signatures, name);
   const expectedTarball = `${NPM_REGISTRY}${name}/-/${name}-${RELEASE_VERSION}.tgz`;
   if (dist.tarball !== expectedTarball) fail(`${name} registry tarball URL is wrong`);
   requireRecord(dist.attestations, `${name} dist.attestations`);
   return {
     attestations: structuredClone(dist.attestations),
     integrity: requireString(dist.integrity, `${name} dist.integrity`),
-    signatures: [{ keyid: signature.keyid, sig: signature.sig }],
+    signatures,
     tarball: dist.tarball,
   };
 }
@@ -414,11 +421,11 @@ export function buildRegistryEvidenceEnvelope(input) {
   const result = {
     dist,
     registryKeys: registryKeyEvidence(input.registryKeysTarget, [
-      {
+      ...[...new Set(dist.signatures.map(({ keyid }) => keyid))].map((keyid) => ({
         keyUsage: 'npm:signatures',
-        keyid: dist.signatures[0].keyid,
+        keyid,
         when: provenanceTime.when,
-      },
+      })),
       {
         keyUsage: 'npm:attestations',
         keyid: publishSignature(bundles.publish, name).keyid,

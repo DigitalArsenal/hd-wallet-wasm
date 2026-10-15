@@ -309,6 +309,29 @@ Result<ByteVector> base58CheckDecode(const std::string& str);
  * Used for Bitcoin SegWit addresses (bc1q...) and Cosmos addresses
  */
 std::string bech32Encode(const std::string& hrp, const ByteVector& data, uint8_t witness_version = 0);
+
+/**
+ * A decoded SegWit address: lowercase HRP, witness version, witness program.
+ */
+struct SegwitAddress {
+  std::string hrp;
+  uint8_t witness_version;
+  ByteVector program;
+};
+
+/**
+ * Decode a SegWit address (BIP-173, BIP-350): one case, at most 90
+ * characters, the checksum variant its witness version requires (bech32 for
+ * v0, bech32m for v1-v16), a 2-40 byte program (20 or 32 bytes for v0) with
+ * at most 4 zero padding bits. INVALID_CHECKSUM when neither checksum holds,
+ * INVALID_ADDRESS otherwise.
+ */
+Result<SegwitAddress> decodeSegwitAddress(const std::string& str);
+
+/**
+ * decodeSegwitAddress without the witness version: (hrp, program). A caller
+ * that maps an address to a script needs the version; use decodeSegwitAddress.
+ */
 Result<std::pair<std::string, ByteVector>> bech32Decode(const std::string& str);
 
 /**

@@ -9,7 +9,7 @@
  * - Transaction building and signing
  *
  * @module hd-wallet-wasm
- * @version 2.1.1
+ * @version 2.1.2
  */
 
 // Import aligned API for batch operations
@@ -2610,8 +2610,11 @@ function createModule(wasm) {
                 checkResult(decResult);
                 const addrType = wasm.getValue(typePtr, 'i32');
                 const hashLen = checkLengthWithin(wasm.getValue(hashLenPtr, 'i32'), 1, 32);
-                // The P2WPKH/P2PKH helpers read a 20-byte key hash.
-                if ((addrType === 2 || addrType === 0) && hashLen !== 20) {
+                // The native decoder types an address by witness version and
+                // program length together; each type has one payload length
+                // (the P2WPKH/P2PKH helpers read a 20-byte key hash).
+                const payloadLength = [20, 20, 20, 32, 32][addrType];
+                if (payloadLength === undefined || hashLen !== payloadLength) {
                   throw new HDWalletError(ErrorCode.INVALID_ADDRESS);
                 }
                 // P2WPKH = 2, P2PKH = 0
@@ -3116,31 +3119,52 @@ function createModule(wasm) {
         };
       },
 
-      // Validate the fields every transaction type shares. The native setters
-      // take uint64 (a 256-bit value as 32 bytes); a larger or negative number
-      // would wrap modulo 2^64, so it is refused here.
-      _commonFields(params) {
+      // Read each field of `params` once (a getter or a Uint8Array subclass
+      // could answer differently on a second read: a longer `length` put heap
+      // bytes into the signed data) and check it. The nonce and the chain ID
+      // have no defaults: a missing nonce signed nonce 0, a missing chain ID
+      // chain 1. The native setters take uint64 (a 256-bit value as 32 bytes);
+      // a larger or negative number would wrap modulo 2^64, so it is refused.
+      _readParams(params) {
         if (params === null || typeof params !== 'object') {
           throw new HDWalletError(ErrorCode.INVALID_ARGUMENT, 'params must be an object');
         }
-        if (params.to !== undefined && params.to !== null && params.to !== '') V.string(params.to, 'to');
-        if (params.data !== undefined && params.data !== null) V.bytes(params.data, 'data');
-        return {
-          nonce: V.unsignedBigInt(params.nonce || 0, 'nonce', 64),
-          gasLimit: params.gasLimit === undefined ? undefined : V.unsignedBigInt(params.gasLimit, 'gasLimit', 64),
-          value: params.value === undefined ? undefined : V.unsignedBigInt(params.value, 'value', 256),
+        const {
+          nonce, chainId, gasLimit, gasPrice, maxFeePerGas, maxPriorityFeePerGas, to, value, data,
+        } = params;
+        if (nonce === undefined || nonce === null) {
+          throw new HDWalletError(ErrorCode.INVALID_ARGUMENT, 'nonce is required');
+        }
+        if (chainId === undefined || chainId === null) {
+          throw new HDWalletError(ErrorCode.INVALID_ARGUMENT, 'chainId is required');
+        }
+        const fields = {
+          nonce: V.unsignedBigInt(nonce, 'nonce', 64),
+          chainId: V.unsignedBigInt(chainId, 'chainId', 64),
+          gasLimit: gasLimit === undefined ? undefined : V.unsignedBigInt(gasLimit, 'gasLimit', 64),
+          gasPrice: gasPrice === undefined ? undefined : V.unsignedBigInt(gasPrice, 'gasPrice', 64),
+          maxFeePerGas,
+          maxPriorityFeePerGas,
+          to: to === undefined || to === null || to === '' ? undefined : V.string(to, 'to'),
+          value: value === undefined ? undefined : V.unsignedBigInt(value, 'value', 256),
+          // A copy made from the array's own bytes and length.
+          data: data === undefined || data === null ? undefined : new Uint8Array(V.bytes(data, 'data')),
         };
+        if (fields.chainId === 0n) {
+          throw new HDWalletError(ErrorCode.INVALID_ARGUMENT, 'chainId must be at least 1');
+        }
+        return fields;
       },
 
-      _setCommonFields(handle, params, fields) {
+      _setCommonFields(handle, fields) {
         requireWasmFunction(wasm, '_hd_eth_tx_set_nonce')(handle, fields.nonce);
         if (fields.gasLimit !== undefined) {
           requireWasmFunction(wasm, '_hd_eth_tx_set_gas_limit')(handle, fields.gasLimit);
         }
 
-        if (params.to) {
+        if (fields.to !== undefined) {
           const setToFn = requireWasmFunction(wasm, '_hd_eth_tx_set_to_hex');
-          const toPtr = allocString(wasm, params.to);
+          const toPtr = allocString(wasm, fields.to);
           try {
             // An address that does not parse fails here. Without a recipient
             // the transaction does not serialize or sign (it would otherwise
@@ -3164,31 +3188,32 @@ function createModule(wasm) {
           }
         }
 
-        if (params.data) {
+        if (fields.data !== undefined) {
           const setDataFn = requireWasmFunction(wasm, '_hd_eth_tx_set_data');
-          const dataPtr = allocAndCopy(wasm, params.data);
+          const dataPtr = allocAndCopy(wasm, fields.data);
           try {
-            setDataFn(handle, dataPtr, params.data.length);
+            setDataFn(handle, dataPtr, fields.data.length);
           } finally {
             wasm._hd_dealloc(dataPtr);
           }
         }
       },
 
+      // EIP-1559 transaction. nonce, chainId (>= 1), gasLimit, maxFeePerGas
+      // and maxPriorityFeePerGas are required.
       createEIP1559(params) {
         const createFn = requireWasmFunction(wasm, '_hd_eth_tx_create_eip1559');
-        const fields = this._commonFields(params);
+        const fields = this._readParams(params);
         if (fields.gasLimit === undefined) {
           throw new HDWalletError(ErrorCode.INVALID_ARGUMENT, 'gasLimit is required');
         }
-        const chainId = V.unsignedBigInt(params.chainId, 'chainId', 64);
-        const maxPriorityFeePerGas = V.unsignedBigInt(params.maxPriorityFeePerGas, 'maxPriorityFeePerGas', 64);
-        const maxFeePerGas = V.unsignedBigInt(params.maxFeePerGas, 'maxFeePerGas', 64);
-        const handle = createFn(chainId, maxPriorityFeePerGas, maxFeePerGas);
+        const maxPriorityFeePerGas = V.unsignedBigInt(fields.maxPriorityFeePerGas, 'maxPriorityFeePerGas', 64);
+        const maxFeePerGas = V.unsignedBigInt(fields.maxFeePerGas, 'maxFeePerGas', 64);
+        const handle = createFn(fields.chainId, maxPriorityFeePerGas, maxFeePerGas);
         if (!handle) throw new HDWalletError(ErrorCode.NOT_SUPPORTED);
 
         try {
-          this._setCommonFields(handle, params, fields);
+          this._setCommonFields(handle, fields);
         } catch (error) {
           requireWasmFunction(wasm, '_hd_eth_tx_destroy')(handle);
           throw error;
@@ -3197,19 +3222,18 @@ function createModule(wasm) {
         return this._makeTxObj(handle);
       },
 
-      // Legacy (EIP-155) transaction. Before 2.1.1 every field but chainId was
-      // ignored, so the declared to/value/gasPrice never reached the signed bytes.
+      // Legacy (EIP-155) transaction. nonce and chainId (>= 1) are required.
+      // Before 2.1.1 every field but chainId was ignored, so the declared
+      // to/value/gasPrice never reached the signed bytes.
       create(params = {}) {
         const createFn = requireWasmFunction(wasm, '_hd_eth_tx_create');
-        const fields = this._commonFields(params);
-        const chainId = V.unsignedBigInt(params.chainId || 1, 'chainId', 64);
-        const gasPrice = params.gasPrice === undefined ? undefined : V.unsignedBigInt(params.gasPrice, 'gasPrice', 64);
-        const handle = createFn(chainId);
+        const fields = this._readParams(params);
+        const handle = createFn(fields.chainId);
         if (!handle) throw new HDWalletError(ErrorCode.NOT_SUPPORTED);
 
         try {
-          if (gasPrice !== undefined) requireWasmFunction(wasm, '_hd_eth_tx_set_gas_price')(handle, gasPrice);
-          this._setCommonFields(handle, params, fields);
+          if (fields.gasPrice !== undefined) requireWasmFunction(wasm, '_hd_eth_tx_set_gas_price')(handle, fields.gasPrice);
+          this._setCommonFields(handle, fields);
         } catch (error) {
           requireWasmFunction(wasm, '_hd_eth_tx_destroy')(handle);
           throw error;

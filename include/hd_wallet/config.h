@@ -12,8 +12,8 @@
 // Version information
 #define HD_WALLET_VERSION_MAJOR 2
 #define HD_WALLET_VERSION_MINOR 1
-#define HD_WALLET_VERSION_PATCH 1
-#define HD_WALLET_VERSION_STRING "2.1.1"
+#define HD_WALLET_VERSION_PATCH 2
+#define HD_WALLET_VERSION_STRING "2.1.2"
 
 // =============================================================================
 // Build Environment Detection

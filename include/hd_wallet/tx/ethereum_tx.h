@@ -223,13 +223,17 @@ struct AccessListEntry {
 class EthereumTransaction : public Transaction {
 public:
   /**
-   * Create an empty legacy transaction
+   * Create an empty legacy transaction. It has no chain ID and no nonce:
+   * set both before signing.
    */
   EthereumTransaction();
 
   /**
    * Create a legacy transaction
-   * @param chainId Chain ID for EIP-155 replay protection
+   * @param chainId Chain ID for EIP-155 replay protection (at least 1 to sign)
+   *
+   * The nonce is required: serialize, sign and validate refuse a transaction
+   * whose nonce was never set (setNonce(0) is a nonce). sign refuses chain ID 0.
    */
   explicit EthereumTransaction(uint64_t chainId);
 
@@ -292,7 +296,13 @@ public:
   /**
    * Set nonce
    */
-  void setNonce(uint64_t nonce) { nonce_ = nonce; }
+  void setNonce(uint64_t nonce) { nonce_ = nonce; hasNonce_ = true; }
+
+  /**
+   * Whether a nonce was set (or parsed). A transaction without one does not
+   * serialize or sign: it would otherwise sign nonce 0.
+   */
+  bool hasNonce() const { return hasNonce_; }
 
   /**
    * Get gas price (legacy transactions)
@@ -487,6 +497,7 @@ private:
   EthTxType type_;
   uint64_t chainId_;
   uint64_t nonce_;
+  bool hasNonce_;
   uint64_t gasPrice_;              // Legacy only
   uint64_t maxPriorityFeePerGas_;  // EIP-1559 only
   uint64_t maxFeePerGas_;          // EIP-1559 only
@@ -591,9 +602,12 @@ Result<std::array<uint8_t, 20>> parseAddress(const std::string& addressHex);
 /// Opaque handle for EthereumTransaction
 typedef struct eth_tx_t* eth_tx_handle;
 
+/// Returns NULL for chain_id 0. Set the nonce (hd_eth_tx_set_nonce) before
+/// serializing or signing: it has no default.
 HD_WALLET_C_EXPORT HD_WALLET_EXPORT
 eth_tx_handle hd_eth_tx_create(uint64_t chain_id);
 
+/// Returns NULL for chain_id 0. The nonce is required as for hd_eth_tx_create.
 HD_WALLET_C_EXPORT HD_WALLET_EXPORT
 eth_tx_handle hd_eth_tx_create_eip1559(
   uint64_t chain_id,
