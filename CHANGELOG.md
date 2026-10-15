@@ -255,9 +255,9 @@ described under Security. The export list gains `hd_curve_validate_pubkey` and
 | `hd-wallet-ui` tarball | 2,515,476 | 1,389,312 |
 
 The table was measured before the security fixes above; the RFC 6979 fix
-links HMAC-SHA384/SHA-512 and adds about 13 KB to each WASM (browser
-2,707,652 → 2,720,252 bytes standalone, WASI 1,897,259 → 1,905,350,
-`dist/hd-wallet.js` 3,750,367 → 3,768,499).
+links HMAC-SHA384/SHA-512 and adds about 13 KB to each WASM (browser WASM
+2,719,804 → 2,733,404 bytes, WASI 1,897,259 → 1,905,350, `dist/hd-wallet.js`
+3,750,367 → 3,768,499).
 
 gzip is `gzip -9 -n` and brotli is quality 11 (Node's zlib); the site totals
 cover the files directly in `docs/assets/`; tarball sizes are `npm pack` with
