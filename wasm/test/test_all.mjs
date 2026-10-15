@@ -160,6 +160,9 @@ async function runTests() {
     console.log('\n\x1b[1mlibp2p PeerID / IPNS Tests:\x1b[0m');
     await import('./test_libp2p.mjs');
 
+    console.log('\n\x1b[1mNative Error Paths (2.1.1):\x1b[0m');
+    await import('./test_native_error_paths.mjs');
+
   } catch (error) {
     console.error('\nTest suite error:', error.message);
     if (error.message.includes('Cannot find module') || error.message.includes('WASM')) {

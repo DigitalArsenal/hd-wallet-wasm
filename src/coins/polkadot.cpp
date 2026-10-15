@@ -636,7 +636,7 @@ int32_t hd_dot_verify_message(
   size_t pubkey_len
 ) {
   if (!message || !signature || signature_len != 64 || !public_key || pubkey_len != 32) {
-    return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+    return -static_cast<int32_t>(Error::INVALID_ARGUMENT);
   }
 
   Bytes32 pubkey;
@@ -646,7 +646,7 @@ int32_t hd_dot_verify_message(
   ByteVector sig(signature, signature + signature_len);
 
   auto result = verifyPolkadotMessageRaw(msg, sig, pubkey);
-  if (!result.ok()) return static_cast<int32_t>(result.error);
+  if (!result.ok()) return -static_cast<int32_t>(result.error);
 
   return result.value ? 1 : 0;
 }

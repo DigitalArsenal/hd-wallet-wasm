@@ -563,12 +563,12 @@ int32_t hd_mnemonic_suggest_word(
 ) {
     // Null pointer validation
     if (!prefix || !suggestions_out || output_size == 0) {
-        return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+        return -static_cast<int32_t>(Error::INVALID_ARGUMENT);
     }
 
     // Language enum validation
     if (language < 0 || language > static_cast<int32_t>(Language::ENGLISH)) {
-        return static_cast<int32_t>(Error::NOT_SUPPORTED);
+        return -static_cast<int32_t>(Error::NOT_SUPPORTED);
     }
 
     auto suggestions = suggestWords(prefix, static_cast<Language>(language), max_suggestions);
@@ -581,7 +581,7 @@ int32_t hd_mnemonic_suggest_word(
 
     // Safe string copy with bounds checking (need space for null terminator)
     if (result.size() + 1 > output_size) {
-        return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+        return -static_cast<int32_t>(Error::INVALID_ARGUMENT);
     }
 
     std::memcpy(suggestions_out, result.c_str(), result.size());
@@ -592,11 +592,11 @@ int32_t hd_mnemonic_suggest_word(
 HD_WALLET_C_EXPORT HD_WALLET_EXPORT
 int32_t hd_mnemonic_check_word(const char* word, int32_t language) {
     if (!word) {
-        return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+        return -static_cast<int32_t>(Error::INVALID_ARGUMENT);
     }
 
     if (language < 0 || language > static_cast<int32_t>(Language::ENGLISH)) {
-        return static_cast<int32_t>(Error::NOT_SUPPORTED);
+        return -static_cast<int32_t>(Error::NOT_SUPPORTED);
     }
 
     return findWord(word, static_cast<Language>(language));

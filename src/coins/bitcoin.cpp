@@ -1071,14 +1071,14 @@ int32_t hd_btc_verify_message(
   int32_t network
 ) {
   if (!message || !signature || signature_len != 65 || !address) {
-    return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+    return -static_cast<int32_t>(Error::INVALID_ARGUMENT);
   }
 
   const BitcoinParams& params = (network == 0) ? BITCOIN_MAINNET : BITCOIN_TESTNET;
   ByteVector sig(signature, signature + signature_len);
 
   auto result = verifyBitcoinMessage(message, sig, address, params);
-  if (!result.ok()) return static_cast<int32_t>(result.error);
+  if (!result.ok()) return -static_cast<int32_t>(result.error);
 
   return result.value ? 1 : 0;
 }

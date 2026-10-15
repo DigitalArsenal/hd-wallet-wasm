@@ -219,10 +219,13 @@ test('P-256/P-384 methods sign, verify, and ECDH correctly', () => {
   expectHdWalletError(() => wallet.curves.decompressPublicKey(p256Public, Curve.P256), 3);
   expectHdWalletError(() => wallet.curves.decompressPublicKey(p384Public, Curve.P384), 3);
 
-  const p256Uncompressed = hexToBytes('046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162cbfbc6f6e28f44de9f08f8f37a9d0f5');
+  // The generators G (SEC 2 / FIPS 186-4); with d = 1 the shared secret is G.x.
+  // (Before 2.1.1 the P-256 point here had a wrong y, so it was off the curve;
+  // the ECDH wrapper missed the positive error code and returned heap bytes.)
+  const p256Uncompressed = hexToBytes('046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5');
   const p384Uncompressed = hexToBytes('04aa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b9859f741e082542a385502f25dbf55296c3a545e3872760ab73617de4a96262c6f5d9e98bf9292dc29f8f41dbd289a147ce9da3113b5f0b8c00a60b1ce1d7e819d7a431d7c90ea0e5f');
-  assertEqual(wallet.curves.p256.ecdh(p256Priv, p256Uncompressed).length, 32, 'P-256 ECDH should return 32 bytes');
-  assertEqual(wallet.curves.p384.ecdh(p384Priv, p384Uncompressed).length, 48, 'P-384 ECDH should return 48 bytes');
+  assertEqual(bytesToHex(wallet.curves.p256.ecdh(p256Priv, p256Uncompressed)), bytesToHex(p256Uncompressed.slice(1, 33)), 'P-256 ECDH with d = 1 should return G.x');
+  assertEqual(bytesToHex(wallet.curves.p384.ecdh(p384Priv, p384Uncompressed)), bytesToHex(p384Uncompressed.slice(1, 49)), 'P-384 ECDH with d = 1 should return G.x');
 });
 
 test('ECDSA verification handles leading-zero compact components', () => {

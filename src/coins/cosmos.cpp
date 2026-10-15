@@ -804,7 +804,7 @@ int32_t hd_cosmos_verify_signature(
   size_t pubkey_len
 ) {
   if (!sign_doc || !signature || signature_len != 64 || !public_key || pubkey_len != 33) {
-    return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+    return -static_cast<int32_t>(Error::INVALID_ARGUMENT);
   }
 
   Bytes33 pubkey;
@@ -814,7 +814,7 @@ int32_t hd_cosmos_verify_signature(
   ByteVector sig(signature, signature + signature_len);
 
   auto result = verifyAminoSignature(doc, sig, pubkey);
-  if (!result.ok()) return static_cast<int32_t>(result.error);
+  if (!result.ok()) return -static_cast<int32_t>(result.error);
 
   return result.value ? 1 : 0;
 }

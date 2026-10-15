@@ -90,10 +90,21 @@ const ERROR_MESSAGES = {
  */
 export class AlignedError extends Error {
   constructor(code, message) {
-    super(message || ERROR_MESSAGES[code] || `Error code: ${code}`);
+    const lookup = code < 0 ? -code : code;
+    super(message || ERROR_MESSAGES[lookup] || `Error code: ${code}`);
     this.name = 'AlignedError';
-    this.code = code;
+    this.code = lookup;
   }
+}
+
+// The batch exports return the number of entries written, or a negative
+// -Error code. Only a count within [0, capacity] is success; anything else
+// throws before a result entry is read.
+function checkCount(result, capacity) {
+  if (!Number.isInteger(result) || result < 0 || result > capacity) {
+    throw new AlignedError(result < 0 ? result : AlignedErrorCode.INTERNAL);
+  }
+  return result;
 }
 
 // =============================================================================
@@ -171,15 +182,11 @@ export class AlignedKeyDeriver {
 
       try {
         // Call WASM function
-        const derivedCount = wasm._hd_aligned_derive_batch(
+        const derivedCount = checkCount(wasm._hd_aligned_derive_batch(
           requestPtr,
           resultsPtr,
           count
-        );
-
-        if (derivedCount < 0) {
-          throw new AlignedError(derivedCount);
-        }
+        ), count);
 
         // Read results
         const results = [];
@@ -203,9 +210,13 @@ export class AlignedKeyDeriver {
 
         return results;
       } finally {
+        // Entries carry derived private keys.
+        wasm._hd_secure_wipe(resultsPtr, resultsSize);
         wasm._hd_dealloc(resultsPtr);
       }
     } finally {
+      // The request carries the base private key.
+      wasm._hd_secure_wipe(requestPtr, BATCHDERIVEREQUEST_SIZE);
       wasm._hd_dealloc(requestPtr);
     }
   }
@@ -228,16 +239,21 @@ export class AlignedKeyDeriver {
       throw new AlignedError(AlignedErrorCode.OUT_OF_MEMORY);
     }
 
-    // Fill config
-    const configView = StreamDeriveConfigView.fromMemory(wasm.wasmMemory, configPtr);
-    this.#fillBaseKey(configView, baseKey);
-    configView.start_index = startIndex >>> 0;
-    configView.batch_size = batchSize >>> 0;
-    configView.hardened = hardened ? 1 : 0;
+    // Fill config, create the stream, then wipe the config (it carries the
+    // base private key) whatever happens.
+    let streamHandle;
+    try {
+      const configView = StreamDeriveConfigView.fromMemory(wasm.wasmMemory, configPtr);
+      this.#fillBaseKey(configView, baseKey);
+      configView.start_index = startIndex >>> 0;
+      configView.batch_size = batchSize >>> 0;
+      configView.hardened = hardened ? 1 : 0;
 
-    // Create stream
-    const streamHandle = wasm._hd_aligned_stream_create(configPtr);
-    wasm._hd_dealloc(configPtr);
+      streamHandle = wasm._hd_aligned_stream_create(configPtr);
+    } finally {
+      wasm._hd_secure_wipe(configPtr, STREAMDERIVECONFIG_SIZE);
+      wasm._hd_dealloc(configPtr);
+    }
 
     if (!streamHandle) {
       throw new AlignedError(AlignedErrorCode.INTERNAL, 'Failed to create stream');
@@ -253,13 +269,15 @@ export class AlignedKeyDeriver {
 
     try {
       while (true) {
-        const derivedCount = wasm._hd_aligned_stream_next(
+        // 0 ends the stream; a negative -Error throws instead of ending it
+        // silently.
+        const derivedCount = checkCount(wasm._hd_aligned_stream_next(
           streamHandle,
           resultsPtr,
           batchSize
-        );
+        ), batchSize);
 
-        if (derivedCount <= 0) {
+        if (derivedCount === 0) {
           break;
         }
 
@@ -286,6 +304,7 @@ export class AlignedKeyDeriver {
         yield batch;
       }
     } finally {
+      wasm._hd_secure_wipe(resultsPtr, resultsSize);
       wasm._hd_dealloc(resultsPtr);
       wasm._hd_aligned_stream_destroy(streamHandle);
     }
@@ -299,8 +318,15 @@ export class AlignedKeyDeriver {
     if (baseKey._handle) {
       // HDKey object - use conversion function
       const keyDataPtr = this.#wasm._hd_alloc(EXTENDEDKEYDATA_SIZE);
+      if (!keyDataPtr) {
+        throw new AlignedError(AlignedErrorCode.OUT_OF_MEMORY);
+      }
       try {
-        this.#wasm._hd_aligned_from_extended_key(baseKey._handle, keyDataPtr);
+        // On failure the buffer holds no key: never copy it.
+        const result = this.#wasm._hd_aligned_from_extended_key(baseKey._handle, keyDataPtr);
+        if (result !== 0) {
+          throw new AlignedError(result);
+        }
         const keyDataView = ExtendedKeyDataView.fromMemory(
           this.#wasm.wasmMemory, keyDataPtr
         );
@@ -314,6 +340,7 @@ export class AlignedKeyDeriver {
         view.base_key_private_key_data.set(keyDataView.private_key_data);
         view.base_key_has_private_key = keyDataView.has_private_key;
       } finally {
+        this.#wasm._hd_secure_wipe(keyDataPtr, EXTENDEDKEYDATA_SIZE);
         this.#wasm._hd_dealloc(keyDataPtr);
       }
     } else if (baseKey.privateKey && baseKey.chainCode) {
@@ -408,17 +435,13 @@ export class AlignedSigner {
 
         try {
           // Call WASM function
-          const signedCount = wasm._hd_aligned_sign_batch(
+          const signedCount = checkCount(wasm._hd_aligned_sign_batch(
             requestPtr,
             hashesPtr,
             count,
             resultsPtr,
             count
-          );
-
-          if (signedCount < 0) {
-            throw new AlignedError(signedCount);
-          }
+          ), count);
 
           // Read results
           const results = [];
@@ -446,6 +469,8 @@ export class AlignedSigner {
         wasm._hd_dealloc(hashesPtr);
       }
     } finally {
+      // The request carries the private key.
+      wasm._hd_secure_wipe(requestPtr, BATCHSIGNREQUEST_SIZE);
       wasm._hd_dealloc(requestPtr);
     }
   }
@@ -498,17 +523,13 @@ export class AlignedSigner {
 
         try {
           // Call WASM function
-          const verifiedCount = wasm._hd_aligned_verify_batch(
+          const verifiedCount = checkCount(wasm._hd_aligned_verify_batch(
             requestPtr,
             entriesPtr,
             count,
             resultsPtr,
             count
-          );
-
-          if (verifiedCount < 0) {
-            throw new AlignedError(verifiedCount);
-          }
+          ), count);
 
           // Read results
           const results = [];
@@ -600,6 +621,7 @@ export class AlignedAPI {
       }
       return new Uint8Array(wasm.HEAPU8.buffer, ptr, EXTENDEDKEYDATA_SIZE).slice();
     } finally {
+      wasm._hd_secure_wipe(ptr, EXTENDEDKEYDATA_SIZE);
       wasm._hd_dealloc(ptr);
     }
   }

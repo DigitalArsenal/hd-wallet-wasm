@@ -17,12 +17,27 @@
  * - Curves: hd_curve_pubkey_from_privkey
  * - secp256k1: hd_secp256k1_sign, hd_secp256k1_verify, hd_ecdh_secp256k1
  * - P-256/P-384: hd_p256_sign, hd_p256_verify, hd_ecdh_p256, hd_p384_sign, hd_p384_verify, hd_ecdh_p384
+ *
+ * Return convention (every int32_t export below, and the rule for any export
+ * whose success value is not 0):
+ * - Failure is a negative -hd_wallet::Error code, never a positive one, so no
+ *   error can be read as a byte count or as "valid".
+ * - Success is >= 0: the byte length written (hashes, KDFs, keys, signatures,
+ *   ECDH secrets, AES-GCM output, recovery: 33, sign_recoverable: 65), 1/0 for
+ *   hd_secp256k1_verify (valid/invalid), or 0 (hd_curve_decompress_pubkey;
+ *   hd_p256_verify and hd_p384_verify, where 0 means valid).
+ * - On a failure after the arguments are checked, the output buffer is zeroed:
+ *   an error path never hands back stale or partial bytes.
+ * - Private keys must satisfy 0 < d < n for their curve, or the call fails
+ *   with -INVALID_PRIVATE_KEY before the key is used.
+ * Callers treat exactly the documented success value as success.
  */
 
 #include "hd_wallet/config.h"
 #include "hd_wallet/types.h"
 #include "hd_wallet/error.h"
 #include "hd_wallet/bip32.h"
+#include "hd_wallet/secure_memory.h"
 
 // Forward declaration of C function from ecdh.cpp
 extern "C" int32_t hd_ecdh(
@@ -59,8 +74,10 @@ extern "C" int32_t hd_ecdh(
 #ifdef HD_WALLET_USE_LIBSECP256K1
 #include <secp256k1.h>
 #include <secp256k1_recovery.h>
+#include "secp256k1_context.h"
 #endif
 
+#include <cstdint>
 #include <cstring>
 #include <array>
 #include <vector>
@@ -126,14 +143,60 @@ namespace hd_wallet {
 
 using Error = hd_wallet::Error;
 
+namespace {
+
+// Every export in this file reports failure as a negative -Error code (see the
+// file header), so no error can be read as a length, a count or "valid".
+constexpr int32_t fail(Error error) noexcept {
+    return -static_cast<int32_t>(error);
+}
+
+// Zero a caller's output buffer on an error path, so a caller that ignores the
+// code still reads no stale or partial bytes.
+void zeroOutput(uint8_t* out, size_t size) noexcept {
+    if (out != nullptr && size > 0) {
+        std::memset(out, 0, size);
+    }
+}
+
+// Group orders n, big-endian.
+constexpr uint8_t kSecp256k1Order[32] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE,
+    0xBA, 0xAE, 0xDC, 0xE6, 0xAF, 0x48, 0xA0, 0x3B, 0xBF, 0xD2, 0x5E, 0x8C, 0xD0, 0x36, 0x41, 0x41,
+};
+constexpr uint8_t kP256Order[32] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xBC, 0xE6, 0xFA, 0xAD, 0xA7, 0x17, 0x9E, 0x84, 0xF3, 0xB9, 0xCA, 0xC2, 0xFC, 0x63, 0x25, 0x51,
+};
+constexpr uint8_t kP384Order[48] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xC7, 0x63, 0x4D, 0x81, 0xF4, 0x37, 0x2D, 0xDF,
+    0x58, 0x1A, 0x0D, 0xB2, 0x48, 0xB0, 0xA7, 0x7A, 0xEC, 0xEC, 0x19, 0x6A, 0xCC, 0xC5, 0x29, 0x73,
+};
+
+// A private key is valid when 0 < d < n. The comparison runs over every byte
+// whatever the key is (no early exit on secret data).
+bool privateKeyInRange(const uint8_t* key, const uint8_t* order, size_t size) noexcept {
+    uint32_t nonzero = 0;
+    uint32_t borrow = 0;
+    for (size_t i = size; i-- > 0;) {
+        nonzero |= key[i];
+        const uint32_t difference = static_cast<uint32_t>(key[i]) - order[i] - borrow;
+        borrow = (difference >> 8) & 1U;
+    }
+    return nonzero != 0 && borrow == 1;  // key - n borrows: key < n
+}
+
+} // anonymous namespace
+
 // =============================================================================
 // Hash Functions
 // =============================================================================
 
 extern "C" HD_WALLET_EXPORT
 int32_t hd_hash_sha256(const uint8_t* data, size_t data_len, uint8_t* hash_out, size_t out_size) {
-    if (data == nullptr || hash_out == nullptr) return static_cast<int32_t>(Error::INVALID_ARGUMENT);
-    if (out_size < 32) return static_cast<int32_t>(Error::OUT_OF_MEMORY);
+    if (data == nullptr || hash_out == nullptr) return fail(Error::INVALID_ARGUMENT);
+    if (out_size < 32) return fail(Error::OUT_OF_MEMORY);
     CryptoPP::SHA256 hash;
     hash.CalculateDigest(hash_out, data, data_len);
     return 32;
@@ -141,8 +204,8 @@ int32_t hd_hash_sha256(const uint8_t* data, size_t data_len, uint8_t* hash_out, 
 
 extern "C" HD_WALLET_EXPORT
 int32_t hd_hash_sha512(const uint8_t* data, size_t data_len, uint8_t* hash_out, size_t out_size) {
-    if (data == nullptr || hash_out == nullptr) return static_cast<int32_t>(Error::INVALID_ARGUMENT);
-    if (out_size < 64) return static_cast<int32_t>(Error::OUT_OF_MEMORY);
+    if (data == nullptr || hash_out == nullptr) return fail(Error::INVALID_ARGUMENT);
+    if (out_size < 64) return fail(Error::OUT_OF_MEMORY);
     CryptoPP::SHA512 hash;
     hash.CalculateDigest(hash_out, data, data_len);
     return 64;
@@ -150,8 +213,8 @@ int32_t hd_hash_sha512(const uint8_t* data, size_t data_len, uint8_t* hash_out, 
 
 extern "C" HD_WALLET_EXPORT
 int32_t hd_hash_keccak256(const uint8_t* data, size_t data_len, uint8_t* hash_out, size_t out_size) {
-    if (data == nullptr || hash_out == nullptr) return static_cast<int32_t>(Error::INVALID_ARGUMENT);
-    if (out_size < 32) return static_cast<int32_t>(Error::OUT_OF_MEMORY);
+    if (data == nullptr || hash_out == nullptr) return fail(Error::INVALID_ARGUMENT);
+    if (out_size < 32) return fail(Error::OUT_OF_MEMORY);
     CryptoPP::Keccak_256 hash;
     hash.CalculateDigest(hash_out, data, data_len);
     return 32;
@@ -159,8 +222,8 @@ int32_t hd_hash_keccak256(const uint8_t* data, size_t data_len, uint8_t* hash_ou
 
 extern "C" HD_WALLET_EXPORT
 int32_t hd_hash_ripemd160(const uint8_t* data, size_t data_len, uint8_t* hash_out, size_t out_size) {
-    if (data == nullptr || hash_out == nullptr) return static_cast<int32_t>(Error::INVALID_ARGUMENT);
-    if (out_size < 20) return static_cast<int32_t>(Error::OUT_OF_MEMORY);
+    if (data == nullptr || hash_out == nullptr) return fail(Error::INVALID_ARGUMENT);
+    if (out_size < 20) return fail(Error::OUT_OF_MEMORY);
     CryptoPP::RIPEMD160 hash;
     hash.CalculateDigest(hash_out, data, data_len);
     return 20;
@@ -168,8 +231,8 @@ int32_t hd_hash_ripemd160(const uint8_t* data, size_t data_len, uint8_t* hash_ou
 
 extern "C" HD_WALLET_EXPORT
 int32_t hd_hash_hash160(const uint8_t* data, size_t data_len, uint8_t* hash_out, size_t out_size) {
-    if (data == nullptr || hash_out == nullptr) return static_cast<int32_t>(Error::INVALID_ARGUMENT);
-    if (out_size < 20) return static_cast<int32_t>(Error::OUT_OF_MEMORY);
+    if (data == nullptr || hash_out == nullptr) return fail(Error::INVALID_ARGUMENT);
+    if (out_size < 20) return fail(Error::OUT_OF_MEMORY);
     // Hash160 = RIPEMD160(SHA256(data))
     uint8_t sha_out[32];
     CryptoPP::SHA256 sha;
@@ -177,14 +240,14 @@ int32_t hd_hash_hash160(const uint8_t* data, size_t data_len, uint8_t* hash_out,
     CryptoPP::RIPEMD160 ripemd;
     ripemd.CalculateDigest(hash_out, sha_out, 32);
     // Wipe intermediate hash
-    std::memset(sha_out, 0, sizeof(sha_out));
+    secureWipe(sha_out, sizeof(sha_out));
     return 20;
 }
 
 extern "C" HD_WALLET_EXPORT
 int32_t hd_hash_blake2b(const uint8_t* data, size_t data_len, uint8_t* hash_out, size_t out_size, size_t digest_size) {
-    if (data == nullptr || hash_out == nullptr) return static_cast<int32_t>(Error::INVALID_ARGUMENT);
-    if (out_size < digest_size || digest_size > 64 || digest_size == 0) return static_cast<int32_t>(Error::OUT_OF_MEMORY);
+    if (data == nullptr || hash_out == nullptr) return fail(Error::INVALID_ARGUMENT);
+    if (out_size < digest_size || digest_size > 64 || digest_size == 0) return fail(Error::OUT_OF_MEMORY);
     CryptoPP::BLAKE2b hash(false, digest_size);
     hash.CalculateDigest(hash_out, data, data_len);
     return static_cast<int32_t>(digest_size);
@@ -192,8 +255,8 @@ int32_t hd_hash_blake2b(const uint8_t* data, size_t data_len, uint8_t* hash_out,
 
 extern "C" HD_WALLET_EXPORT
 int32_t hd_hash_blake2s(const uint8_t* data, size_t data_len, uint8_t* hash_out, size_t out_size, size_t digest_size) {
-    if (data == nullptr || hash_out == nullptr) return static_cast<int32_t>(Error::INVALID_ARGUMENT);
-    if (out_size < digest_size || digest_size > 32 || digest_size == 0) return static_cast<int32_t>(Error::OUT_OF_MEMORY);
+    if (data == nullptr || hash_out == nullptr) return fail(Error::INVALID_ARGUMENT);
+    if (out_size < digest_size || digest_size > 32 || digest_size == 0) return fail(Error::OUT_OF_MEMORY);
     CryptoPP::BLAKE2s hash(false, digest_size);
     hash.CalculateDigest(hash_out, data, data_len);
     return static_cast<int32_t>(digest_size);
@@ -210,12 +273,14 @@ int32_t hd_kdf_hkdf(
     const uint8_t* info, size_t info_len,
     uint8_t* okm_out, size_t okm_len
 ) {
+    if ((okm_out == nullptr && okm_len != 0) || okm_len > static_cast<size_t>(INT32_MAX)) return fail(Error::INVALID_ARGUMENT);
     try {
         CryptoPP::HKDF<CryptoPP::SHA256> hkdf;
         hkdf.DeriveKey(okm_out, okm_len, ikm, ikm_len, salt, salt_len, info, info_len);
         return static_cast<int32_t>(okm_len);
     } catch (...) {
-        return static_cast<int32_t>(Error::INTERNAL);
+        zeroOutput(okm_out, okm_len);
+        return fail(Error::INTERNAL);
     }
 }
 
@@ -226,12 +291,14 @@ int32_t hd_kdf_pbkdf2(
     uint32_t iterations,
     uint8_t* key_out, size_t key_len
 ) {
+    if ((key_out == nullptr && key_len != 0) || key_len > static_cast<size_t>(INT32_MAX)) return fail(Error::INVALID_ARGUMENT);
     try {
         CryptoPP::PKCS5_PBKDF2_HMAC<CryptoPP::SHA256> pbkdf2;
         pbkdf2.DeriveKey(key_out, key_len, 0, password, password_len, salt, salt_len, iterations);
         return static_cast<int32_t>(key_len);
     } catch (...) {
-        return static_cast<int32_t>(Error::INTERNAL);
+        zeroOutput(key_out, key_len);
+        return fail(Error::INTERNAL);
     }
 }
 
@@ -242,12 +309,14 @@ int32_t hd_kdf_scrypt(
     uint64_t N, uint32_t r, uint32_t p,
     uint8_t* key_out, size_t key_len
 ) {
+    if ((key_out == nullptr && key_len != 0) || key_len > static_cast<size_t>(INT32_MAX)) return fail(Error::INVALID_ARGUMENT);
     try {
         CryptoPP::Scrypt scrypt;
         scrypt.DeriveKey(key_out, key_len, password, password_len, salt, salt_len, N, r, p);
         return static_cast<int32_t>(key_len);
     } catch (...) {
-        return static_cast<int32_t>(Error::INTERNAL);
+        zeroOutput(key_out, key_len);
+        return fail(Error::INTERNAL);
     }
 }
 
@@ -262,12 +331,17 @@ int32_t hd_curve_pubkey_from_privkey(
     uint8_t* public_key_out,
     size_t out_size
 ) {
+    if (private_key == nullptr || public_key_out == nullptr) return fail(Error::INVALID_ARGUMENT);
     try {
         auto curve = static_cast<Curve>(curve_type);
 
         switch (curve) {
             case Curve::SECP256K1: {
-                if (out_size < 33) return static_cast<int32_t>(Error::OUT_OF_MEMORY);
+                if (out_size < 33) return fail(Error::OUT_OF_MEMORY);
+                if (!privateKeyInRange(private_key, kSecp256k1Order, 32)) {
+                    zeroOutput(public_key_out, out_size);
+                    return fail(Error::INVALID_PRIVATE_KEY);
+                }
                 CryptoPP::ECDSA<CryptoPP::ECP, CryptoPP::SHA256>::PrivateKey privKey;
                 CryptoPP::Integer privKeyInt(private_key, 32);
                 privKey.Initialize(CryptoPP::ASN1::secp256k1(), privKeyInt);
@@ -282,7 +356,11 @@ int32_t hd_curve_pubkey_from_privkey(
                 return 33;
             }
             case Curve::P256: {
-                if (out_size < 33) return static_cast<int32_t>(Error::OUT_OF_MEMORY);
+                if (out_size < 33) return fail(Error::OUT_OF_MEMORY);
+                if (!privateKeyInRange(private_key, kP256Order, 32)) {
+                    zeroOutput(public_key_out, out_size);
+                    return fail(Error::INVALID_PRIVATE_KEY);
+                }
                 CryptoPP::ECDSA<CryptoPP::ECP, CryptoPP::SHA256>::PrivateKey privKey;
                 CryptoPP::Integer privKeyInt(private_key, 32);
                 privKey.Initialize(CryptoPP::ASN1::secp256r1(), privKeyInt);
@@ -296,7 +374,11 @@ int32_t hd_curve_pubkey_from_privkey(
                 return 33;
             }
             case Curve::P384: {
-                if (out_size < 49) return static_cast<int32_t>(Error::OUT_OF_MEMORY);
+                if (out_size < 49) return fail(Error::OUT_OF_MEMORY);
+                if (!privateKeyInRange(private_key, kP384Order, 48)) {
+                    zeroOutput(public_key_out, out_size);
+                    return fail(Error::INVALID_PRIVATE_KEY);
+                }
                 CryptoPP::ECDSA<CryptoPP::ECP, CryptoPP::SHA384>::PrivateKey privKey;
                 CryptoPP::Integer privKeyInt(private_key, 48);
                 privKey.Initialize(CryptoPP::ASN1::secp384r1(), privKeyInt);
@@ -312,12 +394,13 @@ int32_t hd_curve_pubkey_from_privkey(
             case Curve::ED25519:
             case Curve::X25519:
                 // These are handled by the Ed25519/X25519 specific functions in eddsa.cpp
-                return static_cast<int32_t>(Error::NOT_SUPPORTED);
+                return fail(Error::NOT_SUPPORTED);
             default:
-                return static_cast<int32_t>(Error::NOT_SUPPORTED);
+                return fail(Error::NOT_SUPPORTED);
         }
     } catch (...) {
-        return static_cast<int32_t>(Error::INTERNAL);
+        zeroOutput(public_key_out, out_size);
+        return fail(Error::INTERNAL);
     }
 }
 
@@ -332,34 +415,40 @@ int32_t hd_secp256k1_sign(
     uint8_t* signature_out, size_t out_size
 ) {
     // Return compact R||S format (64 bytes) for consistency with blockchain usage
-    if (out_size < 64) return static_cast<int32_t>(Error::OUT_OF_MEMORY);
+    if (out_size < 64) return fail(Error::OUT_OF_MEMORY);
     if (message == nullptr || private_key == nullptr || signature_out == nullptr) {
-        return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+        return fail(Error::INVALID_ARGUMENT);
+    }
+    if (!privateKeyInRange(private_key, kSecp256k1Order, 32)) {
+        zeroOutput(signature_out, out_size);
+        return fail(Error::INVALID_PRIVATE_KEY);
     }
 
+    Bytes32 msgHash{};
+    Bytes32 privateKey{};
+    int32_t result = fail(Error::INTERNAL);
     try {
-        Bytes32 msgHash{};
         CryptoPP::SHA256 sha;
         sha.CalculateDigest(msgHash.data(), message, message_len);
 
-        Bytes32 privateKey{};
         std::memcpy(privateKey.data(), private_key, privateKey.size());
 
         auto signResult = ecdsa::secp256k1Sign(privateKey, msgHash);
-        if (!signResult.ok()) {
-            return static_cast<int32_t>(Error::INVALID_SIGNATURE);
+        if (signResult.ok()) {
+            std::memcpy(signature_out, signResult.value.data(), signResult.value.size());
+            result = 64;
+        } else {
+            result = fail(Error::INVALID_SIGNATURE);
         }
-
-        std::memcpy(signature_out, signResult.value.data(), signResult.value.size());
-
-        // Securely clear stack buffers.
-        std::memset(msgHash.data(), 0, msgHash.size());
-        std::memset(privateKey.data(), 0, privateKey.size());
-
-        return 64;
     } catch (...) {
-        return static_cast<int32_t>(Error::INTERNAL);
+        result = fail(Error::INTERNAL);
     }
+
+    // Securely clear stack buffers.
+    secureWipe(msgHash);
+    secureWipe(privateKey);
+    if (result < 0) zeroOutput(signature_out, out_size);
+    return result;
 }
 
 extern "C" HD_WALLET_EXPORT
@@ -369,10 +458,10 @@ int32_t hd_secp256k1_verify(
     const uint8_t* public_key, size_t public_key_len
 ) {
     if (message == nullptr || signature == nullptr || public_key == nullptr) {
-        return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+        return fail(Error::INVALID_ARGUMENT);
     }
     if (public_key_len != 33 && public_key_len != 65) {
-        return static_cast<int32_t>(Error::INVALID_PUBLIC_KEY);
+        return fail(Error::INVALID_PUBLIC_KEY);
     }
 
     try {
@@ -389,7 +478,7 @@ int32_t hd_secp256k1_verify(
             ByteVector derSig(signature, signature + signature_len);
             auto compactResult = ecdsa::derToCompact(derSig);
             if (!compactResult.ok()) {
-                return static_cast<int32_t>(Error::INVALID_SIGNATURE);
+                return fail(Error::INVALID_SIGNATURE);
             }
             compactSig = compactResult.value;
         }
@@ -398,7 +487,7 @@ int32_t hd_secp256k1_verify(
         bool valid = ecdsa::secp256k1Verify(publicKeyVec, msgHash, compactSig);
         return valid ? 1 : 0;
     } catch (...) {
-        return static_cast<int32_t>(Error::INTERNAL);
+        return fail(Error::INTERNAL);
     }
 }
 
@@ -408,17 +497,6 @@ int32_t hd_secp256k1_verify(
 
 #ifdef HD_WALLET_USE_LIBSECP256K1
 
-namespace {
-/**
- * Get libsecp256k1 context for recoverable signatures (lazy init)
- */
-static secp256k1_context* wasm_secp256k1_ctx() {
-    static secp256k1_context* ctx = secp256k1_context_create(
-        SECP256K1_CONTEXT_SIGN | SECP256K1_CONTEXT_VERIFY);
-    return ctx;
-}
-} // anonymous namespace
-
 extern "C" HD_WALLET_EXPORT
 int32_t hd_secp256k1_sign_recoverable(
     const uint8_t* hash, size_t hash_len,
@@ -426,18 +504,29 @@ int32_t hd_secp256k1_sign_recoverable(
     uint8_t* out_sig65
 ) {
     if (!hash || hash_len != 32 || !privkey || !out_sig65) {
-        return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+        zeroOutput(out_sig65, 65);
+        return fail(Error::INVALID_ARGUMENT);
     }
 
-    secp256k1_context* ctx = wasm_secp256k1_ctx();
+    secp256k1_context* ctx = internal::secp256k1Context();
+
+    if (secp256k1_ec_seckey_verify(ctx, privkey) != 1) {
+        zeroOutput(out_sig65, 65);
+        return fail(Error::INVALID_PRIVATE_KEY);
+    }
 
     secp256k1_ecdsa_recoverable_signature sig;
     if (secp256k1_ecdsa_sign_recoverable(ctx, &sig, hash, privkey, NULL, NULL) != 1) {
-        return static_cast<int32_t>(Error::INVALID_SIGNATURE);
+        zeroOutput(out_sig65, 65);
+        return fail(Error::INVALID_SIGNATURE);
     }
 
-    int recid;
+    int recid = -1;
     secp256k1_ecdsa_recoverable_signature_serialize_compact(ctx, out_sig65, &recid, &sig);
+    if (recid < 0 || recid > 3) {
+        zeroOutput(out_sig65, 65);
+        return fail(Error::INVALID_SIGNATURE);
+    }
     out_sig65[64] = static_cast<uint8_t>(recid);
 
     return 65;
@@ -450,28 +539,38 @@ int32_t hd_secp256k1_recover(
     uint8_t* out_pubkey33
 ) {
     if (!hash || hash_len != 32 || !sig65 || !out_pubkey33) {
-        return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+        zeroOutput(out_pubkey33, 33);
+        return fail(Error::INVALID_ARGUMENT);
     }
 
-    secp256k1_context* ctx = wasm_secp256k1_ctx();
+    secp256k1_context* ctx = internal::secp256k1Context();
 
+    // libsecp256k1 takes recovery ids 0-3; ids 2 and 3 (x = r + n) fail in
+    // secp256k1_ecdsa_recover whenever r + n >= p.
     int recid = sig65[64];
     if (recid < 0 || recid > 3) {
-        return static_cast<int32_t>(Error::INVALID_SIGNATURE);
+        zeroOutput(out_pubkey33, 33);
+        return fail(Error::INVALID_SIGNATURE);
     }
 
     secp256k1_ecdsa_recoverable_signature sig;
     if (secp256k1_ecdsa_recoverable_signature_parse_compact(ctx, &sig, sig65, recid) != 1) {
-        return static_cast<int32_t>(Error::INVALID_SIGNATURE);
+        zeroOutput(out_pubkey33, 33);
+        return fail(Error::INVALID_SIGNATURE);
     }
 
     secp256k1_pubkey pubkey;
     if (secp256k1_ecdsa_recover(ctx, &pubkey, &sig, hash) != 1) {
-        return static_cast<int32_t>(Error::INVALID_SIGNATURE);
+        zeroOutput(out_pubkey33, 33);
+        return fail(Error::INVALID_SIGNATURE);
     }
 
     size_t len = 33;
-    secp256k1_ec_pubkey_serialize(ctx, out_pubkey33, &len, &pubkey, SECP256K1_EC_COMPRESSED);
+    if (secp256k1_ec_pubkey_serialize(ctx, out_pubkey33, &len, &pubkey, SECP256K1_EC_COMPRESSED) != 1 ||
+        len != 33) {
+        zeroOutput(out_pubkey33, 33);
+        return fail(Error::INTERNAL);
+    }
 
     return 33;
 }
@@ -485,7 +584,12 @@ int32_t hd_secp256k1_sign_recoverable(
     uint8_t* out_sig65
 ) {
     if (!hash || hash_len != 32 || !privkey || !out_sig65) {
-        return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+        zeroOutput(out_sig65, 65);
+        return fail(Error::INVALID_ARGUMENT);
+    }
+    if (!privateKeyInRange(privkey, kSecp256k1Order, 32)) {
+        zeroOutput(out_sig65, 65);
+        return fail(Error::INVALID_PRIVATE_KEY);
     }
 
     // Fallback to Crypto++ recoverable signing
@@ -496,17 +600,17 @@ int32_t hd_secp256k1_sign_recoverable(
     std::memcpy(privateKey.data(), privkey, 32);
 
     auto signResult = ecdsa::secp256k1SignRecoverable(privateKey, msgHash);
-    if (!signResult.ok()) {
-        return static_cast<int32_t>(Error::INVALID_SIGNATURE);
+    secureWipe(msgHash);
+    secureWipe(privateKey);
+    if (!signResult.ok() || signResult.value[0] < 27 || signResult.value[0] > 30) {
+        zeroOutput(out_sig65, 65);
+        return fail(Error::INVALID_SIGNATURE);
     }
 
     // signResult.value is 65 bytes: v[1] + r[32] + s[32]
     // We need r[32] + s[32] + v[1] format
     std::memcpy(out_sig65, signResult.value.data() + 1, 64);  // r + s
     out_sig65[64] = signResult.value[0] - 27;  // Convert from Bitcoin convention to recid
-
-    std::memset(msgHash.data(), 0, msgHash.size());
-    std::memset(privateKey.data(), 0, privateKey.size());
 
     return 65;
 }
@@ -518,7 +622,12 @@ int32_t hd_secp256k1_recover(
     uint8_t* out_pubkey33
 ) {
     if (!hash || hash_len != 32 || !sig65 || !out_pubkey33) {
-        return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+        zeroOutput(out_pubkey33, 33);
+        return fail(Error::INVALID_ARGUMENT);
+    }
+    if (sig65[64] > 3) {
+        zeroOutput(out_pubkey33, 33);
+        return fail(Error::INVALID_SIGNATURE);
     }
 
     // Build recoverable signature in Bitcoin convention: v[1] + r[32] + s[32]
@@ -531,7 +640,8 @@ int32_t hd_secp256k1_recover(
 
     auto result = ecdsa::secp256k1RecoverCompressed(msgHash, recSig);
     if (!result.ok()) {
-        return static_cast<int32_t>(Error::INVALID_SIGNATURE);
+        zeroOutput(out_pubkey33, 33);
+        return fail(Error::INVALID_SIGNATURE);
     }
 
     std::memcpy(out_pubkey33, result.value.data(), 33);
@@ -547,9 +657,11 @@ int32_t hd_curve_decompress_pubkey(
     uint8_t* uncompressed_out,
     size_t out_size
 ) {
-    if (out_size < 65) return static_cast<int32_t>(Error::OUT_OF_MEMORY);
+    if (compressed == nullptr || uncompressed_out == nullptr) return fail(Error::INVALID_ARGUMENT);
+    if (out_size < 65) return fail(Error::OUT_OF_MEMORY);
     if (curve != static_cast<int32_t>(Curve::SECP256K1)) {
-        return static_cast<int32_t>(Error::NOT_SUPPORTED);
+        zeroOutput(uncompressed_out, out_size);
+        return fail(Error::NOT_SUPPORTED);
     }
 
     Bytes33 pubkey;
@@ -557,7 +669,8 @@ int32_t hd_curve_decompress_pubkey(
 
     auto result = bip32::decompressPublicKey(pubkey, static_cast<Curve>(curve));
     if (!result.ok()) {
-        return static_cast<int32_t>(result.error);
+        zeroOutput(uncompressed_out, out_size);
+        return fail(result.error);
     }
 
     std::memcpy(uncompressed_out, result.value.data(), 65);
@@ -574,17 +687,71 @@ public:
     }
 
     const CryptoPP::ECP& ec() const { return curve_.GetCurve(); }
-    const CryptoPP::Integer& order() const { return n_; }
 
 private:
     Secp256k1Curve() {
         curve_.Initialize(CryptoPP::ASN1::secp256k1());
-        n_ = curve_.GetGroupOrder();
     }
 
     CryptoPP::DL_GroupParameters_EC<CryptoPP::ECP> curve_;
-    CryptoPP::Integer n_;
 };
+
+// ECDH on a short-Weierstrass curve: validate the private key (0 < d < n) and
+// the peer point, then output the x-coordinate of d*Q. Returns the secret
+// length or -Error; the output is zeroed on every failure.
+int32_t ecdhShortWeierstrass(
+    const CryptoPP::ECP& ec,
+    const uint8_t* order,
+    size_t field_size,
+    const uint8_t* private_key,
+    const uint8_t* public_key, size_t public_key_len,
+    uint8_t* shared_secret_out, size_t out_size
+) {
+    if (private_key == nullptr || public_key == nullptr || shared_secret_out == nullptr) {
+        return fail(Error::INVALID_ARGUMENT);
+    }
+    if (out_size < field_size) return fail(Error::OUT_OF_MEMORY);
+    zeroOutput(shared_secret_out, out_size);
+
+    // Accept compressed (1 + n) or uncompressed (1 + 2n) public keys
+    const size_t compressed_len = 1 + field_size;
+    const size_t uncompressed_len = 1 + 2 * field_size;
+    if (public_key_len != compressed_len && public_key_len != uncompressed_len) {
+        return fail(Error::INVALID_PUBLIC_KEY);
+    }
+    if (!privateKeyInRange(private_key, order, field_size)) {
+        return fail(Error::INVALID_PRIVATE_KEY);
+    }
+
+    try {
+        CryptoPP::Integer d(private_key, field_size);
+
+        // NOTE: DecodePoint, not manual x/y decoding, so ScalarMultiply works
+        // (ECDH::Domain::Agree() is wrong in 32-bit Emscripten builds).
+        CryptoPP::ECP::Point Q;
+        Q.identity = false;
+        if (public_key_len == uncompressed_len) {
+            if (public_key[0] != 0x04) return fail(Error::INVALID_PUBLIC_KEY);
+        } else if (public_key[0] != 0x02 && public_key[0] != 0x03) {
+            return fail(Error::INVALID_PUBLIC_KEY);
+        }
+        if (!ec.DecodePoint(Q, public_key, public_key_len) || !ec.VerifyPoint(Q)) {
+            return fail(Error::INVALID_PUBLIC_KEY);
+        }
+
+        CryptoPP::ECP::Point S = ec.ScalarMultiply(Q, d);
+        if (S.identity) {
+            return fail(Error::INTERNAL);
+        }
+
+        // SECURITY FIX [VULN-12]: Output only x-coordinate as shared secret
+        S.x.Encode(shared_secret_out, field_size);
+        return static_cast<int32_t>(field_size);
+    } catch (...) {
+        zeroOutput(shared_secret_out, out_size);
+        return fail(Error::INTERNAL);
+    }
+}
 } // anonymous namespace
 
 extern "C" HD_WALLET_EXPORT
@@ -593,66 +760,10 @@ int32_t hd_ecdh_secp256k1(
     const uint8_t* public_key, size_t public_key_len,
     uint8_t* shared_secret_out, size_t out_size
 ) {
-    if (out_size < 32) return static_cast<int32_t>(Error::OUT_OF_MEMORY);
-
-    // Validate public key format
-    if (public_key_len != 33 && public_key_len != 65) {
-        return static_cast<int32_t>(Error::INVALID_PUBLIC_KEY);
-    }
-
-    try {
-        // Use static singleton curve (same pattern as working ECDSA code)
-        const CryptoPP::ECP& ec = Secp256k1Curve::instance().ec();
-        const CryptoPP::Integer& order = Secp256k1Curve::instance().order();
-
-        // Parse private key as integer
-        CryptoPP::Integer d(private_key, 32);
-
-        // Validate private key range
-        if (d <= 0 || d >= order) {
-            return static_cast<int32_t>(Error::INVALID_PRIVATE_KEY);
-        }
-
-        // Parse public key point using DecodePoint for proper initialization
-        // NOTE: Must use DecodePoint instead of manual x/y decoding for ScalarMultiply to work
-        CryptoPP::ECP::Point Q;
-        Q.identity = false;
-
-        if (public_key_len == 65) {
-            if (public_key[0] != 0x04) {
-                return static_cast<int32_t>(Error::INVALID_PUBLIC_KEY);
-            }
-            if (!ec.DecodePoint(Q, public_key, 65)) {
-                return static_cast<int32_t>(Error::INVALID_PUBLIC_KEY);
-            }
-        } else {
-            if (public_key[0] != 0x02 && public_key[0] != 0x03) {
-                return static_cast<int32_t>(Error::INVALID_PUBLIC_KEY);
-            }
-            if (!ec.DecodePoint(Q, public_key, 33)) {
-                return static_cast<int32_t>(Error::INVALID_PUBLIC_KEY);
-            }
-        }
-
-        // Validate public key is on curve
-        if (!ec.VerifyPoint(Q)) {
-            return static_cast<int32_t>(Error::INVALID_PUBLIC_KEY);
-        }
-
-        // Compute shared secret: S = d * Q (scalar multiplication)
-        CryptoPP::ECP::Point S = ec.ScalarMultiply(Q, d);
-
-        // Check for point at infinity
-        if (S.identity) {
-            return static_cast<int32_t>(Error::INTERNAL);
-        }
-
-        // Output the x-coordinate as the shared secret (32 bytes)
-        S.x.Encode(shared_secret_out, 32);
-        return 32;
-    } catch (...) {
-        return static_cast<int32_t>(Error::INTERNAL);
-    }
+    // Static singleton curve (same pattern as the working ECDSA code)
+    return ecdhShortWeierstrass(Secp256k1Curve::instance().ec(), kSecp256k1Order, 32,
+                                private_key, public_key, public_key_len,
+                                shared_secret_out, out_size);
 }
 
 // =============================================================================
@@ -665,34 +776,40 @@ int32_t hd_p256_sign(
     const uint8_t* private_key,
     uint8_t* signature_out, size_t out_size
 ) {
-    if (out_size < 64) return static_cast<int32_t>(Error::OUT_OF_MEMORY);
+    if (out_size < 64) return fail(Error::OUT_OF_MEMORY);
     if (message == nullptr || private_key == nullptr || signature_out == nullptr) {
-        return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+        return fail(Error::INVALID_ARGUMENT);
+    }
+    if (!privateKeyInRange(private_key, kP256Order, 32)) {
+        zeroOutput(signature_out, out_size);
+        return fail(Error::INVALID_PRIVATE_KEY);
     }
 
+    Bytes32 msgHash{};
+    Bytes32 privateKey{};
+    int32_t result = fail(Error::INTERNAL);
     try {
-        Bytes32 msgHash{};
         CryptoPP::SHA256 sha;
         sha.CalculateDigest(msgHash.data(), message, message_len);
 
-        Bytes32 privateKey{};
         std::memcpy(privateKey.data(), private_key, privateKey.size());
 
         auto signResult = ecdsa::p256Sign(privateKey, msgHash);
-        if (!signResult.ok()) {
-            return static_cast<int32_t>(Error::INVALID_SIGNATURE);
+        if (signResult.ok()) {
+            std::memcpy(signature_out, signResult.value.data(), signResult.value.size());
+            result = 64;
+        } else {
+            result = fail(Error::INVALID_SIGNATURE);
         }
-
-        std::memcpy(signature_out, signResult.value.data(), signResult.value.size());
-
-        // Securely clear stack buffers.
-        std::memset(msgHash.data(), 0, msgHash.size());
-        std::memset(privateKey.data(), 0, privateKey.size());
-
-        return 64;
     } catch (...) {
-        return static_cast<int32_t>(Error::INTERNAL);
+        result = fail(Error::INTERNAL);
     }
+
+    // Securely clear stack buffers.
+    secureWipe(msgHash);
+    secureWipe(privateKey);
+    if (result < 0) zeroOutput(signature_out, out_size);
+    return result;
 }
 
 extern "C" HD_WALLET_EXPORT
@@ -702,10 +819,10 @@ int32_t hd_p256_verify(
     const uint8_t* signature
 ) {
     if (message == nullptr || public_key == nullptr || signature == nullptr) {
-        return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+        return fail(Error::INVALID_ARGUMENT);
     }
     if (public_key_len != 33 && public_key_len != 65) {
-        return static_cast<int32_t>(Error::INVALID_PUBLIC_KEY);
+        return fail(Error::INVALID_PUBLIC_KEY);
     }
 
     try {
@@ -718,9 +835,9 @@ int32_t hd_p256_verify(
 
         ByteVector publicKeyVec(public_key, public_key + public_key_len);
         bool valid = ecdsa::p256Verify(publicKeyVec, msgHash, compactSig);
-        return valid ? 0 : static_cast<int32_t>(Error::INVALID_SIGNATURE);
+        return valid ? 0 : fail(Error::INVALID_SIGNATURE);
     } catch (...) {
-        return static_cast<int32_t>(Error::INTERNAL);
+        return fail(Error::INTERNAL);
     }
 }
 
@@ -730,50 +847,11 @@ int32_t hd_ecdh_p256(
     const uint8_t* public_key, size_t public_key_len,
     uint8_t* shared_secret_out, size_t out_size
 ) {
-    if (out_size < 32) return static_cast<int32_t>(Error::OUT_OF_MEMORY);
-
-    // Accept compressed (33) or uncompressed (65) public keys
-    if (public_key_len != 33 && public_key_len != 65) {
-        return static_cast<int32_t>(Error::INVALID_PUBLIC_KEY);
-    }
-
-    try {
-        // Use manual DecodePoint + ScalarMultiply instead of ECDH::Domain::Agree()
-        // which produces incorrect results in 32-bit Emscripten WASM builds.
-        CryptoPP::DL_GroupParameters_EC<CryptoPP::ECP> curveParams;
-        curveParams.Initialize(CryptoPP::ASN1::secp256r1());
-        const CryptoPP::ECP& ec = curveParams.GetCurve();
-        const CryptoPP::Integer& order = curveParams.GetGroupOrder();
-
-        CryptoPP::Integer d(private_key, 32);
-        if (d <= 0 || d >= order) {
-            return static_cast<int32_t>(Error::INVALID_PRIVATE_KEY);
-        }
-
-        CryptoPP::ECP::Point Q;
-        if (public_key_len == 65) {
-            if (public_key[0] != 0x04) return static_cast<int32_t>(Error::INVALID_PUBLIC_KEY);
-            if (!ec.DecodePoint(Q, public_key, 65)) return static_cast<int32_t>(Error::INVALID_PUBLIC_KEY);
-        } else {
-            if (public_key[0] != 0x02 && public_key[0] != 0x03) return static_cast<int32_t>(Error::INVALID_PUBLIC_KEY);
-            if (!ec.DecodePoint(Q, public_key, 33)) return static_cast<int32_t>(Error::INVALID_PUBLIC_KEY);
-        }
-
-        if (!ec.VerifyPoint(Q)) {
-            return static_cast<int32_t>(Error::INVALID_PUBLIC_KEY);
-        }
-
-        CryptoPP::ECP::Point S = ec.ScalarMultiply(Q, d);
-        if (S.identity) {
-            return static_cast<int32_t>(Error::INTERNAL);
-        }
-
-        // SECURITY FIX [VULN-12]: Output only x-coordinate as shared secret
-        S.x.Encode(shared_secret_out, 32);
-        return 32;
-    } catch (...) {
-        return static_cast<int32_t>(Error::INTERNAL);
-    }
+    CryptoPP::DL_GroupParameters_EC<CryptoPP::ECP> curveParams;
+    curveParams.Initialize(CryptoPP::ASN1::secp256r1());
+    return ecdhShortWeierstrass(curveParams.GetCurve(), kP256Order, 32,
+                                private_key, public_key, public_key_len,
+                                shared_secret_out, out_size);
 }
 
 // =============================================================================
@@ -786,34 +864,40 @@ int32_t hd_p384_sign(
     const uint8_t* private_key,
     uint8_t* signature_out, size_t out_size
 ) {
-    if (out_size < 96) return static_cast<int32_t>(Error::OUT_OF_MEMORY);
+    if (out_size < 96) return fail(Error::OUT_OF_MEMORY);
     if (message == nullptr || private_key == nullptr || signature_out == nullptr) {
-        return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+        return fail(Error::INVALID_ARGUMENT);
+    }
+    if (!privateKeyInRange(private_key, kP384Order, 48)) {
+        zeroOutput(signature_out, out_size);
+        return fail(Error::INVALID_PRIVATE_KEY);
     }
 
+    std::array<uint8_t, 48> msgHash{};
+    ecdsa::P384PrivateKey privateKey{};
+    int32_t result = fail(Error::INTERNAL);
     try {
-        std::array<uint8_t, 48> msgHash{};
         CryptoPP::SHA384 sha;
         sha.CalculateDigest(msgHash.data(), message, message_len);
 
-        ecdsa::P384PrivateKey privateKey{};
         std::memcpy(privateKey.data(), private_key, privateKey.size());
 
         auto signResult = ecdsa::p384Sign(privateKey, msgHash);
-        if (!signResult.ok()) {
-            return static_cast<int32_t>(Error::INVALID_SIGNATURE);
+        if (signResult.ok()) {
+            std::memcpy(signature_out, signResult.value.data(), signResult.value.size());
+            result = 96;
+        } else {
+            result = fail(Error::INVALID_SIGNATURE);
         }
-
-        std::memcpy(signature_out, signResult.value.data(), signResult.value.size());
-
-        // Securely clear stack buffers.
-        std::memset(msgHash.data(), 0, msgHash.size());
-        std::memset(privateKey.data(), 0, privateKey.size());
-
-        return 96;
     } catch (...) {
-        return static_cast<int32_t>(Error::INTERNAL);
+        result = fail(Error::INTERNAL);
     }
+
+    // Securely clear stack buffers.
+    secureWipe(msgHash);
+    secureWipe(privateKey);
+    if (result < 0) zeroOutput(signature_out, out_size);
+    return result;
 }
 
 extern "C" HD_WALLET_EXPORT
@@ -823,10 +907,10 @@ int32_t hd_p384_verify(
     const uint8_t* signature
 ) {
     if (message == nullptr || public_key == nullptr || signature == nullptr) {
-        return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+        return fail(Error::INVALID_ARGUMENT);
     }
     if (public_key_len != 49 && public_key_len != 97) {
-        return static_cast<int32_t>(Error::INVALID_PUBLIC_KEY);
+        return fail(Error::INVALID_PUBLIC_KEY);
     }
 
     try {
@@ -839,9 +923,9 @@ int32_t hd_p384_verify(
 
         ByteVector publicKeyVec(public_key, public_key + public_key_len);
         bool valid = ecdsa::p384Verify(publicKeyVec, msgHash, compactSig);
-        return valid ? 0 : static_cast<int32_t>(Error::INVALID_SIGNATURE);
+        return valid ? 0 : fail(Error::INVALID_SIGNATURE);
     } catch (...) {
-        return static_cast<int32_t>(Error::INTERNAL);
+        return fail(Error::INTERNAL);
     }
 }
 
@@ -851,55 +935,26 @@ int32_t hd_ecdh_p384(
     const uint8_t* public_key, size_t public_key_len,
     uint8_t* shared_secret_out, size_t out_size
 ) {
-    if (out_size < 48) return static_cast<int32_t>(Error::OUT_OF_MEMORY);
-
-    // Accept compressed (49) or uncompressed (97) public keys
-    if (public_key_len != 49 && public_key_len != 97) {
-        return static_cast<int32_t>(Error::INVALID_PUBLIC_KEY);
-    }
-
-    try {
-        // Use manual DecodePoint + ScalarMultiply instead of ECDH::Domain::Agree()
-        // which produces incorrect results in 32-bit Emscripten WASM builds.
-        CryptoPP::DL_GroupParameters_EC<CryptoPP::ECP> curveParams;
-        curveParams.Initialize(CryptoPP::ASN1::secp384r1());
-        const CryptoPP::ECP& ec = curveParams.GetCurve();
-        const CryptoPP::Integer& order = curveParams.GetGroupOrder();
-
-        CryptoPP::Integer d(private_key, 48);
-        if (d <= 0 || d >= order) {
-            return static_cast<int32_t>(Error::INVALID_PRIVATE_KEY);
-        }
-
-        CryptoPP::ECP::Point Q;
-        if (public_key_len == 97) {
-            if (public_key[0] != 0x04) return static_cast<int32_t>(Error::INVALID_PUBLIC_KEY);
-            if (!ec.DecodePoint(Q, public_key, 97)) return static_cast<int32_t>(Error::INVALID_PUBLIC_KEY);
-        } else {
-            if (public_key[0] != 0x02 && public_key[0] != 0x03) return static_cast<int32_t>(Error::INVALID_PUBLIC_KEY);
-            if (!ec.DecodePoint(Q, public_key, 49)) return static_cast<int32_t>(Error::INVALID_PUBLIC_KEY);
-        }
-
-        if (!ec.VerifyPoint(Q)) {
-            return static_cast<int32_t>(Error::INVALID_PUBLIC_KEY);
-        }
-
-        CryptoPP::ECP::Point S = ec.ScalarMultiply(Q, d);
-        if (S.identity) {
-            return static_cast<int32_t>(Error::INTERNAL);
-        }
-
-        // SECURITY FIX [VULN-12]: Output only x-coordinate as shared secret
-        S.x.Encode(shared_secret_out, 48);
-        return 48;
-    } catch (...) {
-        return static_cast<int32_t>(Error::INTERNAL);
-    }
+    CryptoPP::DL_GroupParameters_EC<CryptoPP::ECP> curveParams;
+    curveParams.Initialize(CryptoPP::ASN1::secp384r1());
+    return ecdhShortWeierstrass(curveParams.GetCurve(), kP384Order, 48,
+                                private_key, public_key, public_key_len,
+                                shared_secret_out, out_size);
 }
 
 // =============================================================================
 // AES-GCM Encryption
 // =============================================================================
+
+#if HD_WALLET_USE_OPENSSL
+namespace {
+// hd_ossl_aes_gcm_* return the byte count, -2 on a tag mismatch, -1 otherwise.
+int32_t fromOpenSslGcm(int32_t result, size_t expected) noexcept {
+    if (result >= 0 && static_cast<size_t>(result) == expected) return result;
+    return result == -2 ? fail(Error::VERIFICATION_FAILED) : fail(Error::INTERNAL);
+}
+} // anonymous namespace
+#endif
 
 extern "C" HD_WALLET_EXPORT
 int32_t hd_aes_gcm_encrypt(
@@ -910,12 +965,27 @@ int32_t hd_aes_gcm_encrypt(
     uint8_t* ciphertext,
     uint8_t* tag
 ) {
-    if (key_len != 32) return static_cast<int32_t>(Error::INVALID_ARGUMENT);
-    if (iv_len != 12) return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+    if (key == nullptr || iv == nullptr || tag == nullptr ||
+        ((plaintext == nullptr || ciphertext == nullptr) && pt_len != 0) ||
+        pt_len > static_cast<size_t>(INT32_MAX)) {
+        return fail(Error::INVALID_ARGUMENT);
+    }
+    if (key_len != 32 || iv_len != 12) {
+        zeroOutput(ciphertext, pt_len);
+        zeroOutput(tag, 16);
+        return fail(Error::INVALID_ARGUMENT);
+    }
 
 #if HD_WALLET_USE_OPENSSL
-    return hd_ossl_aes_gcm_encrypt(key, key_len, plaintext, pt_len,
-                                   iv, iv_len, aad, aad_len, ciphertext, tag);
+    const int32_t result = fromOpenSslGcm(
+        hd_ossl_aes_gcm_encrypt(key, key_len, plaintext, pt_len,
+                                iv, iv_len, aad, aad_len, ciphertext, tag),
+        pt_len);
+    if (result < 0) {
+        zeroOutput(ciphertext, pt_len);
+        zeroOutput(tag, 16);
+    }
+    return result;
 #else
     // Use non-throwing API due to WASM -fignore-exceptions
     CryptoPP::GCM<CryptoPP::AES>::Encryption enc;
@@ -948,12 +1018,25 @@ int32_t hd_aes_gcm_decrypt(
     const uint8_t* tag,
     uint8_t* plaintext
 ) {
-    if (key_len != 32) return static_cast<int32_t>(Error::INVALID_ARGUMENT);
-    if (iv_len != 12) return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+    if (key == nullptr || iv == nullptr || tag == nullptr ||
+        ((ciphertext == nullptr || plaintext == nullptr) && ct_len != 0) ||
+        ct_len > static_cast<size_t>(INT32_MAX)) {
+        return fail(Error::INVALID_ARGUMENT);
+    }
+    if (key_len != 32 || iv_len != 12) {
+        zeroOutput(plaintext, ct_len);
+        return fail(Error::INVALID_ARGUMENT);
+    }
 
 #if HD_WALLET_USE_OPENSSL
-    return hd_ossl_aes_gcm_decrypt(key, key_len, ciphertext, ct_len,
-                                   iv, iv_len, aad, aad_len, tag, plaintext);
+    // On a tag mismatch OpenSSL has already written unauthenticated plaintext:
+    // zero it so no caller can read it.
+    const int32_t result = fromOpenSslGcm(
+        hd_ossl_aes_gcm_decrypt(key, key_len, ciphertext, ct_len,
+                                iv, iv_len, aad, aad_len, tag, plaintext),
+        ct_len);
+    if (result < 0) zeroOutput(plaintext, ct_len);
+    return result;
 #else
     // Use non-throwing API due to WASM -fignore-exceptions
     CryptoPP::GCM<CryptoPP::AES>::Decryption dec;
@@ -978,8 +1061,8 @@ int32_t hd_aes_gcm_decrypt(
     // Verify the tag (TruncatedVerify returns true if tag matches)
     if (!dec.TruncatedVerify(tag, 16)) {
         // Authentication failed - zero out plaintext for safety
-        std::memset(plaintext, 0, ct_len);
-        return -static_cast<int32_t>(Error::VERIFICATION_FAILED);
+        zeroOutput(plaintext, ct_len);
+        return fail(Error::VERIFICATION_FAILED);
     }
 
     return static_cast<int32_t>(ct_len);

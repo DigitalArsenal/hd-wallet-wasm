@@ -12,7 +12,10 @@
 #include "hd_wallet/bip39.h"
 #include "hd_wallet/eddsa.h"
 #include "hd_wallet/coins/bitcoin.h"
+#include "hd_wallet/coins/coin.h"
+#include "hd_wallet/coins/cosmos.h"
 #include "hd_wallet/coins/ethereum.h"
+#include "hd_wallet/coins/polkadot.h"
 #include "hd_wallet/coins/solana.h"
 
 #include <array>
@@ -421,4 +424,45 @@ TEST_CASE(CoinAddresses, AllChains_FromSameMnemonic) {
     rc = hd_sol_address(sol_pubkey, 32, sol_addr, sizeof(sol_addr));
     ASSERT_EQ(static_cast<int32_t>(Error::OK), rc);
     ASSERT_STR_EQ(SOL_ADDRESS, std::string(sol_addr));
+}
+
+// =============================================================================
+// C ABI error convention (2.1.1): an export whose success is a value (1/0 for
+// a verify, a word index, a count) fails with a negative -Error code, never a
+// positive one a caller could read as "valid" or as a count.
+// =============================================================================
+
+TEST_CASE(CoinAddresses, VerifyExports_FailWithNegativeCodes) {
+    const int32_t invalidArgument = -static_cast<int32_t>(Error::INVALID_ARGUMENT);
+    const uint8_t message[4] = {'t', 'e', 's', 't'};
+    const uint8_t signature[65] = {0};
+    const uint8_t publicKey[33] = {0x02};
+
+    ASSERT_EQ(invalidArgument, hd_btc_verify_message(nullptr, signature, 65, "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2", 0));
+    ASSERT_EQ(invalidArgument, hd_eth_verify_message(nullptr, 0, signature, 65, "0x0000000000000000000000000000000000000000"));
+    ASSERT_EQ(invalidArgument, hd_coin_verify_message(0, nullptr, 0, signature, 65, publicKey, 33));
+    ASSERT_EQ(invalidArgument, hd_cosmos_verify_signature(nullptr, 0, signature, 64, publicKey, 33));
+    ASSERT_EQ(invalidArgument, hd_dot_verify_message(nullptr, 0, signature, 64, publicKey, 32));
+    ASSERT_EQ(invalidArgument, hd_sol_verify_message(nullptr, 0, signature, 64, publicKey, 32));
+
+    // An unknown coin type is an error, not "valid" (1) or "invalid" (0).
+    ASSERT_TRUE(hd_coin_verify_message(0x7fffffff, message, sizeof(message), signature, 65, publicKey, 33) < 0);
+
+}
+
+TEST_CASE(CoinAddresses, MnemonicWordExports_FailWithNegativeCodes) {
+    char suggestions[256] = {0};
+
+    // Index of a known word; -1 for an unknown word; -Error otherwise.
+    ASSERT_EQ(0, bip39::hd_mnemonic_check_word("abandon", 0));
+    ASSERT_EQ(-1, bip39::hd_mnemonic_check_word("notaword", 0));
+    ASSERT_EQ(-static_cast<int32_t>(Error::NOT_SUPPORTED), bip39::hd_mnemonic_check_word("abandon", 99));
+    ASSERT_EQ(-static_cast<int32_t>(Error::INVALID_ARGUMENT), bip39::hd_mnemonic_check_word(nullptr, 0));
+
+    // A count of suggestions, or -Error.
+    ASSERT_TRUE(bip39::hd_mnemonic_suggest_word("aban", 0, suggestions, sizeof(suggestions), 5) >= 1);
+    ASSERT_EQ(-static_cast<int32_t>(Error::NOT_SUPPORTED),
+              bip39::hd_mnemonic_suggest_word("aban", 99, suggestions, sizeof(suggestions), 5));
+    ASSERT_EQ(-static_cast<int32_t>(Error::INVALID_ARGUMENT),
+              bip39::hd_mnemonic_suggest_word("a", 0, suggestions, 2, 50));
 }

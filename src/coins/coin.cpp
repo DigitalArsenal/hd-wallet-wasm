@@ -33,6 +33,7 @@
 #ifdef HD_WALLET_USE_LIBSECP256K1
 #include <secp256k1.h>
 #include <secp256k1_recovery.h>
+#include "../secp256k1_context.h"
 #endif
 
 namespace hd_wallet {
@@ -724,13 +725,10 @@ Result<ByteVector> fromHex(const std::string& hex) {
 
 namespace {
 /**
- * Get libsecp256k1 context for ECDSA operations (lazy init)
- * Uses SIGN | VERIFY for recoverable signature support
+ * The shared, blinded libsecp256k1 context (secp256k1_context.h)
  */
 static secp256k1_context* coin_secp256k1_ctx() {
-    static secp256k1_context* ctx = secp256k1_context_create(
-        SECP256K1_CONTEXT_SIGN | SECP256K1_CONTEXT_VERIFY);
-    return ctx;
+    return internal::secp256k1Context();
 }
 } // anonymous namespace
 
@@ -1155,12 +1153,12 @@ int32_t hd_coin_verify_message(
   size_t pubkey_len
 ) {
   if (!message || !signature || !public_key) {
-    return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+    return -static_cast<int32_t>(Error::INVALID_ARGUMENT);
   }
 
   auto coin = getCoin(static_cast<CoinType>(coin_type), Network::MAINNET);
   if (!coin) {
-    return static_cast<int32_t>(Error::NOT_SUPPORTED);
+    return -static_cast<int32_t>(Error::NOT_SUPPORTED);
   }
 
   ByteVector msg(message, message + message_len);
@@ -1169,7 +1167,7 @@ int32_t hd_coin_verify_message(
 
   auto result = coin->verifyMessage(msg, sig, pub);
   if (!result.ok()) {
-    return static_cast<int32_t>(result.error);
+    return -static_cast<int32_t>(result.error);
   }
 
   return result.value ? 1 : 0;

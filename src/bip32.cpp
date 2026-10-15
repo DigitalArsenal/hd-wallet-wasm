@@ -32,6 +32,7 @@
 
 #if HD_WALLET_USE_LIBSECP256K1
 #include <secp256k1.h>
+#include "secp256k1_context.h"
 #endif
 
 namespace hd_wallet {
@@ -205,11 +206,10 @@ static ByteVector hash160(const uint8_t* data, size_t size) {
 // =============================================================================
 
 /**
- * Get secp256k1 context (lazy init, safe in single-threaded WASM)
+ * The shared, blinded libsecp256k1 context (secp256k1_context.h)
  */
 static secp256k1_context* secp256k1_ctx() {
-    static secp256k1_context* ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
-    return ctx;
+    return internal::secp256k1Context();
 }
 
 /**

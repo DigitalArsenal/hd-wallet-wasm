@@ -323,14 +323,78 @@ class HDWalletError extends Error {
 }
 
 /**
- * Check result and throw if error
+ * Check a status-returning export: 0 is success, any other value is an error.
  * @param {number} result - Result code from WASM function
  * @throws {HDWalletError} If result is non-zero
  */
 function checkResult(result) {
   if (result !== 0) {
-    throw new HDWalletError(result);
+    throw new HDWalletError(nativeErrorCode(result));
   }
+}
+
+// Native return convention: an export whose success value is 0 reports any
+// other value as an error; an export whose success is a length, a count or 1/0
+// reports failure as a negative -ErrorCode. The checks below accept exactly the
+// documented success value, so no error code (of either sign) is ever read as a
+// length and no output buffer is read after a failed call.
+
+/**
+ * Map a failed native result to a library error code.
+ * @param {number} result - Native return value that was not success
+ * @returns {number} Known error code, or INTERNAL for anything else
+ */
+function nativeErrorCode(result) {
+  const code = result < 0 ? -result : result;
+  return code !== ErrorCode.OK && ERROR_MESSAGES[code] !== undefined ? code : ErrorCode.INTERNAL;
+}
+
+/**
+ * Check a length-returning export: exactly `expected` bytes were written.
+ * @param {number} result - Native return value
+ * @param {number} expected - Byte length a successful call writes
+ * @returns {number} The length
+ * @throws {HDWalletError} On any other value, positive or negative
+ */
+function checkLength(result, expected) {
+  if (result !== expected) {
+    throw new HDWalletError(nativeErrorCode(result));
+  }
+  return result;
+}
+
+/**
+ * Check a variable-length export: a length within [min, max].
+ * @param {number} result - Native return value
+ * @param {number} min - Smallest valid length
+ * @param {number} max - Largest valid length (the output capacity)
+ * @returns {number} The length
+ * @throws {HDWalletError} On any value outside the range
+ */
+function checkLengthWithin(result, min, max) {
+  if (!Number.isInteger(result) || result < min || result > max) {
+    throw new HDWalletError(nativeErrorCode(result));
+  }
+  return result;
+}
+
+/**
+ * Require an input of an exact byte length before it reaches native code,
+ * which reads exactly that many bytes.
+ * @param {Uint8Array} bytes - Input bytes
+ * @param {number} length - Required length
+ * @param {number} code - Error code to throw
+ * @param {string} name - Input name for the message
+ */
+function requireLength(bytes, length, code, name) {
+  if (bytes == null || bytes.length !== length) {
+    throw new HDWalletError(code, `${name} must be ${length} bytes`);
+  }
+}
+
+/** Private key length per curve (the scalar size). */
+function privateKeyLength(curve) {
+  return curve === Curve.P384 ? 48 : 32;
 }
 
 /**
@@ -1069,8 +1133,8 @@ class HDKey {
     const pubPtr = allocAndCopy(this._wasm, pubKey);
     const outPtr = this._wasm._hd_alloc(64);
     try {
-      const result = this._wasm._hd_libp2p_peer_id(pubPtr, pubKey.length, this.curve, outPtr, 64);
-      if (result < 0) throw new HDWalletError(result);
+      const result = checkLengthWithin(
+        this._wasm._hd_libp2p_peer_id(pubPtr, pubKey.length, this.curve, outPtr, 64), 1, 64);
       return readBytes(this._wasm, outPtr, result);
     } finally {
       this._wasm._hd_dealloc(pubPtr);
@@ -1420,7 +1484,11 @@ function createModule(wasm) {
       const wordPtr = allocString(wasm, word);
       try {
         const result = wasm._hd_mnemonic_check_word(wordPtr, language);
-        return result >= 0;
+        // Word index 0-2047, or -1 when the word is not in the list; any
+        // other value is an error (invalid argument, unsupported language).
+        if (result >= 0 && result <= 2047) return true;
+        if (result === -1) return false;
+        throw new HDWalletError(nativeErrorCode(result));
       } finally {
         wasm._hd_dealloc(wordPtr);
       }
@@ -1570,16 +1638,14 @@ function createModule(wasm) {
      */
       publicKeyFromPrivate(privateKey, curve) {
         const pubFromPrivFn = requireWasmFunction(wasm, '_hd_curve_pubkey_from_privkey');
+        requireLength(privateKey, privateKeyLength(curve), ErrorCode.INVALID_PRIVATE_KEY, 'privateKey');
         const privPtr = allocAndCopy(wasm, privateKey);
         const pubPtr = wasm._hd_alloc(65);
         try {
-          const result = pubFromPrivFn(privPtr, curve, pubPtr, 65);
-          if (result < 0) throw new HDWalletError(result);
+          // Returns the key length; a private key outside 0 < d < n fails.
           const expectedLen = curve === Curve.P384 ? 49 : 33;
-          if (result === 0 || result === expectedLen) {
-            return readBytes(wasm, pubPtr, expectedLen);
-          }
-          throw new HDWalletError(result);
+          checkLength(pubFromPrivFn(privPtr, curve, pubPtr, 65), expectedLen);
+          return readBytes(wasm, pubPtr, expectedLen);
         } finally {
           wasm._hd_secure_wipe(privPtr, privateKey.length);
           wasm._hd_dealloc(privPtr);
@@ -1637,13 +1703,10 @@ function createModule(wasm) {
         const inPtr = allocAndCopy(wasm, publicKey);
         const outPtr = wasm._hd_alloc(97);
         try {
-          const result = decompressFn(inPtr, curve, outPtr, 97);
-          if (result < 0) throw new HDWalletError(result);
+          // Status export: 0 on success (secp256k1 only), -Error otherwise.
+          checkResult(decompressFn(inPtr, curve, outPtr, 97));
           const expectedLen = curve === Curve.P384 ? 97 : 65;
-          if (result === 0 || result === expectedLen) {
-            return readBytes(wasm, outPtr, expectedLen);
-          }
-          throw new HDWalletError(result);
+          return readBytes(wasm, outPtr, expectedLen);
         } finally {
           wasm._hd_dealloc(inPtr);
           wasm._hd_dealloc(outPtr);
@@ -1670,10 +1733,9 @@ function createModule(wasm) {
       const secretPtr = wasm._hd_alloc(secretSize);
       try {
         const result = ecdhFn(curve, privPtr, privateKey.length, pubPtr, publicKey.length, secretPtr, secretSize);
-        if (result < 0) throw new HDWalletError(ErrorCode.INTERNAL, 'ECDH key exchange failed');
-        // result is the actual secret length on success
-        const actualLen = result > 0 ? result : secretSize;
-        return readBytes(wasm, secretPtr, actualLen);
+        // Returns the secret length (the curve's field size); -1 on failure.
+        if (result !== secretSize) throw new HDWalletError(ErrorCode.INTERNAL, 'ECDH key exchange failed');
+        return readBytes(wasm, secretPtr, secretSize);
       } finally {
         wasm._hd_secure_wipe(privPtr, privateKey.length);
         wasm._hd_secure_wipe(secretPtr, secretSize);
@@ -1697,13 +1759,14 @@ function createModule(wasm) {
        * @returns {Uint8Array} 64-byte compact signature r||s
        */
       sign(message, privateKey) {
+        requireLength(privateKey, 32, ErrorCode.INVALID_PRIVATE_KEY, 'privateKey');
         const msgPtr = allocAndCopy(wasm, message);
         const keyPtr = allocAndCopy(wasm, privateKey);
         const sigPtr = wasm._hd_alloc(72);
         try {
-          const len = wasm._hd_secp256k1_sign(msgPtr, message.length, keyPtr, sigPtr, 72);
-          if (len < 0) throw new HDWalletError(len);
-          return readBytes(wasm, sigPtr, len);
+          // Returns 64 (compact r||s); a private key outside 0 < d < n fails.
+          checkLength(wasm._hd_secp256k1_sign(msgPtr, message.length, keyPtr, sigPtr, 72), 64);
+          return readBytes(wasm, sigPtr, 64);
         } finally {
           wasm._hd_secure_wipe(keyPtr, 32);
           wasm._hd_dealloc(msgPtr);
@@ -1722,17 +1785,19 @@ function createModule(wasm) {
        */
       signRecoverable(message, privateKey) {
         const signRecoverableFn = requireWasmFunction(wasm, '_hd_secp256k1_sign_recoverable');
+        requireLength(message, 32, ErrorCode.INVALID_ARGUMENT, 'message hash');
+        requireLength(privateKey, 32, ErrorCode.INVALID_PRIVATE_KEY, 'privateKey');
         const msgPtr = allocAndCopy(wasm, message);
         const keyPtr = allocAndCopy(wasm, privateKey);
         const sigPtr = wasm._hd_alloc(65);
         try {
           // C signature: int32_t hd_secp256k1_sign_recoverable(hash, hash_len, privkey, out_sig65)
-          // Returns 65 on success (bytes written), negative on error.
+          // Returns 65 on success (bytes written), -Error on failure.
           // out_sig65 = r[32] + s[32] + v[1], recovery ID is at byte[64].
-          const result = signRecoverableFn(msgPtr, message.length, keyPtr, sigPtr);
-          if (result < 0) throw new HDWalletError(result);
-          const signature = readBytes(wasm, sigPtr, 64);
+          checkLength(signRecoverableFn(msgPtr, message.length, keyPtr, sigPtr), 65);
           const recoveryId = wasm.HEAPU8[sigPtr + 64];
+          if (recoveryId > 3) throw new HDWalletError(ErrorCode.INVALID_SIGNATURE);
+          const signature = readBytes(wasm, sigPtr, 64);
           return { signature, recoveryId };
         } finally {
           wasm._hd_secure_wipe(keyPtr, 32);
@@ -1774,6 +1839,11 @@ function createModule(wasm) {
        */
       recover(message, signature, recoveryId) {
         const recoverFn = requireWasmFunction(wasm, '_hd_secp256k1_recover');
+        requireLength(message, 32, ErrorCode.INVALID_ARGUMENT, 'message hash');
+        requireLength(signature, 64, ErrorCode.INVALID_SIGNATURE, 'signature');
+        if (!Number.isInteger(recoveryId) || recoveryId < 0 || recoveryId > 3) {
+          throw new HDWalletError(ErrorCode.INVALID_SIGNATURE, 'recoveryId must be 0, 1, 2 or 3');
+        }
         const msgPtr = allocAndCopy(wasm, message);
         // Build 65-byte sig buffer: r[32] + s[32] + v[1]
         // C signature: int32_t hd_secp256k1_recover(hash, hash_len, sig65, out_pubkey33)
@@ -1783,8 +1853,9 @@ function createModule(wasm) {
         const sigPtr = allocAndCopy(wasm, sig65);
         const pubPtr = wasm._hd_alloc(33);
         try {
-          const result = recoverFn(msgPtr, message.length, sigPtr, pubPtr);
-          if (result < 0) throw new HDWalletError(result);
+          // Returns 33 on success; a signature no key recovers from (ids 2
+          // and 3 when r + n >= p included) fails, so this throws.
+          checkLength(recoverFn(msgPtr, message.length, sigPtr, pubPtr), 33);
           return readBytes(wasm, pubPtr, 33);
         } finally {
           wasm._hd_dealloc(msgPtr);
@@ -1800,12 +1871,12 @@ function createModule(wasm) {
        * @returns {Uint8Array} Shared secret
        */
       ecdh(privateKey, publicKey) {
+        requireLength(privateKey, 32, ErrorCode.INVALID_PRIVATE_KEY, 'privateKey');
         const privPtr = allocAndCopy(wasm, privateKey);
         const pubPtr = allocAndCopy(wasm, publicKey);
         const secretPtr = wasm._hd_alloc(32);
         try {
-          const result = wasm._hd_ecdh_secp256k1(privPtr, pubPtr, publicKey.length, secretPtr, 32);
-          if (result < 0) throw new HDWalletError(result);
+          checkLength(wasm._hd_ecdh_secp256k1(privPtr, pubPtr, publicKey.length, secretPtr, 32), 32);
           return readBytes(wasm, secretPtr, 32);
         } finally {
           wasm._hd_secure_wipe(privPtr, 32);
@@ -1827,11 +1898,11 @@ function createModule(wasm) {
        * @returns {Uint8Array} 32-byte public key
        */
       publicKeyFromSeed(seed) {
+        requireLength(seed, 32, ErrorCode.INVALID_PRIVATE_KEY, 'seed');
         const seedPtr = allocAndCopy(wasm, seed);
         const pubPtr = wasm._hd_alloc(32);
         try {
-          const result = wasm._hd_ed25519_pubkey_from_seed(seedPtr, pubPtr, 32);
-          if (result < 0) throw new HDWalletError(result);
+          checkResult(wasm._hd_ed25519_pubkey_from_seed(seedPtr, pubPtr, 32));
           return readBytes(wasm, pubPtr, 32);
         } finally {
           wasm._hd_secure_wipe(seedPtr, 32);
@@ -1847,12 +1918,12 @@ function createModule(wasm) {
        * @returns {Uint8Array} 64-byte signature
        */
       sign(message, privateKey) {
+        requireLength(privateKey, 32, ErrorCode.INVALID_PRIVATE_KEY, 'privateKey');
         const msgPtr = allocAndCopy(wasm, message);
         const keyPtr = allocAndCopy(wasm, privateKey);
         const sigPtr = wasm._hd_alloc(64);
         try {
-          const len = wasm._hd_ed25519_sign(msgPtr, message.length, keyPtr, sigPtr, 64);
-          if (len < 0) throw new HDWalletError(len);
+          checkLength(wasm._hd_ed25519_sign(msgPtr, message.length, keyPtr, sigPtr, 64), 64);
           return readBytes(wasm, sigPtr, 64);
         } finally {
           wasm._hd_secure_wipe(keyPtr, 32);
@@ -1896,13 +1967,13 @@ function createModule(wasm) {
        * @returns {Uint8Array} 64-byte compact signature r||s
        */
       sign(message, privateKey) {
+        requireLength(privateKey, 32, ErrorCode.INVALID_PRIVATE_KEY, 'privateKey');
         const msgPtr = allocAndCopy(wasm, message);
         const keyPtr = allocAndCopy(wasm, privateKey);
         const sigPtr = wasm._hd_alloc(72);
         try {
-          const len = wasm._hd_p256_sign(msgPtr, message.length, keyPtr, sigPtr, 72);
-          if (len < 0) throw new HDWalletError(len);
-          return readBytes(wasm, sigPtr, len);
+          checkLength(wasm._hd_p256_sign(msgPtr, message.length, keyPtr, sigPtr, 72), 64);
+          return readBytes(wasm, sigPtr, 64);
         } finally {
           wasm._hd_secure_wipe(keyPtr, 32);
           wasm._hd_dealloc(msgPtr);
@@ -1934,12 +2005,12 @@ function createModule(wasm) {
       },
 
       ecdh(privateKey, publicKey) {
+        requireLength(privateKey, 32, ErrorCode.INVALID_PRIVATE_KEY, 'privateKey');
         const privPtr = allocAndCopy(wasm, privateKey);
         const pubPtr = allocAndCopy(wasm, publicKey);
         const secretPtr = wasm._hd_alloc(32);
         try {
-          const result = wasm._hd_ecdh_p256(privPtr, pubPtr, publicKey.length, secretPtr, 32);
-          if (result < 0) throw new HDWalletError(result);
+          checkLength(wasm._hd_ecdh_p256(privPtr, pubPtr, publicKey.length, secretPtr, 32), 32);
           return readBytes(wasm, secretPtr, 32);
         } finally {
           wasm._hd_secure_wipe(privPtr, 32);
@@ -1963,13 +2034,13 @@ function createModule(wasm) {
        * @returns {Uint8Array} 96-byte compact signature r||s
        */
       sign(message, privateKey) {
+        requireLength(privateKey, 48, ErrorCode.INVALID_PRIVATE_KEY, 'privateKey');
         const msgPtr = allocAndCopy(wasm, message);
         const keyPtr = allocAndCopy(wasm, privateKey);
         const sigPtr = wasm._hd_alloc(104);
         try {
-          const len = wasm._hd_p384_sign(msgPtr, message.length, keyPtr, sigPtr, 104);
-          if (len < 0) throw new HDWalletError(len);
-          return readBytes(wasm, sigPtr, len);
+          checkLength(wasm._hd_p384_sign(msgPtr, message.length, keyPtr, sigPtr, 104), 96);
+          return readBytes(wasm, sigPtr, 96);
         } finally {
           wasm._hd_secure_wipe(keyPtr, 48);
           wasm._hd_dealloc(msgPtr);
@@ -2001,12 +2072,12 @@ function createModule(wasm) {
       },
 
       ecdh(privateKey, publicKey) {
+        requireLength(privateKey, 48, ErrorCode.INVALID_PRIVATE_KEY, 'privateKey');
         const privPtr = allocAndCopy(wasm, privateKey);
         const pubPtr = allocAndCopy(wasm, publicKey);
         const secretPtr = wasm._hd_alloc(48);
         try {
-          const result = wasm._hd_ecdh_p384(privPtr, pubPtr, publicKey.length, secretPtr, 48);
-          if (result < 0) throw new HDWalletError(result);
+          checkLength(wasm._hd_ecdh_p384(privPtr, pubPtr, publicKey.length, secretPtr, 48), 48);
           return readBytes(wasm, secretPtr, 48);
         } finally {
           wasm._hd_secure_wipe(privPtr, 48);
@@ -2028,11 +2099,11 @@ function createModule(wasm) {
        * @returns {Uint8Array} 32-byte public key
        */
       publicKey(privateKey) {
+        requireLength(privateKey, 32, ErrorCode.INVALID_PRIVATE_KEY, 'privateKey');
         const privPtr = allocAndCopy(wasm, privateKey);
         const pubPtr = wasm._hd_alloc(32);
         try {
-          const result = wasm._hd_x25519_pubkey(privPtr, pubPtr, 32);
-          if (result < 0) throw new HDWalletError(result);
+          checkResult(wasm._hd_x25519_pubkey(privPtr, pubPtr, 32));
           return readBytes(wasm, pubPtr, 32);
         } finally {
           wasm._hd_secure_wipe(privPtr, 32);
@@ -2048,12 +2119,13 @@ function createModule(wasm) {
        * @returns {Uint8Array} 32-byte shared secret
        */
       ecdh(privateKey, publicKey) {
+        requireLength(privateKey, 32, ErrorCode.INVALID_PRIVATE_KEY, 'privateKey');
+        requireLength(publicKey, 32, ErrorCode.INVALID_PUBLIC_KEY, 'publicKey');
         const privPtr = allocAndCopy(wasm, privateKey);
         const pubPtr = allocAndCopy(wasm, publicKey);
         const secretPtr = wasm._hd_alloc(32);
         try {
-          const result = wasm._hd_ecdh_x25519(privPtr, pubPtr, secretPtr, 32);
-          if (result < 0) throw new HDWalletError(result);
+          checkResult(wasm._hd_ecdh_x25519(privPtr, pubPtr, secretPtr, 32));
           return readBytes(wasm, secretPtr, 32);
         } finally {
           wasm._hd_secure_wipe(privPtr, 32);
@@ -2137,7 +2209,7 @@ function createModule(wasm) {
       try {
         const result = fn(coinType, msgPtr, message.length, keyPtr, sigPtr, sigLenPtr);
         checkResult(result);
-        const actualLen = wasm.getValue(sigLenPtr, 'i32');
+        const actualLen = checkLengthWithin(wasm.getValue(sigLenPtr, 'i32'), 1, maxSigLen);
         return readBytes(wasm, sigPtr, actualLen);
       } finally {
         wasm._hd_secure_wipe(keyPtr, privateKey.length);
@@ -2395,44 +2467,43 @@ function createModule(wasm) {
               try {
                 wasm.setValue(hashLenPtr, 32, 'i32');
                 const decResult = decodeFn(addrPtr, typePtr, hashPtr, hashLenPtr, networkPtr);
-                if (decResult === 0) {
-                  const addrType = wasm.getValue(typePtr, 'i32');
-                  const hashLen = wasm.getValue(hashLenPtr, 'i32');
-                  // P2WPKH = 2, P2PKH = 0
-                  if (addrType === 2 && addP2wpkhFn) {
-                    const result = addP2wpkhFn(this._handle, BigInt(amount), hashPtr);
-                    checkResult(result);
-                    return this;
-                  } else if (addrType === 0 && addP2pkhFn) {
-                    const result = addP2pkhFn(this._handle, BigInt(amount), hashPtr);
-                    checkResult(result);
-                    return this;
-                  }
-                  // For other types, build script manually
-                  const hash = readBytes(wasm, hashPtr, hashLen);
-                  let script;
-                  if (addrType === 2) { // P2WPKH: OP_0 <20-byte-hash>
-                    script = new Uint8Array([0x00, 0x14, ...hash]);
-                  } else if (addrType === 0) { // P2PKH: OP_DUP OP_HASH160 <20> <hash> OP_EQUALVERIFY OP_CHECKSIG
-                    script = new Uint8Array([0x76, 0xa9, 0x14, ...hash, 0x88, 0xac]);
-                  } else if (addrType === 1) { // P2SH: OP_HASH160 <20> <hash> OP_EQUAL
-                    script = new Uint8Array([0xa9, 0x14, ...hash, 0x87]);
-                  } else if (addrType === 3) { // P2WSH: OP_0 <32-byte-hash>
-                    script = new Uint8Array([0x00, 0x20, ...hash]);
-                  } else if (addrType === 4) { // P2TR: OP_1 <32-byte-key>
-                    script = new Uint8Array([0x51, 0x20, ...hash]);
-                  } else {
-                    throw new HDWalletError(ErrorCode.INVALID_ARGUMENT, 'Unsupported address type');
-                  }
-                  const scriptPtr = allocAndCopy(wasm, script);
-                  try {
-                    const result = addOutputFn(this._handle, BigInt(amount), scriptPtr, script.length);
-                    checkResult(result);
-                  } finally {
-                    wasm._hd_dealloc(scriptPtr);
-                  }
+                checkResult(decResult);
+                const addrType = wasm.getValue(typePtr, 'i32');
+                const hashLen = wasm.getValue(hashLenPtr, 'i32');
+                // P2WPKH = 2, P2PKH = 0
+                if (addrType === 2 && addP2wpkhFn) {
+                  const result = addP2wpkhFn(this._handle, BigInt(amount), hashPtr);
+                  checkResult(result);
+                  return this;
+                } else if (addrType === 0 && addP2pkhFn) {
+                  const result = addP2pkhFn(this._handle, BigInt(amount), hashPtr);
+                  checkResult(result);
                   return this;
                 }
+                // For other types, build script manually
+                const hash = readBytes(wasm, hashPtr, hashLen);
+                let script;
+                if (addrType === 2) { // P2WPKH: OP_0 <20-byte-hash>
+                  script = new Uint8Array([0x00, 0x14, ...hash]);
+                } else if (addrType === 0) { // P2PKH: OP_DUP OP_HASH160 <20> <hash> OP_EQUALVERIFY OP_CHECKSIG
+                  script = new Uint8Array([0x76, 0xa9, 0x14, ...hash, 0x88, 0xac]);
+                } else if (addrType === 1) { // P2SH: OP_HASH160 <20> <hash> OP_EQUAL
+                  script = new Uint8Array([0xa9, 0x14, ...hash, 0x87]);
+                } else if (addrType === 3) { // P2WSH: OP_0 <32-byte-hash>
+                  script = new Uint8Array([0x00, 0x20, ...hash]);
+                } else if (addrType === 4) { // P2TR: OP_1 <32-byte-key>
+                  script = new Uint8Array([0x51, 0x20, ...hash]);
+                } else {
+                  throw new HDWalletError(ErrorCode.INVALID_ARGUMENT, 'Unsupported address type');
+                }
+                const scriptPtr = allocAndCopy(wasm, script);
+                try {
+                  const result = addOutputFn(this._handle, BigInt(amount), scriptPtr, script.length);
+                  checkResult(result);
+                } finally {
+                  wasm._hd_dealloc(scriptPtr);
+                }
+                return this;
               } finally {
                 wasm._hd_dealloc(addrPtr);
                 wasm._hd_dealloc(typePtr);
@@ -2468,7 +2539,7 @@ function createModule(wasm) {
               wasm.setValue(sizePtr, 65536, 'i32');
               const result = serializeFn(this._handle, outPtr, 65536, sizePtr);
               checkResult(result);
-              const size = wasm.getValue(sizePtr, 'i32');
+              const size = checkLengthWithin(wasm.getValue(sizePtr, 'i32'), 1, 65536);
               return readBytes(wasm, outPtr, size);
             } finally {
               wasm._hd_dealloc(outPtr);
@@ -2650,8 +2721,7 @@ function createModule(wasm) {
         const dPtr = allocAndCopy(wasm, d);
         const hPtr = wasm._hd_alloc(32);
         try {
-          const r = wasm._hd_hash_keccak256(dPtr, d.length, hPtr, 32);
-          if (r < 0) throw new HDWalletError(r);
+          checkLength(wasm._hd_hash_keccak256(dPtr, d.length, hPtr, 32), 32);
           return readBytes(wasm, hPtr, 32);
         } finally {
           wasm._hd_dealloc(dPtr);
@@ -2834,7 +2904,7 @@ function createModule(wasm) {
               wasm.setValue(sizePtr, 65536, 'i32');
               const result = serializeFn(this._handle, outPtr, 65536, sizePtr);
               checkResult(result);
-              const size = wasm.getValue(sizePtr, 'i32');
+              const size = checkLengthWithin(wasm.getValue(sizePtr, 'i32'), 1, 65536);
               return readBytes(wasm, outPtr, size);
             } finally {
               wasm._hd_dealloc(outPtr);
@@ -2873,36 +2943,43 @@ function createModule(wasm) {
         );
         if (!handle) throw new HDWalletError(ErrorCode.NOT_SUPPORTED);
 
-        // Set remaining fields
-        const setNonceFn = requireWasmFunction(wasm, '_hd_eth_tx_set_nonce');
-        setNonceFn(handle, BigInt(params.nonce || 0));
+        try {
+          // Set remaining fields
+          const setNonceFn = requireWasmFunction(wasm, '_hd_eth_tx_set_nonce');
+          setNonceFn(handle, BigInt(params.nonce || 0));
 
-        const setGasLimitFn = requireWasmFunction(wasm, '_hd_eth_tx_set_gas_limit');
-        setGasLimitFn(handle, BigInt(params.gasLimit));
+          const setGasLimitFn = requireWasmFunction(wasm, '_hd_eth_tx_set_gas_limit');
+          setGasLimitFn(handle, BigInt(params.gasLimit));
 
-        if (params.to) {
-          const setToFn = requireWasmFunction(wasm, '_hd_eth_tx_set_to_hex');
-          const toPtr = allocString(wasm, params.to);
-          try {
-            setToFn(handle, toPtr);
-          } finally {
-            wasm._hd_dealloc(toPtr);
+          if (params.to) {
+            const setToFn = requireWasmFunction(wasm, '_hd_eth_tx_set_to_hex');
+            const toPtr = allocString(wasm, params.to);
+            try {
+              // An address that does not parse fails here instead of leaving
+              // the transaction without a recipient (a contract creation).
+              checkResult(setToFn(handle, toPtr));
+            } finally {
+              wasm._hd_dealloc(toPtr);
+            }
           }
-        }
 
-        if (params.value !== undefined) {
-          const setValueFn = requireWasmFunction(wasm, '_hd_eth_tx_set_value');
-          setValueFn(handle, BigInt(params.value));
-        }
-
-        if (params.data) {
-          const setDataFn = requireWasmFunction(wasm, '_hd_eth_tx_set_data');
-          const dataPtr = allocAndCopy(wasm, params.data);
-          try {
-            setDataFn(handle, dataPtr, params.data.length);
-          } finally {
-            wasm._hd_dealloc(dataPtr);
+          if (params.value !== undefined) {
+            const setValueFn = requireWasmFunction(wasm, '_hd_eth_tx_set_value');
+            setValueFn(handle, BigInt(params.value));
           }
+
+          if (params.data) {
+            const setDataFn = requireWasmFunction(wasm, '_hd_eth_tx_set_data');
+            const dataPtr = allocAndCopy(wasm, params.data);
+            try {
+              setDataFn(handle, dataPtr, params.data.length);
+            } finally {
+              wasm._hd_dealloc(dataPtr);
+            }
+          }
+        } catch (error) {
+          requireWasmFunction(wasm, '_hd_eth_tx_destroy')(handle);
+          throw error;
         }
 
         return this._makeTxObj(handle);
@@ -3590,8 +3667,7 @@ function createModule(wasm) {
       const dataPtr = allocAndCopy(wasm, data);
       const hashPtr = wasm._hd_alloc(32);
       try {
-        const result = wasm._hd_hash_sha256(dataPtr, data.length, hashPtr, 32);
-        if (result < 0) throw new HDWalletError(result);
+        checkLength(wasm._hd_hash_sha256(dataPtr, data.length, hashPtr, 32), 32);
         return readBytes(wasm, hashPtr, 32);
       } finally {
         wasm._hd_dealloc(dataPtr);
@@ -3603,8 +3679,7 @@ function createModule(wasm) {
       const dataPtr = allocAndCopy(wasm, data);
       const hashPtr = wasm._hd_alloc(64);
       try {
-        const result = wasm._hd_hash_sha512(dataPtr, data.length, hashPtr, 64);
-        if (result < 0) throw new HDWalletError(result);
+        checkLength(wasm._hd_hash_sha512(dataPtr, data.length, hashPtr, 64), 64);
         return readBytes(wasm, hashPtr, 64);
       } finally {
         wasm._hd_dealloc(dataPtr);
@@ -3616,8 +3691,7 @@ function createModule(wasm) {
       const dataPtr = allocAndCopy(wasm, data);
       const hashPtr = wasm._hd_alloc(32);
       try {
-        const result = wasm._hd_hash_keccak256(dataPtr, data.length, hashPtr, 32);
-        if (result < 0) throw new HDWalletError(result);
+        checkLength(wasm._hd_hash_keccak256(dataPtr, data.length, hashPtr, 32), 32);
         return readBytes(wasm, hashPtr, 32);
       } finally {
         wasm._hd_dealloc(dataPtr);
@@ -3629,8 +3703,7 @@ function createModule(wasm) {
       const dataPtr = allocAndCopy(wasm, data);
       const hashPtr = wasm._hd_alloc(20);
       try {
-        const result = wasm._hd_hash_ripemd160(dataPtr, data.length, hashPtr, 20);
-        if (result < 0) throw new HDWalletError(result);
+        checkLength(wasm._hd_hash_ripemd160(dataPtr, data.length, hashPtr, 20), 20);
         return readBytes(wasm, hashPtr, 20);
       } finally {
         wasm._hd_dealloc(dataPtr);
@@ -3642,8 +3715,7 @@ function createModule(wasm) {
       const dataPtr = allocAndCopy(wasm, data);
       const hashPtr = wasm._hd_alloc(20);
       try {
-        const result = wasm._hd_hash_hash160(dataPtr, data.length, hashPtr, 20);
-        if (result < 0) throw new HDWalletError(result);
+        checkLength(wasm._hd_hash_hash160(dataPtr, data.length, hashPtr, 20), 20);
         return readBytes(wasm, hashPtr, 20);
       } finally {
         wasm._hd_dealloc(dataPtr);
@@ -3655,8 +3727,7 @@ function createModule(wasm) {
       const dataPtr = allocAndCopy(wasm, data);
       const hashPtr = wasm._hd_alloc(64);
       try {
-        const result = wasm._hd_hash_blake2b(dataPtr, data.length, hashPtr, 64, outputLength);
-        if (result < 0) throw new HDWalletError(result);
+        checkLength(wasm._hd_hash_blake2b(dataPtr, data.length, hashPtr, 64, outputLength), outputLength);
         return readBytes(wasm, hashPtr, outputLength);
       } finally {
         wasm._hd_dealloc(dataPtr);
@@ -3668,8 +3739,7 @@ function createModule(wasm) {
       const dataPtr = allocAndCopy(wasm, data);
       const hashPtr = wasm._hd_alloc(32);
       try {
-        const result = wasm._hd_hash_blake2s(dataPtr, data.length, hashPtr, 32, outputLength);
-        if (result < 0) throw new HDWalletError(result);
+        checkLength(wasm._hd_hash_blake2s(dataPtr, data.length, hashPtr, 32, outputLength), outputLength);
         return readBytes(wasm, hashPtr, outputLength);
       } finally {
         wasm._hd_dealloc(dataPtr);
@@ -3684,8 +3754,7 @@ function createModule(wasm) {
       const infoPtr = allocAndCopy(wasm, info);
       const outPtr = wasm._hd_alloc(length);
       try {
-        const result = wasm._hd_kdf_hkdf(ikmPtr, ikm.length, saltPtr, salt.length, infoPtr, info.length, outPtr, length);
-        if (result < 0) throw new HDWalletError(result);
+        checkLength(wasm._hd_kdf_hkdf(ikmPtr, ikm.length, saltPtr, salt.length, infoPtr, info.length, outPtr, length), length);
         return readBytes(wasm, outPtr, length);
       } finally {
         wasm._hd_secure_wipe(ikmPtr, ikm.length);
@@ -3725,7 +3794,7 @@ function createModule(wasm) {
             aadPtr, aad.length,
             ctPtr, tagPtr
           );
-          if (result < 0) throw new HDWalletError(-result);
+          checkLength(result, plaintext.length);
 
           return {
             ciphertext: readBytes(wasm, ctPtr, plaintext.length),
@@ -3733,6 +3802,7 @@ function createModule(wasm) {
           };
         } finally {
           wasm._hd_secure_wipe(keyPtr, key.length);
+          wasm._hd_secure_wipe(ptPtr, plaintext.length);
           wasm._hd_dealloc(keyPtr);
           wasm._hd_dealloc(ptPtr);
           wasm._hd_dealloc(ivPtr);
@@ -3772,10 +3842,11 @@ function createModule(wasm) {
             aadPtr, aad.length,
             tagPtr, ptPtr
           );
-          if (result < 0) {
+          if (result !== ciphertext.length) {
+            const code = nativeErrorCode(result);
             throw new HDWalletError(
-              result === -2 ? ErrorCode.VERIFICATION_FAILED : -result,
-              result === -2 ? 'AES-GCM authentication failed' : undefined
+              code,
+              code === ErrorCode.VERIFICATION_FAILED ? 'AES-GCM authentication failed' : undefined
             );
           }
 
@@ -3787,6 +3858,7 @@ function createModule(wasm) {
           wasm._hd_dealloc(ivPtr);
           wasm._hd_dealloc(tagPtr);
           if (aadPtr) wasm._hd_dealloc(aadPtr);
+          wasm._hd_secure_wipe(ptPtr, ciphertext.length);
           wasm._hd_dealloc(ptPtr);
         }
       }
@@ -3821,8 +3893,7 @@ function createModule(wasm) {
       const saltPtr = allocAndCopy(wasm, salt);
       const outPtr = wasm._hd_alloc(length);
       try {
-        const result = wasm._hd_kdf_pbkdf2(pwdPtr, password.length, saltPtr, salt.length, iterations, outPtr, length);
-        if (result < 0) throw new HDWalletError(result);
+        checkLength(wasm._hd_kdf_pbkdf2(pwdPtr, password.length, saltPtr, salt.length, iterations, outPtr, length), length);
         return readBytes(wasm, outPtr, length);
       } finally {
         wasm._hd_secure_wipe(pwdPtr, password.length);
@@ -3837,8 +3908,7 @@ function createModule(wasm) {
       const saltPtr = allocAndCopy(wasm, salt);
       const outPtr = wasm._hd_alloc(length);
       try {
-        const result = wasm._hd_kdf_scrypt(pwdPtr, password.length, saltPtr, salt.length, BigInt(n), r, p, outPtr, length);
-        if (result < 0) throw new HDWalletError(result);
+        checkLength(wasm._hd_kdf_scrypt(pwdPtr, password.length, saltPtr, salt.length, BigInt(n), r, p, outPtr, length), length);
         return readBytes(wasm, outPtr, length);
       } finally {
         wasm._hd_secure_wipe(pwdPtr, password.length);
@@ -4295,18 +4365,21 @@ function createModule(wasm) {
       const encryptFn = requireWasmFunction(wasm, '_hd_ecies_encrypt');
       const overheadFn = requireWasmFunction(wasm, '_hd_ecies_overhead');
       const overhead = overheadFn(curveId);
+      if (!Number.isInteger(overhead) || overhead <= 0) {
+        throw new HDWalletError(ErrorCode.NOT_SUPPORTED, 'ECIES is not supported on this curve');
+      }
       const outSize = plaintext.length + overhead;
       const pubPtr = allocAndCopy(wasm, recipientPublicKey);
       const ptPtr = allocAndCopy(wasm, plaintext);
       const aadPtr = aad.length > 0 ? allocAndCopy(wasm, aad) : 0;
       const outPtr = wasm._hd_alloc(outSize);
       try {
-        const result = encryptFn(curveId, pubPtr, recipientPublicKey.length,
-          ptPtr, plaintext.length, aadPtr, aad.length, outPtr, outSize);
-        if (result < 0) throw new HDWalletError(-result);
+        const result = checkLength(encryptFn(curveId, pubPtr, recipientPublicKey.length,
+          ptPtr, plaintext.length, aadPtr, aad.length, outPtr, outSize), outSize);
         return readBytes(wasm, outPtr, result);
       } finally {
         wasm._hd_dealloc(pubPtr);
+        wasm._hd_secure_wipe(ptPtr, plaintext.length);
         wasm._hd_dealloc(ptPtr);
         if (aadPtr) wasm._hd_dealloc(aadPtr);
         wasm._hd_dealloc(outPtr);
@@ -4321,15 +4394,15 @@ function createModule(wasm) {
       const aadPtr = aad.length > 0 ? allocAndCopy(wasm, aad) : 0;
       const outPtr = wasm._hd_alloc(ciphertext.length);
       try {
-        const result = decryptFn(curveId, privPtr, recipientPrivateKey.length,
-          ctPtr, ciphertext.length, aadPtr, aad.length, outPtr, ciphertext.length);
-        if (result < 0) throw new HDWalletError(-result);
+        const result = checkLengthWithin(decryptFn(curveId, privPtr, recipientPrivateKey.length,
+          ctPtr, ciphertext.length, aadPtr, aad.length, outPtr, ciphertext.length), 0, ciphertext.length);
         return readBytes(wasm, outPtr, result);
       } finally {
         wasm._hd_secure_wipe(privPtr, recipientPrivateKey.length);
         wasm._hd_dealloc(privPtr);
         wasm._hd_dealloc(ctPtr);
         if (aadPtr) wasm._hd_dealloc(aadPtr);
+        wasm._hd_secure_wipe(outPtr, ciphertext.length);
         wasm._hd_dealloc(outPtr);
       }
     }
@@ -4347,11 +4420,11 @@ function createModule(wasm) {
       const ivPtr = allocAndCopy(wasm, iv);
       const outPtr = wasm._hd_alloc(plaintext.length);
       try {
-        const result = encryptFn(keyPtr, key.length, ptPtr, plaintext.length, ivPtr, iv.length, outPtr, plaintext.length);
-        if (result < 0) throw new HDWalletError(-result);
+        checkLength(encryptFn(keyPtr, key.length, ptPtr, plaintext.length, ivPtr, iv.length, outPtr, plaintext.length), plaintext.length);
         return readBytes(wasm, outPtr, plaintext.length);
       } finally {
         wasm._hd_secure_wipe(keyPtr, key.length);
+        wasm._hd_secure_wipe(ptPtr, plaintext.length);
         wasm._hd_dealloc(keyPtr);
         wasm._hd_dealloc(ptPtr);
         wasm._hd_dealloc(ivPtr);
@@ -4366,14 +4439,14 @@ function createModule(wasm) {
       const ivPtr = allocAndCopy(wasm, iv);
       const outPtr = wasm._hd_alloc(ciphertext.length);
       try {
-        const result = decryptFn(keyPtr, key.length, ctPtr, ciphertext.length, ivPtr, iv.length, outPtr, ciphertext.length);
-        if (result < 0) throw new HDWalletError(-result);
+        checkLength(decryptFn(keyPtr, key.length, ctPtr, ciphertext.length, ivPtr, iv.length, outPtr, ciphertext.length), ciphertext.length);
         return readBytes(wasm, outPtr, ciphertext.length);
       } finally {
         wasm._hd_secure_wipe(keyPtr, key.length);
         wasm._hd_dealloc(keyPtr);
         wasm._hd_dealloc(ctPtr);
         wasm._hd_dealloc(ivPtr);
+        wasm._hd_secure_wipe(outPtr, ciphertext.length);
         wasm._hd_dealloc(outPtr);
       }
     }
@@ -4423,8 +4496,8 @@ function createModule(wasm) {
       const pubPtr = allocAndCopy(wasm, publicKey);
       const outPtr = wasm._hd_alloc(64);
       try {
-        const result = wasm._hd_libp2p_peer_id(pubPtr, publicKey.length, curve, outPtr, 64);
-        if (result < 0) throw new HDWalletError(result);
+        const result = checkLengthWithin(
+          wasm._hd_libp2p_peer_id(pubPtr, publicKey.length, curve, outPtr, 64), 1, 64);
         return readBytes(wasm, outPtr, result);
       } finally {
         wasm._hd_dealloc(pubPtr);

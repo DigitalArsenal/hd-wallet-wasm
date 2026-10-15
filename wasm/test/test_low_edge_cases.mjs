@@ -201,14 +201,17 @@ test('L3: P-256 ECDH returns 32 bytes (shared secret length check)', () => {
   const privateKey = new Uint8Array(32);
   privateKey[31] = 1;
 
-  // Use known P-256 generator point (uncompressed) as the "other" public key
+  // The P-256 point 2G (uncompressed) as the "other" public key; with d = 1
+  // the shared secret is its x-coordinate. (Before 2.1.1 the y here was wrong,
+  // so the point was off the curve and the wrapper returned heap bytes.)
   const otherPub = hexToBytes(
     '047cf27b188d034f7e8a52380304b51ac3c08969e277f21b35a60b48fc47669978' +
-    'e9e29ceab0ae25e5e8965bdb60e24d57ac6e68026fa7cdb0fbec85a37a03f3b8'
+    '07775510db8ed040293d9ac69f7430dbba7dade63ce982299e04b79d227873d1'
   );
 
   const shared = wallet.curves.p256.ecdh(privateKey, otherPub);
   assertEqual(shared.length, 32, 'P-256 ECDH should return 32 bytes');
+  assertEqual(bytesToHex(shared), bytesToHex(otherPub.slice(1, 33)), 'P-256 ECDH with d = 1 should return 2G.x');
 });
 
 test('L3: P-256 ECDH mutual agreement (Alice and Bob compute same secret)', () => {

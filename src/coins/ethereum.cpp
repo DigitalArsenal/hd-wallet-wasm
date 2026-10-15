@@ -622,14 +622,14 @@ int32_t hd_eth_verify_message(
   const char* address
 ) {
   if (!message || !signature || signature_len != 65 || !address) {
-    return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+    return -static_cast<int32_t>(Error::INVALID_ARGUMENT);
   }
 
   std::string msg(reinterpret_cast<const char*>(message), message_len);
   ByteVector sig(signature, signature + signature_len);
 
   auto result = verifyEIP191Message(msg, sig, address);
-  if (!result.ok()) return static_cast<int32_t>(result.error);
+  if (!result.ok()) return -static_cast<int32_t>(result.error);
 
   return result.value ? 1 : 0;
 }

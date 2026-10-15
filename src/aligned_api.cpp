@@ -10,6 +10,7 @@
 #include "hd_wallet/bip32.h"
 #include "hd_wallet/ecdsa.h"
 #include "hd_wallet/eddsa.h"
+#include "hd_wallet/secure_memory.h"
 
 #include <algorithm>
 #include <cstring>
@@ -238,8 +239,10 @@ int32_t hd_aligned_derive_batch(
     aligned::DerivedKeyEntry* results,
     uint32_t results_capacity
 ) {
+    // Count-returning: failure is -Error, never a positive code that could be
+    // read as a count.
     if (!request) {
-        return static_cast<int32_t>(hd_wallet::Error::INVALID_ARGUMENT);
+        return -static_cast<int32_t>(hd_wallet::Error::INVALID_ARGUMENT);
     }
 
     // Zero count is a valid request: derive zero keys, return zero.
@@ -248,7 +251,7 @@ int32_t hd_aligned_derive_batch(
     }
 
     if (!results || results_capacity == 0) {
-        return static_cast<int32_t>(hd_wallet::Error::INVALID_ARGUMENT);
+        return -static_cast<int32_t>(hd_wallet::Error::INVALID_ARGUMENT);
     }
 
     uint32_t count = std::min(request->count, results_capacity);
@@ -317,11 +320,18 @@ int32_t hd_aligned_sign_batch(
     aligned::SignatureEntry* results,
     uint32_t results_capacity
 ) {
-    if (!request || !hashes || !results || results_capacity == 0) {
-        return static_cast<int32_t>(hd_wallet::Error::INVALID_ARGUMENT);
+    if (!request) {
+        return -static_cast<int32_t>(hd_wallet::Error::INVALID_ARGUMENT);
     }
 
     uint32_t count = std::min({request->count, hashes_count, results_capacity});
+    // Zero count is a valid request: sign nothing, return zero.
+    if (count == 0) {
+        return 0;
+    }
+    if (!hashes || !results) {
+        return -static_cast<int32_t>(hd_wallet::Error::INVALID_ARGUMENT);
+    }
     hd_wallet::Curve curve = fromAlignedCurve(request->curve);
 
     // Extract private key
@@ -393,6 +403,7 @@ int32_t hd_aligned_sign_batch(
         }
     }
 
+    hd_wallet::secureWipe(privKey);
     return static_cast<int32_t>(count);
 }
 
@@ -408,11 +419,18 @@ int32_t hd_aligned_verify_batch(
     aligned::VerifyResultEntry* results,
     uint32_t results_capacity
 ) {
-    if (!request || !entries || !results || results_capacity == 0) {
-        return static_cast<int32_t>(hd_wallet::Error::INVALID_ARGUMENT);
+    if (!request) {
+        return -static_cast<int32_t>(hd_wallet::Error::INVALID_ARGUMENT);
     }
 
     uint32_t count = std::min({request->count, entries_count, results_capacity});
+    // Zero count is a valid request: verify nothing, return zero.
+    if (count == 0) {
+        return 0;
+    }
+    if (!entries || !results) {
+        return -static_cast<int32_t>(hd_wallet::Error::INVALID_ARGUMENT);
+    }
     hd_wallet::Curve curve = fromAlignedCurve(request->curve);
 
     // Extract public key
@@ -487,7 +505,7 @@ int32_t hd_aligned_stream_next(
 ) {
     auto* s = reinterpret_cast<StreamContext*>(stream);
     if (!s || !results || results_capacity == 0) {
-        return static_cast<int32_t>(hd_wallet::Error::INVALID_ARGUMENT);
+        return -static_cast<int32_t>(hd_wallet::Error::INVALID_ARGUMENT);
     }
 
     if (s->complete) {
@@ -547,7 +565,7 @@ int32_t hd_aligned_stream_status(
 ) {
     auto* s = reinterpret_cast<StreamContext*>(stream);
     if (!s || !status) {
-        return static_cast<int32_t>(hd_wallet::Error::INVALID_ARGUMENT);
+        return -static_cast<int32_t>(hd_wallet::Error::INVALID_ARGUMENT);
     }
 
     status->derived_count = s->currentIndex;
@@ -575,7 +593,7 @@ int32_t hd_aligned_from_extended_key(
     aligned::ExtendedKeyData* out
 ) {
     if (!key || !out) {
-        return static_cast<int32_t>(hd_wallet::Error::INVALID_ARGUMENT);
+        return -static_cast<int32_t>(hd_wallet::Error::INVALID_ARGUMENT);
     }
 
     auto* extKey = reinterpret_cast<bip32::ExtendedKey*>(key);
