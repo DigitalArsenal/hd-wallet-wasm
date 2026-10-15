@@ -560,6 +560,53 @@ function decodeBech32Fallback(str) {
 /** %TypedArray%.prototype.fill, captured at load (uses the internal length). */
 const TYPED_ARRAY_FILL = Object.getPrototypeOf(Uint8Array.prototype).fill;
 
+// Internal-slot getters, captured at load: they work on objects of any realm
+// and cannot be overridden by the object.
+const slotGetter = (prototype, name) => Object.getOwnPropertyDescriptor(prototype, name)?.get;
+const TYPED_ARRAY_SLOTS = ['buffer', 'byteOffset', 'byteLength']
+  .map((name) => slotGetter(Object.getPrototypeOf(Uint8Array.prototype), name));
+const DATA_VIEW_SLOTS = ['buffer', 'byteOffset', 'byteLength'].map((name) => slotGetter(DataView.prototype, name));
+const ARRAY_BUFFER_BYTE_LENGTH = slotGetter(ArrayBuffer.prototype, 'byteLength');
+const ARRAY_BUFFER_DETACHED = slotGetter(ArrayBuffer.prototype, 'detached');
+const SHARED_BUFFER_BYTE_LENGTH = typeof SharedArrayBuffer === 'function'
+  ? slotGetter(SharedArrayBuffer.prototype, 'byteLength')
+  : undefined;
+
+/**
+ * The bytes under binary data of any kind and realm: { buffer, offset,
+ * length, detached }, or null for anything that is not binary data.
+ */
+function binaryRegion(value) {
+  const read = (getters) => {
+    try {
+      const [buffer, offset, length] = getters.map((get) => get.call(value));
+      return { buffer, offset, length };
+    } catch {
+      return null;
+    }
+  };
+  let region = read(TYPED_ARRAY_SLOTS) ?? read(DATA_VIEW_SLOTS);
+  if (region === null) {
+    for (const byteLength of [ARRAY_BUFFER_BYTE_LENGTH, SHARED_BUFFER_BYTE_LENGTH]) {
+      if (!byteLength) continue;
+      try {
+        region = { buffer: value, offset: 0, length: byteLength.call(value) };
+        break;
+      } catch {
+        // Not that kind of buffer.
+      }
+    }
+  }
+  if (region === null) return null;
+  let detached = false;
+  try {
+    detached = ARRAY_BUFFER_DETACHED ? ARRAY_BUFFER_DETACHED.call(region.buffer) : false;
+  } catch {
+    detached = false;  // A SharedArrayBuffer cannot be detached.
+  }
+  return { ...region, detached };
+}
+
 /** The largest Ethereum chain ID (EIP-2294). */
 const ETH_MAX_CHAIN_ID = 9223372036854775771n;
 
@@ -4418,16 +4465,22 @@ function createModule(wasm) {
     },
 
     // Memory
+    /**
+     * Zero, in place, the bytes under any typed array, DataView, ArrayBuffer
+     * or SharedArrayBuffer (any realm), read from its internal slots, never
+     * from overridable properties. Throws INVALID_ARGUMENT for anything else
+     * and for a detached buffer (its bytes are no longer here to wipe).
+     */
     secureWipe(data) {
-      if (data instanceof Uint8Array) {
-        // Wipe in place, every byte the array really holds (the intrinsic
-        // fill, never the caller's `length` or an overridden fill).
-        try {
-          TYPED_ARRAY_FILL.call(data, 0);
-        } catch {
-          // Detached, or not really a typed array: nothing to wipe.
-        }
+      const region = binaryRegion(data);
+      if (region === null) {
+        throw new HDWalletError(ErrorCode.INVALID_ARGUMENT,
+          'secureWipe takes a typed array, DataView, ArrayBuffer or SharedArrayBuffer');
       }
+      if (region.detached) {
+        throw new HDWalletError(ErrorCode.INVALID_ARGUMENT, 'secureWipe: the buffer is detached');
+      }
+      TYPED_ARRAY_FILL.call(new Uint8Array(region.buffer, region.offset, region.length), 0);
     }
   };
 

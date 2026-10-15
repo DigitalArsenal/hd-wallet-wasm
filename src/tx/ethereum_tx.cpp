@@ -876,8 +876,11 @@ bool readByteString(const rlp::Item& item, ByteVector& out) {
 
 // Access lists are not parsed: only the empty list is accepted (a parsed
 // transaction that dropped its access list would sign a different transaction).
-bool readEmptyAccessList(const rlp::Item& item) {
-  return item.isList && item.payload.empty();
+// A byte string where the list goes is malformed; a non-empty list is
+// unsupported.
+Error readEmptyAccessList(const rlp::Item& item) {
+  if (!item.isList) return Error::INVALID_TRANSACTION;
+  return item.payload.empty() ? Error::OK : Error::NOT_SUPPORTED;
 }
 
 }  // namespace
@@ -916,7 +919,7 @@ Result<EthereumTransaction> EthereumTransaction::parse(const ByteVector& data) {
   // chain ID, nonce, gas and fees (uint64 here), 32 for value, r and s.
   uint64_t v = 0;
   bool ok = false;
-  bool accessListOk = true;
+  Error accessList = Error::OK;
   switch (tx.type_) {
     case EthTxType::LEGACY:
       ok = f.size() == 9 &&
@@ -935,7 +938,7 @@ Result<EthereumTransaction> EthereumTransaction::parse(const ByteVector& data) {
            readUint256(f[5], tx.value_) && readByteString(f[6], tx.data_) &&
            (f.size() == 8 ||
             (readUint64(f[8], v) && readUint256(f[9], tx.signatureR_) && readUint256(f[10], tx.signatureS_)));
-      accessListOk = ok && readEmptyAccessList(f[7]);
+      if (ok) accessList = readEmptyAccessList(f[7]);
       break;
     case EthTxType::EIP1559:
       ok = (f.size() == 12 || f.size() == 9) &&
@@ -945,14 +948,14 @@ Result<EthereumTransaction> EthereumTransaction::parse(const ByteVector& data) {
            readUint256(f[6], tx.value_) && readByteString(f[7], tx.data_) &&
            (f.size() == 9 ||
             (readUint64(f[9], v) && readUint256(f[10], tx.signatureR_) && readUint256(f[11], tx.signatureS_)));
-      accessListOk = ok && readEmptyAccessList(f[8]);
+      if (ok) accessList = readEmptyAccessList(f[8]);
       break;
   }
   if (!ok) {
     return R::fail(Error::INVALID_TRANSACTION);
   }
-  if (!accessListOk) {
-    return R::fail(Error::NOT_SUPPORTED);
+  if (accessList != Error::OK) {
+    return R::fail(accessList);
   }
   tx.hasNonce_ = true;
 

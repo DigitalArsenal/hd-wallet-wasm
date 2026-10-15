@@ -1102,3 +1102,17 @@ TEST_CASE(TxSigning, SolanaFindPdaChecksSeedCountAndLengths) {
             coins::hd_sol_find_pda(program.data(), seeds.data(), 17, lengths, 17, address, sizeof(address), &bump));
   ASSERT_EQ(0, coins::hd_sol_find_pda(program.data(), seeds.data(), 16, lengths, 16, address, sizeof(address), &bump));
 }
+
+TEST_CASE(TxSigning, EthParseAccessListForms) {
+  // ethers 6.13.4's unsigned EIP-1559 transaction, with its empty access list
+  // (c0) as a byte string (80) or as a non-empty list (c1 c0).
+  const std::string base =
+      "02f00109843b9aca008506fc23ac00825208943535353535353535353535353535353535353535880de0b6b3a764000080c0";
+  ASSERT_OK(tx::EthereumTransaction::parseHex(base));
+  std::string byteString = base;
+  byteString.replace(byteString.size() - 2, 2, "80");
+  ASSERT_ERROR(tx::EthereumTransaction::parseHex(byteString), Error::INVALID_TRANSACTION);
+  std::string nonEmpty = base.substr(0, base.size() - 2) + "c1c0";
+  nonEmpty.replace(2, 2, "f1");
+  ASSERT_ERROR(tx::EthereumTransaction::parseHex(nonEmpty), Error::NOT_SUPPORTED);
+}

@@ -10,6 +10,7 @@
 // validators refuse an array whose `length` is not its own. Each call below
 // must throw a library error or give exactly the result of an honest array.
 import init, { Curve, HDWalletError, X509Encoding } from '../src/index.mjs';
+import { runInNewContext } from 'node:vm';
 import { test, assert, assertEqual, bytesToHex, hexToBytes } from './test_all.mjs';
 
 const wallet = await init();
@@ -334,4 +335,74 @@ test('detached and non-Uint8Array inputs are the library\'s INVALID_ARGUMENT in 
     }
   }
   assertEqual(problems.join('\n'), '', 'refused with INVALID_ARGUMENT');
+});
+
+// ---------------------------------------------------------------------------
+// 2.1.2 (round 4): secureWipe takes any binary data; cross-realm arrays
+// ---------------------------------------------------------------------------
+
+test('utils.secureWipe zeroes any typed array, DataView or buffer (any realm) and throws on anything else', () => {
+  const problems = [];
+  const backing = new ArrayBuffer(16);
+  new Uint8Array(backing).fill(0xaa);
+  const wipeAndRead = (value, bytes) => {
+    try {
+      wallet.utils.secureWipe(value);
+    } catch (error) {
+      return `threw ${error.message}`;
+    }
+    return Array.from(bytes()).join(',');
+  };
+  const cases = [
+    ['Int16Array', () => new Int16Array(4).fill(-1), (v) => new Uint8Array(v.buffer)],
+    ['Float64Array', () => new Float64Array(2).fill(1.5), (v) => new Uint8Array(v.buffer)],
+    ['ArrayBuffer', () => new Uint8Array(8).fill(7).buffer, (v) => new Uint8Array(v)],
+    ['SharedArrayBuffer', () => { const b = new SharedArrayBuffer(8); new Uint8Array(b).fill(7); return b; }, (v) => new Uint8Array(v)],
+    ['cross-realm Uint8Array', () => runInNewContext('new Uint8Array([1, 2, 3, 4])'), (v) => Array.from(v)],
+    ['cross-realm ArrayBuffer', () => runInNewContext('new Uint8Array([1, 2, 3, 4]).buffer'), (v) => new Uint8Array(v)],
+  ];
+  for (const [name, make, bytes] of cases) {
+    const value = make();
+    const got = wipeAndRead(value, () => bytes(value));
+    if (!/^0(,0)*$/.test(got)) problems.push(`${name}: ${got}`);
+  }
+  // A DataView zeroes its own window and nothing else.
+  const view = new DataView(backing, 4, 8);
+  wallet.utils.secureWipe(view);
+  const all = Array.from(new Uint8Array(backing));
+  if (all.slice(4, 12).some((b) => b !== 0) || all.slice(0, 4).concat(all.slice(12)).some((b) => b !== 0xaa)) {
+    problems.push(`DataView window: ${all.join(',')}`);
+  }
+  // Not binary data, or detached: INVALID_ARGUMENT, never a silent no-op.
+  const detached = new Uint8Array(8);
+  structuredClone(detached.buffer, { transfer: [detached.buffer] });
+  for (const [name, value] of [['string', 'secret'], ['number', 1], ['object', {}], ['null', null],
+    ['array', [1, 2]], ['detached', detached]]) {
+    try {
+      wallet.utils.secureWipe(value);
+      problems.push(`${name}: returned`);
+    } catch (error) {
+      if (!(error instanceof HDWalletError) || error.code !== 2) problems.push(`${name}: ${error?.constructor?.name}`);
+    }
+  }
+  assertEqual(problems.join('\n'), '', 'secureWipe wipes or throws');
+});
+
+test('cross-realm Uint8Arrays are refused (hashes and X.509 included)', () => {
+  const foreign = runInNewContext('new Uint8Array(32).fill(1)');
+  const problems = [];
+  const calls = [['utils.sha256', () => wallet.utils.sha256(foreign)]];
+  if (wallet.x509.isAvailable()) {
+    calls.push(['x509.parseCertificate', () => wallet.x509.parseCertificate(foreign, X509Encoding.DER)]);
+    calls.push(['x509.exportPrivateKeyPem', () => wallet.x509.exportPrivateKeyPem(Curve.P256, foreign)]);
+  }
+  for (const [name, call] of calls) {
+    try {
+      call();
+      problems.push(`${name}: accepted`);
+    } catch (error) {
+      if (!(error instanceof HDWalletError)) problems.push(`${name}: ${error?.constructor?.name} ${error?.message}`);
+    }
+  }
+  assertEqual(problems.join('\n'), '', 'cross-realm arrays refused with a library error');
 });

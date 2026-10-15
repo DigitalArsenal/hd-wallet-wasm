@@ -41,9 +41,11 @@ in every family (all below).
   arguments), `libp2p.ipnsHash` / `ipnsHashBase32`, the aligned `signBatch` /
   `verifyBatch` arrays and entries, and `solana.findPDA`'s seed array (a Proxy
   could report 2 seeds, then 40). `utils.secureWipe` wiped only the claimed
-  length. A detached array threw a raw `TypeError`, and AES-GCM took a detached
-  AAD as empty. X.509 alone converted a `DataView`, an `ArrayBuffer` or another
-  typed array; every other family refused them.
+  length of a `Uint8Array` and silently did nothing for any other value (other
+  typed arrays, a `DataView`, an `ArrayBuffer`, an array from another realm). A
+  detached array threw a raw `TypeError`, and AES-GCM took a detached AAD as
+  empty. X.509 alone converted a `DataView`, an `ArrayBuffer`, another typed
+  array or a `Uint8Array` from another realm; every other family refused them.
 - **A Bitcoin output could pay a different script than its address encodes.**
   `bitcoin.tx.addOutput` (and the C++ `decodeToScriptPubKey`,
   `detectBitcoinAddressType`, `hd_btc_decode_address`) chose the output type
@@ -90,8 +92,11 @@ The fix:
   y-parity 0 or 1. The field count is exact: 9 for legacy; 11 for EIP-2930 and
   12 for EIP-1559 (signed, or unsigned with zero v, r, s) or 8 and 9 (the
   unsigned signing payload other libraries serialize). Anything else is
-  INVALID_TRANSACTION. A typed transaction with a non-empty access list is
-  NOT_SUPPORTED (access lists are not parsed; it used to parse without one).
+  INVALID_TRANSACTION, as is a byte string where the access list goes. A
+  typed transaction with a non-empty access list is NOT_SUPPORTED in C++
+  (access lists are not parsed; it used to parse without one); at the C ABI
+  `hd_eth_tx_parse` returns NULL for every refusal, so the JS
+  `ethereum.tx.parse` reports it as INVALID_TRANSACTION (500).
   Native and WASM tests check parse then sign of ethers 6.13.4's unsigned
   legacy, EIP-2930 and EIP-1559 transactions against ethers' signatures, and
   refuse ethers-encoded chain IDs of 2^64 + 1 and 2^64 + 137, 9-byte nonce, gas
@@ -103,23 +108,39 @@ The fix:
   Binary data must be a `Uint8Array` (Node `Buffer`s included) whose `length`
   is %TypedArray%.prototype's (no subclass getter and no own `length`
   property, so no read can answer differently), over a buffer that is attached
-  and cannot be resized; anything else, a detached array, a `DataView`, an
-  `ArrayBuffer` or another typed array included, is INVALID_ARGUMENT in every
-  family (X.509 no longer converts the latter: behaviour change). `allocAndCopy`
+  and cannot be resized, from this realm; anything else (a detached array, a
+  `DataView`, an `ArrayBuffer`, another typed array, a `Uint8Array` from
+  another realm such as a `vm` context or iframe) is refused in every family:
+  INVALID_ARGUMENT, or for a key or seed parameter that parameter's code
+  (INVALID_PRIVATE_KEY 400, INVALID_PUBLIC_KEY 401, INVALID_SEED 300). X.509 no
+  longer converts the other types or accepts another realm's arrays
+  (behaviour change), and its declarations (`BinaryLike`, the X.509
+  signatures in `index.d.ts`) say `Uint8Array`. `allocAndCopy`
   copies an input into a fresh `Uint8Array` from the array's own bytes and
   length (its internal slot), copies that into the heap, zeroes it and returns
   the pointer with that length; every call passes the returned length to native
   code, and outputs are sized from the array's own length, never from the
   caller's `length`. Inputs inside objects and arrays are read once into copies
   (`addInput`, `signDirect`, the IPNS hashes, the aligned batches,
-  `findPDA`'s seeds, the Ethereum builders' `params`); `secureWipe` zeroes every
-  byte the array holds. `hd_sol_find_pda` takes at most 16 seeds of at most 32
-  bytes whose lengths add up to `seeds_len` (INVALID_ARGUMENT otherwise). WASM
-  tests run liars (always, only after the first read, own property; longer and
-  shorter claims), Proxy arrays, changing getters, detached arrays and other
-  binary types through every family above: each is refused with a library
-  error or gives exactly the honest array's result, and the module still signs
-  and verifies after the overflow case.
+  `findPDA`'s seeds, the Ethereum builders' `params`). `utils.secureWipe`
+  zeroes, in place, every byte under any typed array, `DataView`,
+  `ArrayBuffer` or `SharedArrayBuffer` of any realm (read from internal slots)
+  and throws INVALID_ARGUMENT for anything else or a detached buffer, never a
+  silent no-op. `hd_sol_find_pda` takes at most 16 seeds of at most 32 bytes
+  whose lengths add up to `seeds_len` (INVALID_ARGUMENT otherwise). WASM tests
+  (`wasm/test/test_lying_lengths.mjs`): `length` liars (always, only after the
+  first read, own property; longer and shorter claims) through the hashes
+  (SHA-256/512, Keccak-256, RIPEMD-160, HASH160, BLAKE2b/s), HKDF, PBKDF2,
+  scrypt, AES-GCM and AES-CTR, ECIES (secp256k1), sign/verify/ECDH (secp256k1,
+  P-256, P-384), Ed25519 sign/verify, Ethereum parse and signing key, X.509
+  parsing, `cosmos.signDirect` (five arguments) and the IPNS hashes: each is
+  refused with a library error or gives exactly the honest array's result, and
+  the module still signs and verifies after the overflow case; a Proxy seed
+  array (`findPDA`) and a changing entry getter (`verifyBatch`); detached
+  arrays, `ArrayBuffer`, `DataView` and `Int8Array` through SHA-256, AES-GCM
+  plaintext and AAD, secp256k1 signing, Ethereum parsing and X.509 parsing
+  (INVALID_ARGUMENT); another realm's `Uint8Array` through SHA-256 and X.509;
+  and `secureWipe` on each binary kind and on non-binary values.
 - **SegWit addresses decoded by BIP-173/BIP-350.** One decoder
   (`coins::decodeSegwitAddress`) checks one case, at most 90 characters, the
   checksum variant the witness version requires (bech32 for v0, bech32m for

@@ -12,8 +12,16 @@
 // Import aligned API types
 import { AlignedAPI } from './aligned';
 
-export type BinaryLike = Uint8Array | ArrayBuffer | ArrayBufferView;
-export type X509CertificateInput = string | BinaryLike;
+/**
+ * Binary input to every wallet API: a Uint8Array (Node Buffers included) of
+ * this realm. A DataView, an ArrayBuffer, another typed array, a detached or
+ * cross-realm array is refused.
+ */
+export type BinaryLike = Uint8Array;
+/** A PEM string or its bytes, or DER bytes. */
+export type X509CertificateInput = string | Uint8Array;
+/** What an SDN plugin capability callback may return (it is copied to a Uint8Array). */
+export type PluginBinaryLike = Uint8Array | ArrayBuffer | ArrayBufferView;
 
 export interface SdnPluginTypeRef {
   schemaName: string | null;
@@ -113,7 +121,7 @@ export interface SdnPluginInvocationResult {
 }
 
 export interface SdnPluginCapabilities {
-  randomBytes?: (length: number, context?: Record<string, unknown>) => BinaryLike;
+  randomBytes?: (length: number, context?: Record<string, unknown>) => PluginBinaryLike;
   /**
    * Wallet-held signer for sign_detached. For secp256k1 it receives the message
    * (digest is null) and must return ECDSA over SHA-256(messageBytes), hashed once.
@@ -124,8 +132,8 @@ export interface SdnPluginCapabilities {
     messageBytes: Uint8Array;
     digest: Uint8Array | null;
   }) => {
-    signature: BinaryLike;
-    publicKey: BinaryLike;
+    signature: PluginBinaryLike;
+    publicKey: PluginBinaryLike;
     algorithm?: string;
   };
 }
@@ -1054,7 +1062,7 @@ export interface UtilsAPI {
 
 export interface X509WalletAttestationOptions {
   curve: Curve;
-  privateKey: BinaryLike;
+  privateKey: Uint8Array;
   keyLabel?: string;
   commentPrefix?: string;
 }
@@ -1100,22 +1108,22 @@ export interface X509Pkcs12Bundle {
 export interface X509API {
   isAvailable(): boolean;
   generatePrivateKey(curve: Curve): Uint8Array;
-  exportPrivateKeyPem(curve: Curve, privateKey: BinaryLike): string;
+  exportPrivateKeyPem(curve: Curve, privateKey: Uint8Array): string;
   importPrivateKeyPem(curve: Curve, pem: string): Uint8Array;
   createSelfSignedCertificate(
     options: X509CertificateOptions,
     certificateCurve: Curve,
-    certificatePrivateKey: BinaryLike,
+    certificatePrivateKey: Uint8Array,
     outputEncoding?: X509Encoding
   ): string | Uint8Array;
   issueCertificate(
     options: X509CertificateOptions,
     issuerCurve: Curve,
-    issuerPrivateKey: BinaryLike,
+    issuerPrivateKey: Uint8Array,
     issuerCertificate: X509CertificateInput,
     issuerCertificateEncoding: X509Encoding,
     subjectCurve: Curve,
-    subjectPrivateKey: BinaryLike,
+    subjectPrivateKey: Uint8Array,
     outputEncoding?: X509Encoding
   ): string | Uint8Array;
   convertCertificate(
@@ -1129,12 +1137,12 @@ export interface X509API {
     certificate: X509CertificateInput,
     certificateEncoding: X509Encoding,
     privateKeyCurve: Curve,
-    privateKey: BinaryLike,
+    privateKey: Uint8Array,
     password: string,
     friendlyName?: string,
     chainPem?: X509CertificateInput
   ): Uint8Array;
-  importPkcs12(pkcs12Bundle: BinaryLike, password: string): X509Pkcs12Bundle;
+  importPkcs12(pkcs12Bundle: Uint8Array, password: string): X509Pkcs12Bundle;
 }
 
 // =============================================================================
