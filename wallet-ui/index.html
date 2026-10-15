@@ -542,7 +542,7 @@ const walletProofValid = wallet.x509.verifyWalletAttestation(certPem);</code></p
     </div>
   </footer>
 
-  <!-- Modals are injected by createWalletUI() / init() from src/template.js -->
+  <!-- Modals are injected by init() from src/template.js (bootstrap below) -->
   <script>
     // Deeplinking on scroll: update URL hash and active nav link
     (function() {
@@ -578,7 +578,11 @@ const walletProofValid = wallet.x509.verifyWalletAttestation(certPem);</code></p
   </script>
   <script type="module">
     import { initI18n, applyTranslations } from './src/i18n.js';
-    import { createWalletUI } from './src/app.js';
+    // The landing page runs the in-page demo: init() injects the modals and
+    // wires #nav-login / #hero-login. createWalletUI() is the wallet-origin
+    // transaction app; it only serves /transaction/<id> requests and leaves
+    // these buttons dead on this page.
+    import { init } from './src/app.js';
     // Localize the static landing page immediately (top-10 language support).
     initI18n();
     // Re-apply after the wallet UI injects its modals so any late [data-i18n]
@@ -594,9 +598,20 @@ const walletProofValid = wallet.x509.verifyWalletAttestation(certPem);</code></p
     if (window.__sdnOpenAccountAfterLogin === false) {
       opts.openAccountAfterLogin = false;
     }
-    createWalletUI(document.body, opts).then(ui => {
+    // init() resolves to nothing; hosts that set __sdnWalletReady get the
+    // controls they call (openLogin / openAccount / logout / destroy).
+    const byId = (id) => document.getElementById(id);
+    const openModal = (id) => byId(id)?.classList.add('active');
+    // The demo hides #nav-login once a wallet is signed in.
+    const signedIn = () => byId('nav-login')?.style.display === 'none';
+    init(document.body, opts).then(() => {
       if (typeof window.__sdnWalletReady === 'function') {
-        window.__sdnWalletReady(ui);
+        window.__sdnWalletReady(Object.freeze({
+          openLogin: () => openModal(signedIn() ? 'keys-modal' : 'login-modal'),
+          openAccount: () => openModal('keys-modal'),
+          logout: () => byId('nav-logout')?.click(),
+          destroy: () => byId('hd-wallet-ui-container')?.remove(),
+        }));
       }
     });
   </script>
