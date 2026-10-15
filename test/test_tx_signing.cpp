@@ -19,6 +19,7 @@
 #include "test_framework.h"
 #include "hd_wallet/types.h"
 #include "hd_wallet/coins/coin.h"
+#include "hd_wallet/coins/ethereum.h"
 #include "hd_wallet/tx/bitcoin_tx.h"
 #include "hd_wallet/tx/ethereum_tx.h"
 
@@ -379,6 +380,15 @@ std::string checkRecipient(const std::string& input) {
     parseExpected = input.size() - start == 40 && input.find_first_not_of('0', start) == std::string::npos;
   }
   if (parsed.ok() != parseExpected) return "parseAddress disagrees on \"" + escaped + "\"";
+
+  // The address validator a UI checks first never passes what parseAddress
+  // refuses or reads differently (it may be stricter: it wants an EIP-55
+  // checksum or lowercase 0x form).
+  if (coins::validateEthereumAddress(input) == Error::OK) {
+    if (!parsed.ok()) return "validateEthereumAddress passes what parseAddress refuses: \"" + escaped + "\"";
+    std::string lower = lowerAscii(input.substr(input.size() - 40));
+    if (toHex(parsed.value.data(), 20) != lower) return "validator and parser read different bytes";
+  }
 
   // The C API reads a C string: only inputs without a NUL reach it intact.
   if (input.find('\0') == std::string::npos) {
