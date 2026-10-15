@@ -20,6 +20,21 @@
 #include <cryptopp/secblock.h>
 #include <cryptopp/xed25519.h>
 
+#include <cryptopp/modarith.h>
+#include <cryptopp/nbtheory.h>
+
+#include "key_validation.h"
+
+#ifdef HD_WALLET_USE_LIBSECP256K1
+#include <secp256k1.h>
+#include "secp256k1_context.h"
+#endif
+
+#if HD_WALLET_USE_OPENSSL
+#include <openssl/obj_mac.h>
+#include "hd_wallet/crypto_openssl.h"
+#endif
+
 #include <cstring>
 #include <memory>
 #include <stdexcept>
@@ -1198,5 +1213,203 @@ Curve coinTypeToCurve(CoinType coin) {
             return Curve::SECP256K1;
     }
 }
+
+// =============================================================================
+// Key validation (key_validation.h)
+// =============================================================================
+
+namespace keys {
+namespace {
+
+// Group orders n, big-endian.
+constexpr uint8_t kSecp256k1Order[32] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE,
+    0xBA, 0xAE, 0xDC, 0xE6, 0xAF, 0x48, 0xA0, 0x3B, 0xBF, 0xD2, 0x5E, 0x8C, 0xD0, 0x36, 0x41, 0x41,
+};
+constexpr uint8_t kP256Order[32] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xBC, 0xE6, 0xFA, 0xAD, 0xA7, 0x17, 0x9E, 0x84, 0xF3, 0xB9, 0xCA, 0xC2, 0xFC, 0x63, 0x25, 0x51,
+};
+constexpr uint8_t kP384Order[48] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xC7, 0x63, 0x4D, 0x81, 0xF4, 0x37, 0x2D, 0xDF,
+    0x58, 0x1A, 0x0D, 0xB2, 0x48, 0xB0, 0xA7, 0x7A, 0xEC, 0xEC, 0x19, 0x6A, 0xCC, 0xC5, 0x29, 0x73,
+};
+
+// 0 < key < order, over every byte whatever the key is (no early exit on
+// secret data).
+bool scalarInRange(const uint8_t* key, const uint8_t* order, size_t size) noexcept {
+    uint32_t nonzero = 0;
+    uint32_t borrow = 0;
+    for (size_t i = size; i-- > 0;) {
+        nonzero |= key[i];
+        const uint32_t difference = static_cast<uint32_t>(key[i]) - order[i] - borrow;
+        borrow = (difference >> 8) & 1U;
+    }
+    return nonzero != 0 && borrow == 1;  // key - n borrows: key < n
+}
+
+bool sec1Encoding(const uint8_t* key, size_t length, size_t fieldSize) noexcept {
+    return (length == fieldSize + 1 && (key[0] == 0x02 || key[0] == 0x03)) ||
+           (length == 2 * fieldSize + 1 && key[0] == 0x04);
+}
+
+#if !defined(HD_WALLET_USE_LIBSECP256K1) || !HD_WALLET_USE_OPENSSL
+// Crypto++ fallback for builds without libsecp256k1 or OpenSSL.
+bool cryptoppPointValid(const CryptoPP::OID& oid, const uint8_t* key, size_t length) noexcept {
+    try {
+        CryptoPP::DL_GroupParameters_EC<CryptoPP::ECP> params;
+        params.Initialize(oid);
+        const CryptoPP::ECP& ec = params.GetCurve();
+        CryptoPP::ECP::Point point;
+        if (!ec.DecodePoint(point, key, length) || point.identity) return false;
+        return ec.VerifyPoint(point);  // also x, y < p
+    } catch (...) {
+        return false;
+    }
+}
+#endif
+
+// Ed25519 y-coordinates (low 255 bits, little-endian) of the eight points of
+// small order: 0 (order 4), 1 (identity), p - 1 (order 2) and the two order-8
+// y values; each with either sign bit.
+constexpr uint8_t kEd25519SmallOrderY[5][32] = {
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+    {0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+    {0xec, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f},
+    {0x26, 0xe8, 0x95, 0x8f, 0xc2, 0xb2, 0x27, 0xb0, 0x45, 0xc3, 0xf4, 0x89, 0xf2, 0xef, 0x98, 0xf0,
+     0xd5, 0xdf, 0xac, 0x05, 0xd3, 0xc6, 0x33, 0x39, 0xb1, 0x38, 0x02, 0x88, 0x6d, 0x53, 0xfc, 0x05},
+    {0xc7, 0x17, 0x6a, 0x70, 0x3d, 0x4d, 0xd8, 0x4f, 0xba, 0x3c, 0x0b, 0x76, 0x0d, 0x10, 0x67, 0x0f,
+     0x2a, 0x20, 0x53, 0xfa, 0x2c, 0x39, 0xcc, 0xc6, 0x4e, 0xc7, 0xfd, 0x77, 0x92, 0xac, 0x03, 0x7a},
+};
+
+// L = 2^252 + 27742317777372353535851937790883648493, little-endian.
+constexpr uint8_t kEd25519Order[32] = {
+    0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+};
+
+// a < b for 32-byte little-endian integers.
+bool lessThanLe(const uint8_t* a, const uint8_t* b) noexcept {
+    for (size_t i = 32; i-- > 0;) {
+        if (a[i] != b[i]) return a[i] < b[i];
+    }
+    return false;
+}
+
+// The encoded y (sign bit cleared) is below p = 2^255 - 19.
+bool ed25519YCanonical(const uint8_t encoded[32]) noexcept {
+    // y >= p only when bytes 1..30 are 0xff, byte 31 (masked) is 0x7f and
+    // byte 0 >= 0xed.
+    if ((encoded[31] & 0x7f) != 0x7f) return true;
+    for (size_t i = 1; i < 31; ++i) {
+        if (encoded[i] != 0xff) return true;
+    }
+    return encoded[0] < 0xed;
+}
+
+// The encoding decodes to a curve point: x^2 = (y^2 - 1) / (d y^2 + 1) has a
+// root, and x = 0 carries sign bit 0.
+bool ed25519Decodes(const uint8_t encoded[32]) noexcept {
+    try {
+        uint8_t bigEndian[32];
+        for (size_t i = 0; i < 32; ++i) bigEndian[i] = encoded[31 - i];
+        bigEndian[0] &= 0x7f;
+        const CryptoPP::Integer p = CryptoPP::Integer::Power2(255) - CryptoPP::Integer(19);
+        const CryptoPP::Integer y(bigEndian, sizeof(bigEndian));
+        if (y >= p) return false;
+        const CryptoPP::ModularArithmetic field(p);
+        const CryptoPP::Integer d = field.Multiply(
+            p - CryptoPP::Integer(121665), CryptoPP::Integer(121666).InverseMod(p));
+        const CryptoPP::Integer y2 = field.Square(y);
+        const CryptoPP::Integer u = field.Subtract(y2, CryptoPP::Integer::One());
+        const CryptoPP::Integer v = field.Add(field.Multiply(d, y2), CryptoPP::Integer::One());
+        const CryptoPP::Integer uv = field.Multiply(u, v);
+        if (uv.IsZero()) return (encoded[31] & 0x80) == 0;
+        return CryptoPP::Jacobi(uv, p) == 1;
+    } catch (...) {
+        return false;
+    }
+}
+
+} // anonymous namespace
+
+bool ed25519EncodingIsStrict(const uint8_t encoded[32]) noexcept {
+    if (encoded == nullptr || !ed25519YCanonical(encoded)) return false;
+    for (const auto& y : kEd25519SmallOrderY) {
+        uint8_t difference = static_cast<uint8_t>((encoded[31] & 0x7f) ^ y[31]);
+        for (size_t i = 0; i < 31; ++i) difference |= static_cast<uint8_t>(encoded[i] ^ y[i]);
+        if (difference == 0) return false;
+    }
+    return true;
+}
+
+bool ed25519ScalarIsCanonical(const uint8_t s[32]) noexcept {
+    return s != nullptr && lessThanLe(s, kEd25519Order);
+}
+
+bool ed25519SignatureIsStrict(const uint8_t publicKey[32], const uint8_t signature[64]) noexcept {
+    return publicKey != nullptr && signature != nullptr &&
+           ed25519EncodingIsStrict(publicKey) &&
+           ed25519EncodingIsStrict(signature) &&
+           ed25519ScalarIsCanonical(signature + 32);
+}
+
+bool isValidPublicKey(Curve curve, const uint8_t* key, size_t length) noexcept {
+    if (key == nullptr) return false;
+    switch (curve) {
+        case Curve::SECP256K1: {
+            if (!sec1Encoding(key, length, 32)) return false;
+#ifdef HD_WALLET_USE_LIBSECP256K1
+            secp256k1_pubkey parsed;
+            return secp256k1_ec_pubkey_parse(internal::secp256k1Context(), &parsed, key, length) == 1;
+#else
+            return cryptoppPointValid(CryptoPP::ASN1::secp256k1(), key, length);
+#endif
+        }
+        case Curve::P256:
+            if (!sec1Encoding(key, length, 32)) return false;
+#if HD_WALLET_USE_OPENSSL
+            return hd_ossl_ec_pubkey_check(NID_X9_62_prime256v1, key, length) == 0;
+#else
+            return cryptoppPointValid(CryptoPP::ASN1::secp256r1(), key, length);
+#endif
+        case Curve::P384:
+            if (!sec1Encoding(key, length, 48)) return false;
+#if HD_WALLET_USE_OPENSSL
+            return hd_ossl_ec_pubkey_check(NID_secp384r1, key, length) == 0;
+#else
+            return cryptoppPointValid(CryptoPP::ASN1::secp384r1(), key, length);
+#endif
+        case Curve::ED25519:
+            return length == 32 && ed25519EncodingIsStrict(key) && ed25519Decodes(key);
+        case Curve::X25519:
+            return length == 32;
+        default:
+            return false;
+    }
+}
+
+bool isValidPrivateKey(Curve curve, const uint8_t* key, size_t length) noexcept {
+    if (key == nullptr) return false;
+    switch (curve) {
+        case Curve::SECP256K1:
+            return length == 32 && scalarInRange(key, kSecp256k1Order, 32);
+        case Curve::P256:
+            return length == 32 && scalarInRange(key, kP256Order, 32);
+        case Curve::P384:
+            return length == 48 && scalarInRange(key, kP384Order, 48);
+        case Curve::ED25519:
+        case Curve::X25519:
+            return length == 32;
+        default:
+            return false;
+    }
+}
+
+} // namespace keys
 
 } // namespace hd_wallet

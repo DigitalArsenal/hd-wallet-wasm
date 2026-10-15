@@ -272,6 +272,16 @@ int32_t hd_ossl_ecdsa_verify(int curve_nid,
                              const uint8_t* sig, size_t sig_len);
 
 /**
+ * Check a NIST public key encoding (SEC1 02/03 compressed or 04 uncompressed)
+ * decodes to a point of the curve other than infinity and re-encodes to the
+ * same bytes (no coordinate >= p, no hybrid encoding).
+ * @param curve_nid NID_X9_62_prime256v1 or NID_secp384r1
+ * @return 0 when valid, -1 otherwise
+ */
+int32_t hd_ossl_ec_pubkey_check(int curve_nid,
+                                const uint8_t* pubkey, size_t pub_len);
+
+/**
  * Derive public key from private key for NIST curves
  * @param curve_nid OpenSSL NID for the curve
  * @param privkey Private key bytes

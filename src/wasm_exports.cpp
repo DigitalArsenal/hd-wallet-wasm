@@ -14,7 +14,8 @@
  * Functions exported HERE (unique to this file):
  * - Hash: hd_hash_sha256, hd_hash_sha512, hd_hash_keccak256, hd_hash_ripemd160, hd_hash_hash160, hd_hash_blake2b, hd_hash_blake2s
  * - KDF: hd_kdf_hkdf, hd_kdf_pbkdf2, hd_kdf_scrypt
- * - Curves: hd_curve_pubkey_from_privkey
+ * - Curves: hd_curve_pubkey_from_privkey, hd_curve_decompress_pubkey,
+ *   hd_curve_validate_pubkey, hd_curve_validate_privkey
  * - secp256k1: hd_secp256k1_sign, hd_secp256k1_verify, hd_ecdh_secp256k1
  * - P-256/P-384: hd_p256_sign, hd_p256_verify, hd_ecdh_p256, hd_p384_sign, hd_p384_verify, hd_ecdh_p384
  *
@@ -24,13 +25,22 @@
  *   error can be read as a byte count or as "valid".
  * - Success is >= 0: the byte length written (hashes, KDFs, keys, signatures,
  *   ECDH secrets, AES-GCM output, recovery: 33, sign_recoverable: 65), 1/0 for
- *   hd_secp256k1_verify (valid/invalid), or 0 (hd_curve_decompress_pubkey;
- *   hd_p256_verify and hd_p384_verify, where 0 means valid).
+ *   hd_secp256k1_verify (valid/invalid), or 0 (hd_curve_decompress_pubkey,
+ *   hd_curve_validate_*; hd_p256_verify and hd_p384_verify, where 0 means
+ *   valid).
  * - On a failure after the arguments are checked, the output buffer is zeroed:
  *   an error path never hands back stale or partial bytes.
  * - Private keys must satisfy 0 < d < n for their curve, or the call fails
  *   with -INVALID_PRIVATE_KEY before the key is used.
  * Callers treat exactly the documented success value as success.
+ *
+ * Fixed-size inputs: hd_curve_decompress_pubkey reads 33 bytes,
+ * hd_p256_verify a 64-byte and hd_p384_verify a 96-byte signature, the
+ * hd_*_sign exports a 32- or 48-byte private key, and the recoverable
+ * exports a 65-byte signature, none of which take a length. The C ABI keeps
+ * its 2.1 shape; the JS wrappers check every such input's length (and keys'
+ * validity, through hd_curve_validate_*) before the call, and native callers
+ * must do the same.
  */
 
 #include "hd_wallet/config.h"
@@ -38,6 +48,7 @@
 #include "hd_wallet/error.h"
 #include "hd_wallet/bip32.h"
 #include "hd_wallet/secure_memory.h"
+#include "key_validation.h"
 
 // Forward declaration of C function from ecdh.cpp
 extern "C" int32_t hd_ecdh(
@@ -159,32 +170,10 @@ void zeroOutput(uint8_t* out, size_t size) noexcept {
     }
 }
 
-// Group orders n, big-endian.
-constexpr uint8_t kSecp256k1Order[32] = {
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE,
-    0xBA, 0xAE, 0xDC, 0xE6, 0xAF, 0x48, 0xA0, 0x3B, 0xBF, 0xD2, 0x5E, 0x8C, 0xD0, 0x36, 0x41, 0x41,
-};
-constexpr uint8_t kP256Order[32] = {
-    0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-    0xBC, 0xE6, 0xFA, 0xAD, 0xA7, 0x17, 0x9E, 0x84, 0xF3, 0xB9, 0xCA, 0xC2, 0xFC, 0x63, 0x25, 0x51,
-};
-constexpr uint8_t kP384Order[48] = {
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xC7, 0x63, 0x4D, 0x81, 0xF4, 0x37, 0x2D, 0xDF,
-    0x58, 0x1A, 0x0D, 0xB2, 0x48, 0xB0, 0xA7, 0x7A, 0xEC, 0xEC, 0x19, 0x6A, 0xCC, 0xC5, 0x29, 0x73,
-};
-
-// A private key is valid when 0 < d < n. The comparison runs over every byte
-// whatever the key is (no early exit on secret data).
-bool privateKeyInRange(const uint8_t* key, const uint8_t* order, size_t size) noexcept {
-    uint32_t nonzero = 0;
-    uint32_t borrow = 0;
-    for (size_t i = size; i-- > 0;) {
-        nonzero |= key[i];
-        const uint32_t difference = static_cast<uint32_t>(key[i]) - order[i] - borrow;
-        borrow = (difference >> 8) & 1U;
-    }
-    return nonzero != 0 && borrow == 1;  // key - n borrows: key < n
+// A private key is valid when 0 < d < n for its curve (keys::isValidPrivateKey,
+// constant time in the key's bytes).
+bool privateKeyValid(Curve curve, const uint8_t* key, size_t size) noexcept {
+    return keys::isValidPrivateKey(curve, key, size);
 }
 
 } // anonymous namespace
@@ -338,7 +327,7 @@ int32_t hd_curve_pubkey_from_privkey(
         switch (curve) {
             case Curve::SECP256K1: {
                 if (out_size < 33) return fail(Error::OUT_OF_MEMORY);
-                if (!privateKeyInRange(private_key, kSecp256k1Order, 32)) {
+                if (!privateKeyValid(Curve::SECP256K1, private_key, 32)) {
                     zeroOutput(public_key_out, out_size);
                     return fail(Error::INVALID_PRIVATE_KEY);
                 }
@@ -357,7 +346,7 @@ int32_t hd_curve_pubkey_from_privkey(
             }
             case Curve::P256: {
                 if (out_size < 33) return fail(Error::OUT_OF_MEMORY);
-                if (!privateKeyInRange(private_key, kP256Order, 32)) {
+                if (!privateKeyValid(Curve::P256, private_key, 32)) {
                     zeroOutput(public_key_out, out_size);
                     return fail(Error::INVALID_PRIVATE_KEY);
                 }
@@ -375,7 +364,7 @@ int32_t hd_curve_pubkey_from_privkey(
             }
             case Curve::P384: {
                 if (out_size < 49) return fail(Error::OUT_OF_MEMORY);
-                if (!privateKeyInRange(private_key, kP384Order, 48)) {
+                if (!privateKeyValid(Curve::P384, private_key, 48)) {
                     zeroOutput(public_key_out, out_size);
                     return fail(Error::INVALID_PRIVATE_KEY);
                 }
@@ -419,7 +408,7 @@ int32_t hd_secp256k1_sign(
     if (message == nullptr || private_key == nullptr || signature_out == nullptr) {
         return fail(Error::INVALID_ARGUMENT);
     }
-    if (!privateKeyInRange(private_key, kSecp256k1Order, 32)) {
+    if (!privateKeyValid(Curve::SECP256K1, private_key, 32)) {
         zeroOutput(signature_out, out_size);
         return fail(Error::INVALID_PRIVATE_KEY);
     }
@@ -587,7 +576,7 @@ int32_t hd_secp256k1_sign_recoverable(
         zeroOutput(out_sig65, 65);
         return fail(Error::INVALID_ARGUMENT);
     }
-    if (!privateKeyInRange(privkey, kSecp256k1Order, 32)) {
+    if (!privateKeyValid(Curve::SECP256K1, privkey, 32)) {
         zeroOutput(out_sig65, 65);
         return fail(Error::INVALID_PRIVATE_KEY);
     }
@@ -677,6 +666,41 @@ int32_t hd_curve_decompress_pubkey(
     return 0;
 }
 
+// Key checks the JS wrappers run before a key reaches any other export (see
+// key_validation.h for what valid means per curve). Status exports: 0 when
+// the key is valid, -INVALID_PUBLIC_KEY / -INVALID_PRIVATE_KEY when not,
+// -NOT_SUPPORTED for an unknown curve.
+namespace {
+bool knownCurve(int32_t curve) noexcept {
+    return curve >= static_cast<int32_t>(Curve::SECP256K1) &&
+           curve <= static_cast<int32_t>(Curve::X25519);
+}
+} // anonymous namespace
+
+extern "C" HD_WALLET_EXPORT
+int32_t hd_curve_validate_pubkey(
+    const uint8_t* public_key,
+    size_t public_key_len,
+    int32_t curve
+) {
+    if (public_key == nullptr) return fail(Error::INVALID_ARGUMENT);
+    if (!knownCurve(curve)) return fail(Error::NOT_SUPPORTED);
+    return keys::isValidPublicKey(static_cast<Curve>(curve), public_key, public_key_len)
+        ? 0 : fail(Error::INVALID_PUBLIC_KEY);
+}
+
+extern "C" HD_WALLET_EXPORT
+int32_t hd_curve_validate_privkey(
+    const uint8_t* private_key,
+    size_t private_key_len,
+    int32_t curve
+) {
+    if (private_key == nullptr) return fail(Error::INVALID_ARGUMENT);
+    if (!knownCurve(curve)) return fail(Error::NOT_SUPPORTED);
+    return keys::isValidPrivateKey(static_cast<Curve>(curve), private_key, private_key_len)
+        ? 0 : fail(Error::INVALID_PRIVATE_KEY);
+}
+
 // Static singleton for secp256k1 curve (same pattern as ecdsa.cpp)
 namespace {
 class Secp256k1Curve {
@@ -701,7 +725,7 @@ private:
 // length or -Error; the output is zeroed on every failure.
 int32_t ecdhShortWeierstrass(
     const CryptoPP::ECP& ec,
-    const uint8_t* order,
+    Curve curve,
     size_t field_size,
     const uint8_t* private_key,
     const uint8_t* public_key, size_t public_key_len,
@@ -719,7 +743,7 @@ int32_t ecdhShortWeierstrass(
     if (public_key_len != compressed_len && public_key_len != uncompressed_len) {
         return fail(Error::INVALID_PUBLIC_KEY);
     }
-    if (!privateKeyInRange(private_key, order, field_size)) {
+    if (!privateKeyValid(curve, private_key, field_size)) {
         return fail(Error::INVALID_PRIVATE_KEY);
     }
 
@@ -761,7 +785,7 @@ int32_t hd_ecdh_secp256k1(
     uint8_t* shared_secret_out, size_t out_size
 ) {
     // Static singleton curve (same pattern as the working ECDSA code)
-    return ecdhShortWeierstrass(Secp256k1Curve::instance().ec(), kSecp256k1Order, 32,
+    return ecdhShortWeierstrass(Secp256k1Curve::instance().ec(), Curve::SECP256K1, 32,
                                 private_key, public_key, public_key_len,
                                 shared_secret_out, out_size);
 }
@@ -780,7 +804,7 @@ int32_t hd_p256_sign(
     if (message == nullptr || private_key == nullptr || signature_out == nullptr) {
         return fail(Error::INVALID_ARGUMENT);
     }
-    if (!privateKeyInRange(private_key, kP256Order, 32)) {
+    if (!privateKeyValid(Curve::P256, private_key, 32)) {
         zeroOutput(signature_out, out_size);
         return fail(Error::INVALID_PRIVATE_KEY);
     }
@@ -849,7 +873,7 @@ int32_t hd_ecdh_p256(
 ) {
     CryptoPP::DL_GroupParameters_EC<CryptoPP::ECP> curveParams;
     curveParams.Initialize(CryptoPP::ASN1::secp256r1());
-    return ecdhShortWeierstrass(curveParams.GetCurve(), kP256Order, 32,
+    return ecdhShortWeierstrass(curveParams.GetCurve(), Curve::P256, 32,
                                 private_key, public_key, public_key_len,
                                 shared_secret_out, out_size);
 }
@@ -868,7 +892,7 @@ int32_t hd_p384_sign(
     if (message == nullptr || private_key == nullptr || signature_out == nullptr) {
         return fail(Error::INVALID_ARGUMENT);
     }
-    if (!privateKeyInRange(private_key, kP384Order, 48)) {
+    if (!privateKeyValid(Curve::P384, private_key, 48)) {
         zeroOutput(signature_out, out_size);
         return fail(Error::INVALID_PRIVATE_KEY);
     }
@@ -937,7 +961,7 @@ int32_t hd_ecdh_p384(
 ) {
     CryptoPP::DL_GroupParameters_EC<CryptoPP::ECP> curveParams;
     curveParams.Initialize(CryptoPP::ASN1::secp384r1());
-    return ecdhShortWeierstrass(curveParams.GetCurve(), kP384Order, 48,
+    return ecdhShortWeierstrass(curveParams.GetCurve(), Curve::P384, 48,
                                 private_key, public_key, public_key_len,
                                 shared_secret_out, out_size);
 }

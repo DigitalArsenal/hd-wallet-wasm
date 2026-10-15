@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 #include <array>
+#include <algorithm>
 
 using namespace hd_wallet;
 using namespace hd_wallet::ecies;
@@ -360,6 +361,38 @@ TEST_CASE(ECIES, Tampered_Tag_Fails) {
         decrypted.data(), decrypted.size());
 
     ASSERT_TRUE(decResult < 0);
+}
+
+TEST_CASE(ECIES, Tampered_Tag_ZeroesOutput) {
+    // A tag mismatch reports VERIFICATION_FAILED and leaves no unauthenticated
+    // plaintext in the caller's buffer.
+    auto kpResult = generateEphemeralKeyPair(Curve::P256);
+    ASSERT_TRUE(kpResult.ok());
+    auto& kp = kpResult.value;
+
+    const char* msg = "plaintext that must not come back";
+    size_t msgLen = std::strlen(msg);
+    auto* pt = reinterpret_cast<const uint8_t*>(msg);
+
+    std::vector<uint8_t> ciphertext(msgLen + eciesOverhead(Curve::P256));
+    int32_t encResult = eciesEncrypt(
+        Curve::P256,
+        kp.publicKey.data(), kp.publicKey.size(),
+        pt, msgLen, nullptr, 0,
+        ciphertext.data(), ciphertext.size());
+    ASSERT_TRUE(encResult > 0);
+    ciphertext[static_cast<size_t>(encResult) - 1] ^= 0x01;
+
+    std::vector<uint8_t> decrypted(msgLen, 0xa5);
+    int32_t decResult = eciesDecrypt(
+        Curve::P256,
+        kp.privateKey.data(), kp.privateKey.size(),
+        ciphertext.data(), static_cast<size_t>(encResult),
+        nullptr, 0,
+        decrypted.data(), decrypted.size());
+
+    ASSERT_EQ(-static_cast<int32_t>(Error::VERIFICATION_FAILED), decResult);
+    ASSERT_TRUE(std::all_of(decrypted.begin(), decrypted.end(), [](uint8_t b) { return b == 0; }));
 }
 
 TEST_CASE(ECIES, Wrong_PrivateKey_Fails) {

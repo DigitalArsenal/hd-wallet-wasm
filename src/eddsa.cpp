@@ -12,6 +12,7 @@
 #include "hd_wallet/types.h"
 #include "hd_wallet/config.h"
 #include "hd_wallet/eddsa.h"
+#include "key_validation.h"
 
 #include <cryptopp/xed25519.h>
 #if !HD_WALLET_IS_WASI
@@ -314,7 +315,8 @@ bool verify(
     const uint8_t* signature,
     size_t signatureLen
 ) {
-    if (!publicKey || !message || !signature) {
+    // An empty message may come with no buffer (an empty vector's data()).
+    if (!publicKey || (!message && messageLen != 0) || !signature) {
         return false;
     }
 
@@ -323,6 +325,13 @@ bool verify(
     }
 
     if (signatureLen != SIGNATURE_SIZE) {
+        return false;
+    }
+
+    // RFC 8032 strict verification: S < L, and A and R canonical (y < p) and
+    // not of small order. The equation check below is cofactorless
+    // ([S]B == R + [k]A, with R compared as encoded bytes, so A must decode).
+    if (!keys::ed25519SignatureIsStrict(publicKey, signature)) {
         return false;
     }
 
@@ -649,6 +658,14 @@ bool ed25519Verify(
 // C API Exports
 // =============================================================================
 
+namespace {
+// Every export below zeroes its output buffer on failure (the wasm_exports.cpp
+// convention), so a caller that ignores the -1 still reads no stale bytes.
+void zeroOutput(uint8_t* out, size_t size) noexcept {
+    if (out != nullptr && size > 0) std::memset(out, 0, size);
+}
+} // anonymous namespace
+
 extern "C" {
 
 HD_WALLET_EXPORT
@@ -664,6 +681,7 @@ int32_t hd_ed25519_derive_public(
             public_key, &pubKeyLen)) {
         return static_cast<int32_t>(pubKeyLen);
     }
+    zeroOutput(public_key, public_key_size);
     return -1;
 }
 
@@ -676,8 +694,10 @@ int32_t hd_ed25519_sign(
     uint8_t* signature_out,
     size_t out_size
 ) {
-    if (!private_key || !signature_out) return -1;
-    if (out_size < hd_wallet::eddsa::SIGNATURE_SIZE) return -1;
+    if (!private_key || !signature_out || out_size < hd_wallet::eddsa::SIGNATURE_SIZE) {
+        zeroOutput(signature_out, out_size);
+        return -1;
+    }
 
     size_t sigLen = out_size;
     if (hd_wallet::eddsa::sign(
@@ -686,6 +706,7 @@ int32_t hd_ed25519_sign(
             signature_out, &sigLen)) {
         return static_cast<int32_t>(sigLen);
     }
+    zeroOutput(signature_out, out_size);
     return -1;
 }
 
@@ -721,6 +742,7 @@ int32_t hd_ed25519_pubkey_from_seed(
     size_t public_key_size
 ) {
     if (!seed || !public_key_out || public_key_size < 32) {
+        zeroOutput(public_key_out, public_key_size);
         return -1;
     }
 
@@ -729,6 +751,7 @@ int32_t hd_ed25519_pubkey_from_seed(
     if (hd_wallet::eddsa::derivePublicKey(seed, 32, public_key_out, &pubKeyLen)) {
         return 0;
     }
+    zeroOutput(public_key_out, public_key_size);
     return -1;
 }
 
@@ -740,6 +763,8 @@ int32_t hd_slip10_ed25519_master(
     uint8_t* chain_code_out
 ) {
     if (!seed || !key_out || !chain_code_out || seed_len != 64) {
+        zeroOutput(key_out, 32);
+        zeroOutput(chain_code_out, 32);
         return -1;
     }
 
@@ -801,8 +826,7 @@ static int32_t slip10_ed25519_derive_child(
     return 0;
 }
 
-HD_WALLET_EXPORT
-int32_t hd_slip10_ed25519_derive_path(
+static int32_t slip10_ed25519_derive_path_impl(
     const uint8_t* seed,
     size_t seed_len,
     const char* path,
@@ -912,6 +936,23 @@ int32_t hd_slip10_ed25519_derive_path(
     return 0;
 }
 
+HD_WALLET_EXPORT
+int32_t hd_slip10_ed25519_derive_path(
+    const uint8_t* seed,
+    size_t seed_len,
+    const char* path,
+    uint8_t* key_out,
+    uint8_t* chain_code_out
+) {
+    const int32_t result = slip10_ed25519_derive_path_impl(
+        seed, seed_len, path, key_out, chain_code_out);
+    if (result != 0) {
+        zeroOutput(key_out, 32);
+        zeroOutput(chain_code_out, 32);
+    }
+    return result;
+}
+
 // =============================================================================
 // X25519 Functions
 // =============================================================================
@@ -923,6 +964,7 @@ int32_t hd_x25519_pubkey(
     size_t public_key_size
 ) {
     if (!private_key || !public_key_out || public_key_size < 32) {
+        zeroOutput(public_key_out, public_key_size);
         return -1;
     }
 
@@ -943,12 +985,14 @@ int32_t hd_x25519_pubkey(
         CryptoPP::x25519 x25519;
         if (!x25519.Agree(public_key_out, clampedPriv, basepoint)) {
             CryptoPP::SecureWipeArray(clampedPriv, 32);
+            zeroOutput(public_key_out, public_key_size);
             return -1;
         }
 
         CryptoPP::SecureWipeArray(clampedPriv, 32);
         return 0;
     } catch (...) {
+        zeroOutput(public_key_out, public_key_size);
         return -1;
     }
 }
@@ -961,6 +1005,7 @@ int32_t hd_ecdh_x25519(
     size_t shared_secret_size
 ) {
     if (!private_key || !public_key || !shared_secret_out || shared_secret_size < 32) {
+        zeroOutput(shared_secret_out, shared_secret_size);
         return -1;
     }
 
@@ -976,12 +1021,14 @@ int32_t hd_ecdh_x25519(
         CryptoPP::x25519 x25519;
         if (!x25519.Agree(shared_secret_out, clampedPriv, public_key)) {
             CryptoPP::SecureWipeArray(clampedPriv, 32);
+            zeroOutput(shared_secret_out, shared_secret_size);
             return -1;
         }
 
         CryptoPP::SecureWipeArray(clampedPriv, 32);
         return 0;
     } catch (...) {
+        zeroOutput(shared_secret_out, shared_secret_size);
         return -1;
     }
 }

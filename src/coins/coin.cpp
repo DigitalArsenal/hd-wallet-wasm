@@ -11,6 +11,7 @@
 #include "hd_wallet/coins/solana.h"
 #include "hd_wallet/ecdsa.h"
 #include "hd_wallet/secure_rng.h"
+#include "../key_validation.h"
 
 #include <algorithm>
 #include <cctype>
@@ -930,6 +931,11 @@ Result<Ed25519Signature> ed25519Sign(const ByteVector& message, const Bytes32& p
 }
 
 Result<bool> ed25519Verify(const ByteVector& message, const Ed25519Signature& signature, const Bytes32& public_key) {
+  // RFC 8032 strict verification, as eddsa::verify: S < L, A and R canonical
+  // and not of small order.
+  if (!keys::ed25519SignatureIsStrict(public_key.data(), signature.data.data())) {
+    return Result<bool>::success(false);
+  }
   try {
     using namespace CryptoPP;
 

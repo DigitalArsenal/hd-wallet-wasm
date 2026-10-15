@@ -858,6 +858,63 @@ cleanup:
 }
 
 /**
+ * Check a NIST public key encoding: SEC1 compressed (02/03 || x) or
+ * uncompressed (04 || x || y) at the curve's size, decoding to a point of the
+ * curve other than infinity. The point must re-encode to the same bytes, so a
+ * coordinate >= p (which decoding would reduce) is refused, as are hybrid
+ * (06/07) encodings.
+ * @param curve_nid NID_X9_62_prime256v1 or NID_secp384r1
+ * @return 0 when valid, -1 otherwise
+ */
+HD_OSSL_EXPORT
+int32_t hd_ossl_ec_pubkey_check(int curve_nid,
+                                const uint8_t* pubkey, size_t pub_len) {
+    EC_GROUP *group = NULL;
+    EC_POINT *point = NULL;
+    BN_CTX *bn_ctx = NULL;
+    unsigned char reencoded[97];
+    point_conversion_form_t form;
+    size_t field_size;
+    int32_t ret = -1;
+
+    if (pubkey == NULL) return -1;
+    if (curve_nid == NID_X9_62_prime256v1) {
+        field_size = 32;
+    } else if (curve_nid == NID_secp384r1) {
+        field_size = 48;
+    } else {
+        return -1;
+    }
+    if (pub_len == field_size + 1 && (pubkey[0] == 0x02 || pubkey[0] == 0x03)) {
+        form = POINT_CONVERSION_COMPRESSED;
+    } else if (pub_len == 2 * field_size + 1 && pubkey[0] == 0x04) {
+        form = POINT_CONVERSION_UNCOMPRESSED;
+    } else {
+        return -1;
+    }
+
+    group = EC_GROUP_new_by_curve_name_ex(fips_libctx, NULL, curve_nid);
+    bn_ctx = BN_CTX_new_ex(fips_libctx);
+    if (group == NULL || bn_ctx == NULL) goto cleanup;
+    point = EC_POINT_new(group);
+    if (point == NULL) goto cleanup;
+    if (EC_POINT_oct2point(group, point, pubkey, pub_len, bn_ctx) != 1) goto cleanup;
+    if (EC_POINT_is_at_infinity(group, point)) goto cleanup;
+    if (EC_POINT_is_on_curve(group, point, bn_ctx) != 1) goto cleanup;
+    if (EC_POINT_point2oct(group, point, form, reencoded, sizeof(reencoded), bn_ctx) != pub_len) {
+        goto cleanup;
+    }
+    if (CRYPTO_memcmp(reencoded, pubkey, pub_len) != 0) goto cleanup;
+    ret = 0;
+
+cleanup:
+    EC_POINT_free(point);
+    BN_CTX_free(bn_ctx);
+    EC_GROUP_free(group);
+    return ret;
+}
+
+/**
  * Derive public key from private key for NIST curves
  * @param curve_nid OpenSSL NID
  * @param privkey Private key bytes

@@ -431,7 +431,8 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       # ========== Curve Operations (Generic) ==========
       "_hd_curve_pubkey_from_privkey"
       "_hd_curve_decompress_pubkey"
-      "_hd_curve_compress_pubkey"
+      "_hd_curve_validate_pubkey"
+      "_hd_curve_validate_privkey"
 
       # ========== secp256k1 Signing ==========
       "_hd_secp256k1_sign"
@@ -856,6 +857,8 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       # Multi-Curve Keys
       "_hd_curve_pubkey_from_privkey"
       "_hd_curve_decompress_pubkey"
+      "_hd_curve_validate_pubkey"
+      "_hd_curve_validate_privkey"
       # ECDSA Signing (secp256k1)
       "_hd_secp256k1_sign"
       "_hd_secp256k1_verify"

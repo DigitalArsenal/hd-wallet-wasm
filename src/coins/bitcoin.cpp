@@ -4,6 +4,7 @@
  */
 
 #include "hd_wallet/coins/bitcoin.h"
+#include "../key_validation.h"
 
 #include <algorithm>
 #include <cstring>
@@ -1093,6 +1094,11 @@ int32_t hd_btc_to_wif(
 ) {
   if (!private_key || !wif_out || wif_size < 52) {
     return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+  }
+  // Only a secp256k1 scalar 0 < d < n is a private key.
+  if (!keys::isValidPrivateKey(Curve::SECP256K1, private_key, 32)) {
+    std::memset(wif_out, 0, wif_size);
+    return static_cast<int32_t>(Error::INVALID_PRIVATE_KEY);
   }
 
   const BitcoinParams& params = (network == 0) ? BITCOIN_MAINNET : BITCOIN_TESTNET;

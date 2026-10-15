@@ -9,6 +9,7 @@
 #include "hd_wallet/libp2p.h"
 #include "hd_wallet/types.h"
 #include "hd_wallet/config.h"
+#include "key_validation.h"
 
 #include <cryptopp/sha.h>
 #include <cstring>
@@ -110,6 +111,18 @@ int32_t computePeerId(const uint8_t* pubkey, size_t pubkey_len,
     int32_t keyType = curveToKeyType(curve);
     if (keyType < 0) {
         return -static_cast<int32_t>(Error::NOT_SUPPORTED);
+    }
+
+    // The key must be a valid public key of its curve in the libp2p form:
+    // secp256k1 compressed (33 bytes), Ed25519 32 bytes, P-256 compressed or
+    // uncompressed. This also bounds pubkey_len for the protobuf buffer.
+    const bool lengthOk =
+        (curve == CURVE_SECP256K1 && pubkey_len == 33) ||
+        (curve == CURVE_ED25519 && pubkey_len == 32) ||
+        (curve == CURVE_P256 && (pubkey_len == 33 || pubkey_len == 65));
+    if (!lengthOk ||
+        !hd_wallet::keys::isValidPublicKey(static_cast<hd_wallet::Curve>(curve), pubkey, pubkey_len)) {
+        return -static_cast<int32_t>(Error::INVALID_PUBLIC_KEY);
     }
 
     // Serialize protobuf (max overhead: 6 bytes for tags + varints)
@@ -281,15 +294,15 @@ int32_t hd_libp2p_ipns_hash(
     uint8_t cid[128];
     size_t cidLen = buildCidV1(peerId, static_cast<size_t>(peerIdLen), cid);
 
-    // 'k' prefix + base36lower(cid) + null
-    if (output_size < 2) {
+    // 'k' prefix + base36lower(cid) + null. Encode locally and check the
+    // caller's size before writing anything to it.
+    char encoded[256];
+    const size_t encodedLen = base36LowerEncode(cid, cidLen, encoded);
+    if (output_size < 1 + encodedLen + 1) {
         return -static_cast<int32_t>(Error::OUT_OF_MEMORY);
     }
     output[0] = 'k';
-    size_t encoded = base36LowerEncode(cid, cidLen, output + 1);
-    if (1 + encoded + 1 > output_size) {
-        return -static_cast<int32_t>(Error::OUT_OF_MEMORY);
-    }
+    std::memcpy(output + 1, encoded, encodedLen + 1);
     return static_cast<int32_t>(Error::OK);
 }
 
@@ -310,15 +323,15 @@ int32_t hd_libp2p_ipns_hash_base32(
     uint8_t cid[128];
     size_t cidLen = buildCidV1(peerId, static_cast<size_t>(peerIdLen), cid);
 
-    // 'b' prefix + base32lower(cid) + null
-    if (output_size < 2) {
+    // 'b' prefix + base32lower(cid) + null. Encode locally and check the
+    // caller's size before writing anything to it.
+    char encoded[256];
+    const size_t encodedLen = base32LowerEncode(cid, cidLen, encoded);
+    if (output_size < 1 + encodedLen + 1) {
         return -static_cast<int32_t>(Error::OUT_OF_MEMORY);
     }
     output[0] = 'b';
-    size_t encoded = base32LowerEncode(cid, cidLen, output + 1);
-    if (1 + encoded + 1 > output_size) {
-        return -static_cast<int32_t>(Error::OUT_OF_MEMORY);
-    }
+    std::memcpy(output + 1, encoded, encodedLen + 1);
     return static_cast<int32_t>(Error::OK);
 }
 

@@ -174,8 +174,10 @@ int32_t aesGcmEncrypt(
     if (keyLen != 32 || ivLen != 12) return -static_cast<int32_t>(Error::INVALID_ARGUMENT);
 
 #if HD_WALLET_USE_OPENSSL
-    return hd_ossl_aes_gcm_encrypt(key, keyLen, plaintext, ptLen,
-                                   iv, ivLen, aad, aadLen, ciphertext, tag);
+    const int32_t result = hd_ossl_aes_gcm_encrypt(key, keyLen, plaintext, ptLen,
+                                                   iv, ivLen, aad, aadLen, ciphertext, tag);
+    if (result >= 0 && static_cast<size_t>(result) == ptLen) return result;
+    return -static_cast<int32_t>(Error::INTERNAL);
 #else
     CryptoPP::GCM<CryptoPP::AES>::Encryption enc;
     enc.SetKeyWithIV(key, keyLen, iv, ivLen);
@@ -204,8 +206,15 @@ int32_t aesGcmDecrypt(
     if (keyLen != 32 || ivLen != 12) return -static_cast<int32_t>(Error::INVALID_ARGUMENT);
 
 #if HD_WALLET_USE_OPENSSL
-    return hd_ossl_aes_gcm_decrypt(key, keyLen, ciphertext, ctLen,
-                                   iv, ivLen, aad, aadLen, tag, plaintext);
+    // hd_ossl_aes_gcm_decrypt returns the byte count, -2 on a tag mismatch and
+    // -1 otherwise, and leaves the unauthenticated plaintext in the buffer on
+    // a mismatch: zero it, and report the mismatch as VERIFICATION_FAILED.
+    const int32_t result = hd_ossl_aes_gcm_decrypt(key, keyLen, ciphertext, ctLen,
+                                                   iv, ivLen, aad, aadLen, tag, plaintext);
+    if (result >= 0 && static_cast<size_t>(result) == ctLen) return result;
+    if (plaintext != nullptr && ctLen > 0) std::memset(plaintext, 0, ctLen);
+    return result == -2 ? -static_cast<int32_t>(Error::VERIFICATION_FAILED)
+                        : -static_cast<int32_t>(Error::INTERNAL);
 #else
     CryptoPP::GCM<CryptoPP::AES>::Decryption dec;
     dec.SetKeyWithIV(key, keyLen, iv, ivLen);
@@ -246,7 +255,9 @@ size_t eciesOverhead(Curve curve) {
     return keySize + ECIES_IV_SIZE + ECIES_TAG_SIZE;
 }
 
-int32_t eciesEncrypt(
+namespace {
+
+int32_t eciesEncryptUnzeroed(
     Curve curve,
     const uint8_t* recipientPubKey,
     size_t recipientPubKeyLen,
@@ -344,7 +355,7 @@ int32_t eciesEncrypt(
     return static_cast<int32_t>(totalSize);
 }
 
-int32_t eciesDecrypt(
+int32_t eciesDecryptUnzeroed(
     Curve curve,
     const uint8_t* recipientPrivKey,
     size_t recipientPrivKeyLen,
@@ -419,6 +430,47 @@ int32_t eciesDecrypt(
     }
 
     return static_cast<int32_t>(plaintextLen);
+}
+
+} // anonymous namespace
+
+// Both return the output length or a negative -Error; on any failure the
+// caller's output buffer is zeroed, so no partial ciphertext or
+// unauthenticated plaintext is ever left in it.
+int32_t eciesEncrypt(
+    Curve curve,
+    const uint8_t* recipientPubKey,
+    size_t recipientPubKeyLen,
+    const uint8_t* plaintext,
+    size_t plaintextLen,
+    const uint8_t* aad,
+    size_t aadLen,
+    uint8_t* out,
+    size_t outSize
+) {
+    const int32_t result = eciesEncryptUnzeroed(curve, recipientPubKey, recipientPubKeyLen,
+                                                plaintext, plaintextLen, aad, aadLen,
+                                                out, outSize);
+    if (result < 0 && out != nullptr && outSize > 0) secureWipe(out, outSize);
+    return result;
+}
+
+int32_t eciesDecrypt(
+    Curve curve,
+    const uint8_t* recipientPrivKey,
+    size_t recipientPrivKeyLen,
+    const uint8_t* message,
+    size_t messageLen,
+    const uint8_t* aad,
+    size_t aadLen,
+    uint8_t* out,
+    size_t outSize
+) {
+    const int32_t result = eciesDecryptUnzeroed(curve, recipientPrivKey, recipientPrivKeyLen,
+                                                message, messageLen, aad, aadLen,
+                                                out, outSize);
+    if (result < 0 && out != nullptr && outSize > 0) secureWipe(out, outSize);
+    return result;
 }
 
 // =============================================================================

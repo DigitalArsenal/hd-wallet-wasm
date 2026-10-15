@@ -40,6 +40,7 @@ const CORE_FILES = Object.freeze([
   'dist/runtime/generated/sdn_plugin_manifest.mjs',
   'dist/runtime/index.d.ts',
   'dist/runtime/index.mjs',
+  'dist/runtime/input-validation.mjs',
   'dist/runtime/sdn-plugin-manifest-codec.mjs',
   'dist/runtime/sdn-plugin-manifest-source.mjs',
   'dist/runtime/sdn-plugin.mjs',

@@ -4,8 +4,8 @@
 
 ### Security
 
-Two defects found by internal review, present in 2.1.0 and every earlier
-release, are fixed. Upgrade; no data migration is needed.
+Defects found by internal review, present in 2.1.0 and every earlier release,
+are fixed. Upgrade; no data migration is needed.
 
 - **Forged chain proofs could verify.** Several WASM exports reported failure
   with a positive error code, but their JS wrappers treated only negative values
@@ -25,6 +25,24 @@ release, are fixed. Upgrade; no data migration is needed.
   The same positive-code pattern let the aligned batch exports, `checkWord` /
   `suggestWords` with an unsupported language and the `hkdf` / `pbkdf2` /
   `scrypt` / hash wrappers mistake an error code for a length or a count.
+- **Inputs of the wrong size reached native code.** Many exports read a
+  fixed-size input (a 32- or 48-byte private key, a 33-byte public key, a 64- or
+  96-byte signature, a 32-byte hash or program id) without taking its length,
+  and their wrappers did not check it. A short input was completed from stale
+  WASM heap memory, which could come back inside a WIF, a public key or a
+  signature, or let a truncated or padded P-256/P-384 signature verify; a long
+  one was silently truncated; some short keys made the wrapper's wipe write
+  past its allocation and corrupt the heap. Keys were not always checked
+  either: `bitcoin.toWIF` and `x509.exportPrivateKeyPem` exported scalars of 0,
+  n and above, and the address builders, `libp2p.peerIdFromPublicKey` and
+  `curves.compressPublicKey` accepted byte strings that are not curve points.
+- **Ed25519 verification was not strict.** It accepted a second encoding of
+  every signature (S + L), and keys and signature points of small order, with
+  which a signature is not bound to its message.
+- **ECIES decryption at the C ABI** (`hd_ecies_decrypt`, also in the WASI
+  module) left the unauthenticated plaintext in the output buffer when the tag
+  did not match, and reported it as -2 (INVALID_ARGUMENT). The JS wrapper
+  already wiped the buffer and threw.
 
 The fix:
 
@@ -49,6 +67,64 @@ The fix:
   plaintext when the tag does not match; `ethereum.tx.createEIP1559` throws on a
   `to` address that does not parse instead of building a transaction with no
   recipient.
+- **Input validation everywhere, one rule.** Every JS wrapper (`index.mjs`,
+  `aligned.mjs`) checks every input before it reaches WASM, with one helper set
+  (`dist/runtime/input-validation.mjs`): its type (binary data must be a
+  `Uint8Array`, text a string, numbers integers in range), its exact length or
+  allowed set of lengths, and for keys their validity, checked by two new native
+  exports rather than by any curve arithmetic in JS:
+  `hd_curve_validate_privkey` (the curve's scalar size, and 0 < d < n for
+  secp256k1, P-256 and P-384) and `hd_curve_validate_pubkey` (SEC1 02/03/04
+  encodings parsed by libsecp256k1 for secp256k1 and OpenSSL for P-256/P-384;
+  hybrid 06/07 encodings, coordinates ≥ p and points off the curve are refused;
+  Ed25519 keys must be canonical, decodable and not of small order). Signing,
+  derivation, export, ECDH, ECIES, address and peer-ID wrappers throw
+  `HDWalletError` (`INVALID_PRIVATE_KEY`, `INVALID_PUBLIC_KEY`,
+  `INVALID_ARGUMENT`, `NOT_SUPPORTED` for an unsupported curve or coin) on any
+  invalid input; the aligned batch buffers are zeroed before they are filled.
+  ECIES no longer treats an unknown curve name as secp256k1.
+- **Verification returns false, never throws, for bad bytes.**
+  `curves.*.verify`, `coin.verifyMessage`, `bitcoin` / `solana` / `polkadot`
+  `verifyMessage`, `cosmos.verifySignature`, the aligned `verifyBatch` entries,
+  `verifyChainProof` and `verifyEPMSignature` return false for any invalid
+  signature, key, hash or encoding (wrong length, not a point, malformed hex or
+  base64) and throw only for a programmer error: an argument of the wrong type
+  or an unknown coin or curve. `coin.verifyMessage` used to throw
+  `INVALID_SIGNATURE` on a malformed signature. `ethereum.verifyMessage`
+  recovers and returns the signer's address, so it still throws
+  `INVALID_SIGNATURE` when no address recovers; it now takes only v = 0, 1, 27
+  or 28.
+- **Strict Ed25519 (RFC 8032, section 5.1.7).** A signature R ‖ S under a key A
+  verifies only when it is 64 bytes and the key 32; S < L (L = 2^252 +
+  27742317777372353535851937790883648493); A and R each encode y < p
+  (canonical) and are none of the eight points of small order (with either sign
+  bit); A decodes to a curve point; and [S]B = R + [k]A for k = SHA-512(R ‖ A ‖
+  M) mod L, checked without the cofactor by comparing the encoding of
+  [S]B − [k]A with R. This applies everywhere Ed25519 is verified:
+  `curves.ed25519.verify`, Solana and Polkadot verification, the aligned
+  batches, X.509 wallet attestations, EPM signatures and Ed25519 chain proofs.
+  Every RFC 8032 test vector and every signature this library makes still
+  verifies.
+- **Private keys checked before export.** `hd_btc_to_wif` and the X.509 key
+  paths (PEM export, certificates, PKCS#12, wallet attestations) refuse a scalar
+  outside 0 < d < n in native code.
+- **C ABI outputs.** `hd_ecies_encrypt` / `hd_ecies_decrypt` zero their output
+  on every failure and report a tag mismatch as -VERIFICATION_FAILED (-403);
+  `hd_ecdh` and the Ed25519, X25519 and SLIP-10 exports zero their output on
+  failure; `hd_libp2p_peer_id*` and `hd_libp2p_ipns_hash*` take only valid
+  public keys of the libp2p sizes and check the output size before writing.
+  `_hd_curve_compress_pubkey` is dropped from the export list: it was listed but
+  never defined, and `curves.compressPublicKey` compresses after the native
+  point check.
+- C/WASI callers, fixed-size inputs: the C ABI keeps its shape, so these exports
+  still take no length for the inputs named and read exactly that many bytes —
+  `hd_curve_decompress_pubkey` (33), `hd_p256_verify` / `hd_p384_verify` (a
+  64- / 96-byte signature), the `hd_*_sign*` exports and the coin and
+  transaction signers (a 32-byte key; 48 for P-384), `hd_btc_tx_add_input` (a
+  32-byte txid and a 33-byte key), `hd_sol_find_pda` (a 32-byte program id),
+  `hd_eth_tx_set_to` (20 bytes) and `hd_btc_tx_add_p2pkh_output` /
+  `_p2wpkh_output` (a 20-byte hash). Pass buffers of exactly those sizes, and
+  check keys with `hd_curve_validate_pubkey` / `hd_curve_validate_privkey`.
 - C/WASI callers: these exports now fail with negative codes —
   `hd_hash_*`, `hd_kdf_*`, `hd_curve_pubkey_from_privkey`,
   `hd_curve_decompress_pubkey`, `hd_secp256k1_sign` / `_sign_recoverable` /
@@ -66,6 +142,25 @@ outputs, and a failure path for every wrapper audited. Two existing tests used
 P-256 points that are not on the curve and passed only because of this defect;
 they now use the real points.
 
+After the input validation the same vector sets still match: the WASI vectors
+byte for byte, and in the JS set only the messages of four errors differ (keys 0
+and n are now refused by the wrapper's check, with the same
+`INVALID_PRIVATE_KEY` code). None of the vectors used a malleable Ed25519
+signature. A committed fuzz test (`wasm/test/test_input_fuzz.mjs`) fills freed
+WASM heap with a marker and passes 740 invalid inputs (wrong lengths, invalid
+scalars, invalid points, malleable or small-order Ed25519 signatures, wrong
+types) through 87 wrapper entry points: each throws a library error or returns
+false, none returns the marker, and the module still signs and verifies
+afterwards. Native tests cover strict Ed25519, the key checks, the ECIES output
+on a tag mismatch and the X.509 scalar check.
+
+Not changed, by decision: secp256k1 verification accepts high-S signatures.
+`curves.secp256k1.verify`, EPM DER signatures and Bitcoin chain proofs accept a
+signature whose S is above n/2, as the OpenSSL and Go `crypto/ecdsa` verifiers
+they interoperate with do; refusing it would reject signatures those verifiers
+accept. Every signature this library makes is low-S, and Ethereum chain proofs,
+where the chain itself requires low-S, still refuse high-S.
+
 ### A smaller module; no output change
 
 Every key, address, signature and recovered key is byte for byte what 2.1.0
@@ -76,7 +171,10 @@ single-hash cross-language vectors, checked from both the JS package and the
 WASI module. The API, the export names and the files each npm package ships
 are unchanged (the content-hashed wallet-origin host assets in `hd-wallet-ui`
 take new names because their bytes changed); only error paths change, as
-described under Security.
+described under Security. The export list gains `hd_curve_validate_pubkey` and
+`hd_curve_validate_privkey` and drops the never-defined
+`_hd_curve_compress_pubkey`, and the npm package ships one more runtime file,
+`dist/runtime/input-validation.mjs`.
 
 - libsecp256k1 (v0.7.1) is built with its smallest precomputed tables
   (`SECP256K1_ECMULT_WINDOW_SIZE` 4, `SECP256K1_ECMULT_GEN_KB` 2) instead of the
@@ -88,20 +186,22 @@ described under Security.
 
 | Artifact (bytes) | 2.1.0 | 2.1.1 |
 | --- | ---: | ---: |
-| Browser WASM (in `dist/hd-wallet.js`, the site, wallet-origin) | 3,868,616 | 2,709,127 |
-| ... data section | 1,966,834 | 829,503 |
-| ... gzip -9 / brotli 11 | 2,265,051 / 2,027,439 | 1,128,212 / 891,581 |
-| `dist/hd-wallet.js` (npm, single file) | 5,281,605 | 3,735,621 |
-| `dist/hd-wallet-wasi.wasm` (npm) | 3,033,087 | 1,889,243 |
-| Site wallet chunk: JS + WASM | 5,229,517 + 0 | 71,757 + 2,709,127 |
-| Site assets, gzip -9 | 2,857,418 | 1,357,204 |
-| Site assets, brotli 11 | 2,482,438 | 1,087,877 |
-| `hd-wallet-wasm` tarball | 4,643,086 | 2,367,066 |
-| `hd-wallet-ui` tarball | 2,515,476 | 1,380,907 |
+| Browser WASM (in `dist/hd-wallet.js`, the site, wallet-origin) | 3,868,616 | 2,719,804 |
+| ... data section | 1,966,834 | 829,614 |
+| ... gzip -9 / brotli 11 | 2,265,051 / 2,027,439 | 1,132,056 / 893,303 |
+| `dist/hd-wallet.js` (npm, single file) | 5,281,605 | 3,750,367 |
+| `dist/hd-wallet-wasi.wasm` (npm) | 3,033,087 | 1,897,259 |
+| Site wallet chunk: JS + WASM | 5,229,517 + 0 | 71,994 + 2,719,804 |
+| Site assets, gzip -9 | 2,857,418 | 1,364,584 |
+| Site assets, brotli 11 | 2,482,438 | 1,092,246 |
+| `hd-wallet-wasm` tarball | 4,643,086 | 2,379,311 |
+| `hd-wallet-ui` tarball | 2,515,476 | 1,389,312 |
 
-gzip is zlib level 9 and brotli is quality 11 (Node's zlib); the site totals
+gzip is `gzip -9 -n` and brotli is quality 11 (Node's zlib); the site totals
 cover the files directly in `docs/assets/`; tarball sizes are `npm pack` with
-npm 11.16.0.
+npm 11.16.0. The input validation under Security adds 10,677 bytes to the
+browser WASM (the key-check exports and their libsecp256k1, OpenSSL and
+Crypto++ calls) and 8,016 to the WASI module.
 
 The smaller tables cost a little speed where libsecp256k1 multiplies points
 (Node 24, Apple M3 Ultra, median per call): `signRecoverable` 44 to 61 us,

@@ -18,6 +18,7 @@ const expectedRuntimeFiles = Object.freeze([
   'generated/sdn_plugin_manifest.mjs',
   'index.d.ts',
   'index.mjs',
+  'input-validation.mjs',
   'sdn-plugin-manifest-codec.mjs',
   'sdn-plugin-manifest-source.mjs',
   'sdn-plugin.mjs',

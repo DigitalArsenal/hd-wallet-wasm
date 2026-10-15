@@ -547,3 +547,137 @@ TEST_CASE(Curves, DeterministicSignatures) {
     // // Signatures should be identical with RFC 6979
     // ASSERT_BYTES_EQ(sig1.value.data(), sig2.value.data(), sig1.value.size());
 }
+
+// =============================================================================
+// Test: Key validation and strict Ed25519 (2.1.1)
+// =============================================================================
+
+#include "hd_wallet/eddsa.h"
+#include "../src/key_validation.h"
+
+#include <cryptopp/integer.h>
+#include <cryptopp/sha.h>
+
+#include <algorithm>
+
+namespace {
+
+// Ed25519 group order L, little-endian.
+const char* const kEd25519OrderLe = "edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010";
+
+ByteVector addLe(const uint8_t* a, const ByteVector& b) {
+    ByteVector out(32);
+    unsigned carry = 0;
+    for (size_t i = 0; i < 32; ++i) {
+        const unsigned sum = static_cast<unsigned>(a[i]) + b[i] + carry;
+        out[i] = static_cast<uint8_t>(sum);
+        carry = sum >> 8;
+    }
+    return out;
+}
+
+} // namespace
+
+TEST_CASE(Curves, Ed25519_StrictVerify_RfcVectorsPass) {
+    for (const auto& vec : ED25519_SIGN_VECTORS) {
+        auto publicKey = test::hexToArray<32>(vec.public_key_hex);
+        auto signature = test::hexToArray<64>(vec.signature_hex);
+        auto message = test::hexToBytes(vec.message_hex);
+        ASSERT_TRUE(eddsa::ed25519Verify(publicKey, message, signature));
+    }
+}
+
+TEST_CASE(Curves, Ed25519_StrictVerify_RejectsSPlusL) {
+    const auto& vec = ED25519_SIGN_VECTORS[1];
+    auto publicKey = test::hexToArray<32>(vec.public_key_hex);
+    auto signature = test::hexToArray<64>(vec.signature_hex);
+    auto message = test::hexToBytes(vec.message_hex);
+    ASSERT_TRUE(eddsa::ed25519Verify(publicKey, message, signature));
+
+    // S + L is the same scalar mod L: the cofactorless equation still holds,
+    // so only the S < L rule rejects it.
+    auto sPlusL = addLe(signature.data() + 32, test::hexToBytes(kEd25519OrderLe));
+    std::copy(sPlusL.begin(), sPlusL.end(), signature.begin() + 32);
+    ASSERT_FALSE(eddsa::ed25519Verify(publicKey, message, signature));
+}
+
+TEST_CASE(Curves, Ed25519_StrictVerify_RejectsSmallOrderKey) {
+    // With A the identity, [S]B == R + [k]A for any message when R = [S]B:
+    // S = a mod L for a seed's clamped scalar a, R = that seed's public key.
+    auto seed = test::hexToArray<32>(ED25519_SIGN_VECTORS[0].private_key_hex);
+    auto R = test::hexToArray<32>(ED25519_SIGN_VECTORS[0].public_key_hex);
+    uint8_t digest[64];
+    CryptoPP::SHA512().CalculateDigest(digest, seed.data(), seed.size());
+    digest[0] &= 248;
+    digest[31] &= 127;
+    digest[31] |= 64;
+    const CryptoPP::Integer a(digest, 32, CryptoPP::Integer::UNSIGNED, CryptoPP::LITTLE_ENDIAN_ORDER);
+    auto orderLe = test::hexToBytes(kEd25519OrderLe);
+    const CryptoPP::Integer L(orderLe.data(), 32, CryptoPP::Integer::UNSIGNED, CryptoPP::LITTLE_ENDIAN_ORDER);
+    uint8_t sBigEndian[32];
+    (a % L).Encode(sBigEndian, 32);
+
+    eddsa::Ed25519Signature forged{};
+    std::copy(R.begin(), R.end(), forged.begin());
+    for (size_t i = 0; i < 32; ++i) forged[32 + i] = sBigEndian[31 - i];
+
+    eddsa::Ed25519PublicKey identity{};
+    identity[0] = 0x01;
+    const std::string message = "any message at all";
+    ASSERT_FALSE(eddsa::ed25519Verify(identity, message, forged));
+
+    // The same key encoded non-canonically (y = p + 1).
+    eddsa::Ed25519PublicKey nonCanonical{};
+    nonCanonical.fill(0xff);
+    nonCanonical[0] = 0xee;
+    nonCanonical[31] = 0x7f;
+    ASSERT_FALSE(eddsa::ed25519Verify(nonCanonical, message, forged));
+    ASSERT_FALSE(keys::ed25519EncodingIsStrict(identity.data()));
+    ASSERT_FALSE(keys::ed25519EncodingIsStrict(nonCanonical.data()));
+}
+
+TEST_CASE(Curves, KeyValidation_PublicKeys) {
+    auto pub = test::hexToBytes("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798");
+    ASSERT_TRUE(keys::isValidPublicKey(Curve::SECP256K1, pub.data(), pub.size()));
+
+    auto badPrefix = pub;
+    badPrefix[0] = 0x05;
+    ASSERT_FALSE(keys::isValidPublicKey(Curve::SECP256K1, badPrefix.data(), badPrefix.size()));
+
+    ByteVector xTooLarge(33, 0xff);
+    xTooLarge[0] = 0x02;
+    ASSERT_FALSE(keys::isValidPublicKey(Curve::SECP256K1, xTooLarge.data(), xTooLarge.size()));
+
+    // x = 7 is no x-coordinate of secp256k1, P-256 or P-384.
+    ByteVector offCurve(33, 0x00);
+    offCurve[0] = 0x02;
+    offCurve[32] = 0x07;
+    ASSERT_FALSE(keys::isValidPublicKey(Curve::SECP256K1, offCurve.data(), offCurve.size()));
+    ASSERT_FALSE(keys::isValidPublicKey(Curve::P256, offCurve.data(), offCurve.size()));
+    ASSERT_FALSE(keys::isValidPublicKey(Curve::SECP256K1, pub.data(), 32));
+    ASSERT_FALSE(keys::isValidPublicKey(Curve::SECP256K1, pub.data(), 0));
+
+    // P-256 generator, compressed.
+    auto p256G = test::hexToBytes("036b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296");
+    ASSERT_TRUE(keys::isValidPublicKey(Curve::P256, p256G.data(), p256G.size()));
+    auto p256Hybrid = p256G;
+    p256Hybrid[0] = 0x07;
+    ASSERT_FALSE(keys::isValidPublicKey(Curve::P256, p256Hybrid.data(), p256Hybrid.size()));
+
+    auto edPub = test::hexToBytes(ED25519_SIGN_VECTORS[0].public_key_hex);
+    ASSERT_TRUE(keys::isValidPublicKey(Curve::ED25519, edPub.data(), edPub.size()));
+}
+
+TEST_CASE(Curves, KeyValidation_PrivateKeys) {
+    auto n = test::hexToBytes("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141");
+    auto nMinus1 = test::hexToBytes("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140");
+    ByteVector zero(32, 0x00);
+    ByteVector allFf(32, 0xff);
+    ASSERT_TRUE(keys::isValidPrivateKey(Curve::SECP256K1, nMinus1.data(), 32));
+    ASSERT_FALSE(keys::isValidPrivateKey(Curve::SECP256K1, n.data(), 32));
+    ASSERT_FALSE(keys::isValidPrivateKey(Curve::SECP256K1, zero.data(), 32));
+    ASSERT_FALSE(keys::isValidPrivateKey(Curve::SECP256K1, allFf.data(), 32));
+    ASSERT_FALSE(keys::isValidPrivateKey(Curve::SECP256K1, nMinus1.data(), 31));
+    ASSERT_FALSE(keys::isValidPrivateKey(Curve::P256, allFf.data(), 32));
+    ASSERT_TRUE(keys::isValidPrivateKey(Curve::ED25519, allFf.data(), 32));
+}

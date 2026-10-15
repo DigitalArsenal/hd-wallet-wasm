@@ -859,6 +859,14 @@ Result<KeyPair> generateEphemeralKeyPair(Curve curve) {
 // C API Exports
 // =============================================================================
 
+namespace {
+// The exports below zero their output on failure (the wasm_exports.cpp
+// convention), so a caller that ignores the -1 reads no stale or partial bytes.
+void zeroOutput(uint8_t* out, size_t size) noexcept {
+    if (out != nullptr && size > 0) std::memset(out, 0, size);
+}
+} // anonymous namespace
+
 extern "C" {
 
 HD_WALLET_EXPORT
@@ -879,6 +887,7 @@ int32_t hd_ecdh(
             shared_secret, &secretLen)) {
         return static_cast<int32_t>(secretLen);
     }
+    zeroOutput(shared_secret, shared_secret_size);
     return -1;
 }
 
@@ -898,6 +907,7 @@ int32_t hd_x25519(
             shared_secret, &secretLen)) {
         return static_cast<int32_t>(secretLen);
     }
+    zeroOutput(shared_secret, shared_secret_size);
     return -1;
 }
 
@@ -914,6 +924,7 @@ int32_t hd_x25519_public_key(
             public_key, &pubKeyLen)) {
         return static_cast<int32_t>(pubKeyLen);
     }
+    zeroOutput(public_key, public_key_size);
     return -1;
 }
 
@@ -935,6 +946,7 @@ int32_t hd_hkdf_sha256(
             okm, okm_len)) {
         return static_cast<int32_t>(okm_len);
     }
+    zeroOutput(okm, okm_len);
     return -1;
 }
 

@@ -4,6 +4,7 @@
  */
 
 #include "hd_wallet/x509.h"
+#include "key_validation.h"
 
 #include "hd_wallet/ecdsa.h"
 #include "hd_wallet/eddsa.h"
@@ -400,6 +401,12 @@ Result<EVP_PKEY*> makeEcPrivateKey(Curve curve, const ByteVector& private_key) {
   if (!priv_bn || !group) {
     return Result<EVP_PKEY*>::fail(Error::OUT_OF_MEMORY);
   }
+  // A private key is a scalar 0 < d < n: refuse 0, n and anything above
+  // before it is used or exported (PEM, certificates, PKCS#12).
+  const BIGNUM* order = EC_GROUP_get0_order(group.get());
+  if (order == nullptr || BN_is_zero(priv_bn.get()) || BN_cmp(priv_bn.get(), order) >= 0) {
+    return Result<EVP_PKEY*>::fail(Error::INVALID_PRIVATE_KEY);
+  }
   UniqueEcPoint pub_key(EC_POINT_new(group.get()), EC_POINT_free);
   if (!pub_key) {
     return Result<EVP_PKEY*>::fail(Error::INTERNAL);
@@ -460,6 +467,9 @@ Result<ByteVector> deriveWalletPublicKey(Curve curve, const ByteVector& private_
   const auto* profile = findCurveProfile(curve);
   if (profile == nullptr || !profile->signing_curve) {
     return Result<ByteVector>::fail(Error::NOT_SUPPORTED);
+  }
+  if (!keys::isValidPrivateKey(curve, private_key.data(), private_key.size())) {
+    return Result<ByteVector>::fail(Error::INVALID_PRIVATE_KEY);
   }
 
   switch (curve) {

@@ -48,6 +48,19 @@ TEST_CASE(X509, PrivateKeyPemRoundTrip_P256) {
   ASSERT_BYTES_EQ(private_key.value.data(), imported.value.data(), private_key.value.size());
 }
 
+TEST_CASE(X509, PrivateKeyPem_RejectsScalarsOutsideTheGroup) {
+  // 0, n, n + 1 and all-ff are not private keys: nothing is exported.
+  const ByteVector n = test::hexToBytes("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551");
+  ByteVector nPlus1 = n;
+  nPlus1.back() = 0x52;
+  for (const ByteVector& key : {ByteVector(32, 0x00), n, nPlus1, ByteVector(32, 0xff)}) {
+    auto pem = x509::exportPrivateKeyPem(Curve::P256, key);
+    ASSERT_ERROR(pem, Error::INVALID_PRIVATE_KEY);
+  }
+  const ByteVector secpN = test::hexToBytes("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141");
+  ASSERT_ERROR(x509::exportPrivateKeyPem(Curve::SECP256K1, secpN), Error::INVALID_PRIVATE_KEY);
+}
+
 TEST_CASE(X509, SelfSignedCertificate_WalletAttestation) {
   auto cert_key = x509::generatePrivateKey(Curve::P256);
   ASSERT_OK(cert_key);
