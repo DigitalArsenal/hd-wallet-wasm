@@ -544,10 +544,6 @@ export function getModalHTML() {
   <div id="login-modal" class="modal">
     <div class="modal-glass login-modal-content">
       <div class="modal-header"><h3>Login</h3><button class="modal-close" type="button" aria-label="Close"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
-      <div id="wallet-info-box" class="wallet-info-box">
-        <div id="wallet-info-expanded" class="wallet-info-expanded"><div class="wallet-info-content"><strong>Decentralized Wallet</strong> — Your credentials never leave your browser.</div><button class="wallet-info-close" id="wallet-info-dismiss" title="Dismiss" aria-label="Dismiss"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
-        <div id="wallet-info-collapsed" class="wallet-info-collapsed" style="display:none"><span>Decentralized Wallet</span><div class="wallet-info-icon-wrap"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="0.75"/><text x="8" y="8" text-anchor="middle" dominant-baseline="central" font-size="11" fill="currentColor">i</text></svg></div></div>
-      </div>
       <div class="modal-body">
         <div class="method-tabs">
           <button class="method-tab active" data-method="external">External Wallet</button>
@@ -575,6 +571,10 @@ export function getModalHTML() {
           <div id="legacy-wallet-quarantine-list"></div>
           <span id="legacy-wallet-quarantine-status" class="stored-wallet-date" aria-live="polite"></span>
         </div>
+      </div>
+      <div id="wallet-info-box" class="wallet-info-box wallet-info-footer">
+        <div id="wallet-info-expanded" class="wallet-info-expanded"><div class="wallet-info-content"><strong>Decentralized Wallet</strong> — Your credentials never leave your browser.</div><button class="wallet-info-close" id="wallet-info-dismiss" title="Dismiss" aria-label="Dismiss"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
+        <div id="wallet-info-collapsed" class="wallet-info-collapsed" style="display:none"><span>Decentralized Wallet</span><div class="wallet-info-icon-wrap"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="0.75"/><text x="8" y="8" text-anchor="middle" dominant-baseline="central" font-size="11" fill="currentColor">i</text></svg></div></div>
       </div>
     </div>
   </div>

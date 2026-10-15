@@ -899,6 +899,35 @@ body:has(.modal.active) {
   background: rgba(89, 217, 255, 0.05);
 }
 
+/* The login modal's notice sits in a quiet footer, out of the way of the sign-in methods. */
+.wallet-info-footer {
+  border-bottom: none;
+  border-top: 1px solid var(--white-10);
+}
+
+.wallet-info-footer .wallet-info-expanded,
+.wallet-info-footer .wallet-info-collapsed {
+  justify-content: center;
+  padding: 10px 24px 12px;
+  background: none;
+  font-size: 12px;
+  color: var(--white-40);
+}
+
+.wallet-info-footer .wallet-info-content {
+  flex: 0 1 auto;
+  text-align: center;
+}
+
+.wallet-info-footer .wallet-info-content strong {
+  color: rgba(89, 217, 255, 0.75);
+  font-weight: 600;
+}
+
+.wallet-info-footer .wallet-info-close {
+  display: none;
+}
+
 .wallet-info-icon-wrap {
   display: inline-flex;
   align-self: center;
