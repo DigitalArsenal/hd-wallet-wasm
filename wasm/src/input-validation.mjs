@@ -45,6 +45,40 @@ export const VALIDATION_ERROR = Object.freeze({
   INVALID_SIGNATURE: 402,
 });
 
+// The length a typed array really has, read from its internal slot through
+// %TypedArray%.prototype's getter: a subclass getter or an own `length`
+// property cannot change it. Captured at load.
+const TYPED_ARRAY_PROTOTYPE = Object.getPrototypeOf(Uint8Array.prototype);
+const TYPED_ARRAY_LENGTH = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, 'length').get;
+const TYPED_ARRAY_BUFFER = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, 'buffer').get;
+const BUFFER_RESIZABLE = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'resizable')?.get;
+const SHARED_BUFFER_GROWABLE = typeof SharedArrayBuffer === 'function'
+  ? Object.getOwnPropertyDescriptor(SharedArrayBuffer.prototype, 'growable')?.get
+  : undefined;
+
+/** The internal length of a typed array, or undefined for anything else. */
+function intrinsicLength(value) {
+  try {
+    return TYPED_ARRAY_LENGTH.call(value);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether a typed array's buffer can never change size (not resizable or growable). */
+function hasFixedSize(value) {
+  const buffer = TYPED_ARRAY_BUFFER.call(value);
+  for (const getter of [BUFFER_RESIZABLE, SHARED_BUFFER_GROWABLE]) {
+    if (!getter) continue;
+    try {
+      if (getter.call(buffer)) return false;
+    } catch {
+      // Not that kind of buffer.
+    }
+  }
+  return true;
+}
+
 const CURVE_NAMES = Object.freeze(['secp256k1', 'ed25519', 'P-256', 'P-384', 'X25519']);
 const PRIVATE_KEY_LENGTH = Object.freeze([32, 32, 32, 48, 32]);
 const PUBLIC_KEY_LENGTHS = Object.freeze([
@@ -78,14 +112,30 @@ export function createInputValidation(makeError) {
     return typeof lengths === 'number' ? `${lengths}` : lengths.join(' or ');
   }
 
-  /** True when `value` is a Uint8Array (Node Buffers included). */
+  /**
+   * True when `value` is a Uint8Array (Node Buffers included) that reports its
+   * own length (a subclass or an own `length` property that claims another
+   * length is refused) over a buffer that cannot be resized.
+   */
   function isBytes(value) {
-    return value instanceof Uint8Array;
+    if (!(value instanceof Uint8Array)) return false;
+    const length = intrinsicLength(value);
+    return length !== undefined && value.length === length && hasFixedSize(value);
+  }
+
+  /**
+   * The byte length of binary data from the array itself, never from its
+   * `length` property. Throws for anything isBytes refuses.
+   */
+  function byteLength(value, name = 'data', code = INVALID_ARGUMENT) {
+    bytes(value, name, code);
+    return intrinsicLength(value);
   }
 
   /** True when the length of `bytes` is `lengths` (a number) or one of `lengths`. */
   function hasLength(bytes, lengths) {
-    return typeof lengths === 'number' ? bytes.length === lengths : lengths.includes(bytes.length);
+    const length = intrinsicLength(bytes);
+    return typeof lengths === 'number' ? length === lengths : lengths.includes(length);
   }
 
   /** Require binary data (a Uint8Array) of any length. */
@@ -104,7 +154,8 @@ export function createInputValidation(makeError) {
   /** Require a Uint8Array of min..max bytes. */
   function bytesInRange(value, min, max, name = 'data', code = INVALID_ARGUMENT) {
     bytes(value, name, code);
-    if (value.length < min || value.length > max) {
+    const length = intrinsicLength(value);
+    if (length < min || length > max) {
       fail(code, `${name} must be ${min}-${max} bytes`);
     }
     return value;
@@ -200,13 +251,17 @@ export function createInputValidation(makeError) {
     if (typeof check !== 'function') {
       fail(NOT_SUPPORTED, `Function ${exportName} is not available in this build`);
     }
-    const pointer = wasm._hd_alloc(Math.max(1, value.length));
+    const copy = new Uint8Array(value);
+    const pointer = wasm._hd_alloc(Math.max(1, copy.length));
     if (!pointer) fail(OUT_OF_MEMORY, 'Out of memory');
     try {
-      wasm.HEAPU8.set(value, pointer);
-      return check(pointer, value.length, curveId) === 0;
+      wasm.HEAPU8.set(copy, pointer);
+      return check(pointer, copy.length, curveId) === 0;
     } finally {
-      if (secret) wasm._hd_secure_wipe(pointer, Math.max(1, value.length));
+      if (secret) {
+        wasm._hd_secure_wipe(pointer, Math.max(1, copy.length));
+        copy.fill(0);
+      }
       wasm._hd_dealloc(pointer);
     }
   }
@@ -248,6 +303,7 @@ export function createInputValidation(makeError) {
 
   return Object.freeze({
     isBytes,
+    byteLength,
     hasLength,
     bytes,
     bytesOfLength,

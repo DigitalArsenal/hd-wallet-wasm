@@ -602,7 +602,7 @@ test('Ethereum tx: a missing nonce or chainId is refused, never defaulted', () =
   assert(signedOrNull(() => wallet.ethereum.tx.createEIP1559(ethParams({ nonce: 0 }))) !== null, 'EIP-1559 nonce 0 signs');
 });
 
-test('Ethereum tx: each field is read once (a Uint8Array with a lying length signs its own bytes)', () => {
+test('Ethereum tx: each field is read once (a Uint8Array with a lying length is refused or signs its own bytes)', () => {
   const data = hexToBytes('deadbeef');
   const reference = signedOrNull(() => wallet.ethereum.tx.createEIP1559(ethParams({ data })));
   assert(reference !== null && reference.includes('84deadbeef'), 'reference transaction carries 0x84 deadbeef');
@@ -611,12 +611,12 @@ test('Ethereum tx: each field is read once (a Uint8Array with a lying length sig
   class LyingLength extends Uint8Array {
     get length() { return 64; }
   }
+  // It is refused (its length is not its own) or signs exactly its own bytes.
   const lying = new LyingLength(data);
-  assertEqual(signedOrNull(() => wallet.ethereum.tx.createEIP1559(ethParams({ data: lying }))), reference,
-    'createEIP1559 with a lying length');
-  assertEqual(
-    signedOrNull(() => wallet.ethereum.tx.create(eip155Params({ data: lying }))),
-    signedOrNull(() => wallet.ethereum.tx.create(eip155Params({ data }))),
+  const lyingEip1559 = signedOrNull(() => wallet.ethereum.tx.createEIP1559(ethParams({ data: lying })));
+  assert(lyingEip1559 === null || lyingEip1559 === reference, 'createEIP1559 with a lying length');
+  const lyingLegacy = signedOrNull(() => wallet.ethereum.tx.create(eip155Params({ data: lying })));
+  assert(lyingLegacy === null || lyingLegacy === signedOrNull(() => wallet.ethereum.tx.create(eip155Params({ data }))),
     'create with a lying length');
 
   // A getter that answers one array when checked and another, longer one later.
@@ -728,4 +728,89 @@ test('Bitcoin tx: addOutput pays only v0/20, v0/32 and v1/32 SegWit addresses (B
     if ((decoded !== null) !== (script !== null)) problems.push(`${address}: decodeAddress disagrees`);
   }
   assertEqual(problems.join('\n'), '', 'every output pays the script its address encodes, or is refused');
+});
+
+// ---------------------------------------------------------------------------
+// 2.1.2 (round 2): the output's network, the chain ID bound, unsigned legacy
+// ---------------------------------------------------------------------------
+
+test('Bitcoin tx: addOutput pays only addresses of the transaction\'s network', () => {
+  const priv = hexToBytes('0000000000000000000000000000000000000000000000000000000000000001');
+  const pub = wallet.curves.publicKeyFromPrivate(priv, Curve.SECP256K1);
+  const addresses = {
+    [Network.MAINNET]: [
+      wallet.bitcoin.getAddress(pub, BitcoinAddressType.P2WPKH, Network.MAINNET),
+      wallet.bitcoin.getAddress(pub, BitcoinAddressType.P2PKH, Network.MAINNET),
+    ],
+    [Network.TESTNET]: [
+      wallet.bitcoin.getAddress(pub, BitcoinAddressType.P2WPKH, Network.TESTNET),
+      wallet.bitcoin.getAddress(pub, BitcoinAddressType.P2PKH, Network.TESTNET),
+    ],
+  };
+  const pays = (address, network) => {
+    const tx = wallet.bitcoin.tx.create();
+    try {
+      tx.addOutput(address, 1000n, network);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      tx.destroy();
+    }
+  };
+  const problems = [];
+  for (const network of [Network.MAINNET, Network.TESTNET]) {
+    for (const [addressNetwork, list] of Object.entries(addresses)) {
+      for (const address of list) {
+        const expected = Number(addressNetwork) === network;
+        if (pays(address, network) !== expected) {
+          problems.push(`network ${network} ${expected ? 'refused' : 'paid'} ${address}`);
+        }
+      }
+    }
+  }
+  // The default is mainnet; other network ids (regtest included) are refused.
+  if (pays(addresses[Network.TESTNET][0])) problems.push('default (mainnet) paid a testnet address');
+  if (!pays(addresses[Network.MAINNET][0])) problems.push('default (mainnet) refused a mainnet address');
+  for (const network of [2, 3, -1]) {
+    if (pays(addresses[Network.TESTNET][0], network)) problems.push(`network ${network} paid a testnet address`);
+  }
+  if (pays('bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080', Network.TESTNET)) problems.push('paid a regtest address');
+  if (wallet.bitcoin.validateAddress(addresses[Network.TESTNET][0], 2)) problems.push('validateAddress(network 2) read as testnet');
+  assertEqual(problems.join('\n'), '', 'outputs follow the transaction network');
+});
+
+test('Ethereum tx: chainId above EIP-2294\'s bound is refused (v would wrap)', () => {
+  const MAX = 9223372036854775771n; // floor(MAX_UINT64 / 2) - 36
+  for (const chainId of [(1n << 63n) + 1n, MAX + 1n, (1n << 64n) - 1n]) {
+    assertEqual(signedOrNull(() => wallet.ethereum.tx.create(eip155Params({ chainId }))), null, `legacy chainId ${chainId}`);
+    assertEqual(signedOrNull(() => wallet.ethereum.tx.createEIP1559(ethParams({ chainId }))), null, `EIP-1559 chainId ${chainId}`);
+  }
+  const atBound = signedOrNull(() => wallet.ethereum.tx.create(eip155Params({ chainId: MAX })));
+  assert(atBound !== null, 'the bound itself signs');
+  const parsed = wallet.ethereum.tx.parse(hexToBytes(atBound));
+  parsed.destroy();
+});
+
+test('Ethereum tx: an unsigned legacy transaction serializes in its EIP-155 signing form and signs after parsing', () => {
+  const unsignedTx = wallet.ethereum.tx.create(eip155Params({ nonce: 9 }));
+  let raw;
+  try {
+    raw = unsignedTx.serialize();
+  } finally {
+    unsignedTx.destroy();
+  }
+  // EIP-155's signing data: chainId 1, 0, 0 where v, r, s go.
+  assertEqual(bytesToHex(raw),
+    'ec098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a764000080018080',
+    'unsigned legacy bytes');
+  const parsed = wallet.ethereum.tx.parse(raw);
+  try {
+    assertEqual(bytesToHex(parsed.sign(hexToBytes('46'.repeat(32))).serialize()),
+      'f86c098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a76400008025a028ef6134'
+      + '0bd939bc2195fe537567866003e1a15d3c71ff63e1590620aa636276a067cbe9d8997f761aecb703304b3800ccf555c9f3'
+      + 'dc64214b297fb1966a3b6d83', 'parsed then signed: the EIP-155 example');
+  } finally {
+    parsed.destroy();
+  }
 });

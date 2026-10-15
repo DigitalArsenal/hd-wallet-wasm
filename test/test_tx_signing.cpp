@@ -833,3 +833,103 @@ TEST_CASE(TxSigning, BtcBase58OutputNeedsTwentyBytePayload) {
     }
   }
 }
+
+// =============================================================================
+// Network ids, chain ID bound, unsigned legacy round trip (2.1.2, round 2)
+// =============================================================================
+
+TEST_CASE(TxSigning, BtcNetworkIdsOtherThanMainnetAndTestnetAreRefused) {
+  // A tb1 address validates for testnet (1) only; id 2 (or any other) used to
+  // be read as testnet.
+  const char* testnet = "tb1qqqqqp399et2xygdj5xreqhjjvcmzhxw4aywxecjdzew6hylgvsesrxh6hy";
+  ASSERT_EQ(0, coins::hd_btc_validate_address(testnet, 1));
+  ASSERT_TRUE(coins::hd_btc_validate_address(testnet, 0) != 0);
+  for (int32_t network : {2, 3, -1, 255}) {
+    ASSERT_EQ(static_cast<int32_t>(Error::INVALID_ARGUMENT), coins::hd_btc_validate_address(testnet, network));
+    ASSERT_EQ(-1, coins::hd_btc_detect_address_type(testnet, network));
+    const auto pub = test::hexToBytes("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798");
+    char address[128];
+    ASSERT_EQ(static_cast<int32_t>(Error::INVALID_ARGUMENT),
+              coins::hd_btc_p2wpkh_address(pub.data(), pub.size(), network, address, sizeof(address)));
+    ASSERT_EQ(static_cast<int32_t>(Error::INVALID_ARGUMENT),
+              coins::hd_btc_p2pkh_address(pub.data(), pub.size(), network, address, sizeof(address)));
+  }
+  // Regtest (HRP bcrt) is not supported: refused on both networks.
+  const char* regtest = "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080";
+  ASSERT_TRUE(coins::hd_btc_validate_address(regtest, 0) != 0);
+  ASSERT_TRUE(coins::hd_btc_validate_address(regtest, 1) != 0);
+  int32_t type = -1, network = -1;
+  uint8_t hash[64];
+  size_t hashLen = sizeof(hash);
+  ASSERT_TRUE(coins::hd_btc_decode_address(regtest, &type, hash, &hashLen, &network) != 0);
+}
+
+TEST_CASE(TxSigning, EthChainIdAboveEip2294BoundIsRefused) {
+  const auto key = test::hexToArray<32>(kEip155PrivateKey);
+  // v = 2 * chainId + 35 + recovery id wrapped: 2^63 + 1 signed with v = 37.
+  for (uint64_t chainId : {(1ULL << 63) + 1, tx::ETH_MAX_CHAIN_ID + 1, ~0ULL}) {
+    tx::EthereumTransaction legacy(chainId);
+    setTransfer(legacy);
+    legacy.setNonce(9);
+    ASSERT_TRUE(Error::INVALID_TRANSACTION == legacy.sign(key));
+    ASSERT_FALSE(legacy.hasSignature());
+    auto eip1559 = tx::EthereumTransaction::createEIP1559(chainId, 1, 2);
+    setTransfer(eip1559);
+    eip1559.setNonce(9);
+    ASSERT_TRUE(Error::INVALID_TRANSACTION == eip1559.sign(key));
+    ASSERT_TRUE(tx::hd_eth_tx_create(chainId) == nullptr);
+    ASSERT_TRUE(tx::hd_eth_tx_create_eip1559(chainId, 1, 2) == nullptr);
+  }
+  // The bound itself signs, and v = 2 * bound + 35 + recovery id fits.
+  tx::EthereumTransaction atBound(tx::ETH_MAX_CHAIN_ID);
+  setTransfer(atBound);
+  atBound.setNonce(9);
+  ASSERT_TRUE(Error::OK == atBound.sign(key));
+  ASSERT_TRUE(atBound.signatureV() >= tx::ETH_MAX_CHAIN_ID * 2 + 35);
+  auto parsed = tx::EthereumTransaction::parse(atBound.serialize().value);
+  ASSERT_OK(parsed);
+  ASSERT_EQ(tx::ETH_MAX_CHAIN_ID, parsed.value.chainId());
+}
+
+TEST_CASE(TxSigning, EthUnsignedLegacySerializesInEip155SigningFormAndParsesBack) {
+  // EIP-155's example: the unsigned transaction is its signing data
+  // (chainId 1, 0, 0 where v, r, s go); parsed back it signs to the example.
+  auto unsignedTx = eip155Example(9);
+  auto serialized = unsignedTx.serialize();
+  ASSERT_OK(serialized);
+  ASSERT_STR_EQ("ec098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a764000080018080",
+                toHex(serialized.value));
+  auto forSigning = unsignedTx.serializeForSigning();
+  ASSERT_OK(forSigning);
+  ASSERT_STR_EQ(toHex(forSigning.value), toHex(serialized.value));
+
+  auto parsed = tx::EthereumTransaction::parse(serialized.value);
+  ASSERT_OK(parsed);
+  ASSERT_FALSE(parsed.value.hasSignature());
+  ASSERT_EQ(static_cast<uint64_t>(1), parsed.value.chainId());
+  ASSERT_EQ(static_cast<uint64_t>(9), parsed.value.nonce());
+  ASSERT_TRUE(Error::OK == parsed.value.sign(test::hexToArray<32>(kEip155PrivateKey)));
+  auto signedBytes = parsed.value.serialize();
+  ASSERT_OK(signedBytes);
+  ASSERT_STR_EQ(kEip155SignedNonce9, toHex(signedBytes.value));
+
+  // The same through the C ABI the WASM wrapper uses.
+  tx::eth_tx_handle handle = tx::hd_eth_tx_parse(serialized.value.data(), serialized.value.size());
+  ASSERT_TRUE(handle != nullptr);
+  const auto key = test::hexToArray<32>(kEip155PrivateKey);
+  ASSERT_EQ(0, tx::hd_eth_tx_sign(handle, key.data()));
+  uint8_t out[512];
+  size_t outLen = 0;
+  ASSERT_EQ(0, tx::hd_eth_tx_serialize(handle, out, sizeof(out), &outLen));
+  ASSERT_STR_EQ(kEip155SignedNonce9, toHex(out, outLen));
+  tx::hd_eth_tx_destroy(handle);
+
+  // An unsigned transaction with v = r = s = 0 (no chain ID) still parses,
+  // and does not sign.
+  std::string preEip155(toHex(serialized.value));
+  preEip155.replace(preEip155.size() - 6, 6, "808080");
+  auto noChain = tx::EthereumTransaction::parseHex(preEip155);
+  ASSERT_OK(noChain);
+  ASSERT_EQ(static_cast<uint64_t>(0), noChain.value.chainId());
+  ASSERT_TRUE(Error::INVALID_TRANSACTION == noChain.value.sign(key));
+}

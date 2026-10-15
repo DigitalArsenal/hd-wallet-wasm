@@ -308,11 +308,13 @@ const ethTx = wallet.ethereum.tx.createEIP1559({
 const ethRawTx = ethTx.serialize();
 ```
 
-`addOutput` pays P2PKH, P2SH, P2WPKH (SegWit v0, 20 bytes), P2WSH (v0, 32
-bytes) and P2TR (v1, 32 bytes) addresses and throws on any other address,
-including valid SegWit addresses of other witness versions or program lengths
-(BIP-350). Ethereum `create` and `createEIP1559` require `nonce` (0 is a nonce)
-and `chainId` (at least 1); neither has a default.
+`addOutput(address, amount, network = Network.MAINNET)` pays P2PKH, P2SH,
+P2WPKH (SegWit v0, 20 bytes), P2WSH (v0, 32 bytes) and P2TR (v1, 32 bytes)
+addresses of that network and throws on any other address, including valid
+SegWit addresses of other witness versions or program lengths (BIP-350) and
+addresses of the other network; regtest is not supported. Ethereum `create`
+and `createEIP1559` require `nonce` (0 is a nonce) and `chainId` (1 to
+2^63 − 37, EIP-2294); neither has a default.
 
 ### X.509 PKI and Wallet Attestations
 

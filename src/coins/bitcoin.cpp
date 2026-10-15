@@ -196,6 +196,15 @@ struct BitcoinPayee {
   ByteVector payload;
 };
 
+// The parameters of a network id at the C ABI: 0 mainnet, 1 testnet. Any
+// other id (regtest included: its bech32 HRP is bcrt) is refused, never read
+// as testnet.
+const BitcoinParams* bitcoinNetworkParams(int32_t network) {
+  if (network == 0) return &BITCOIN_MAINNET;
+  if (network == 1) return &BITCOIN_TESTNET;
+  return nullptr;
+}
+
 Result<BitcoinPayee> decodeBitcoinPayee(const std::string& address, const BitcoinParams& params) {
   using R = Result<BitcoinPayee>;
   if (address.empty()) {
@@ -663,7 +672,11 @@ int32_t hd_btc_p2pkh_address(
     return static_cast<int32_t>(Error::INVALID_ARGUMENT);
   }
 
-  const BitcoinParams& params = (network == 0) ? BITCOIN_MAINNET : BITCOIN_TESTNET;
+  const BitcoinParams* network_params = bitcoinNetworkParams(network);
+  if (!network_params) {
+    return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+  }
+  const BitcoinParams& params = *network_params;
   ByteVector pubkey(public_key, public_key + pubkey_len);
 
   auto result = bitcoinP2PKH(pubkey, params);
@@ -691,7 +704,11 @@ int32_t hd_btc_p2sh_address(
     return static_cast<int32_t>(Error::INVALID_ARGUMENT);
   }
 
-  const BitcoinParams& params = (network == 0) ? BITCOIN_MAINNET : BITCOIN_TESTNET;
+  const BitcoinParams* network_params = bitcoinNetworkParams(network);
+  if (!network_params) {
+    return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+  }
+  const BitcoinParams& params = *network_params;
   Bytes33 pubkey;
   std::copy(public_key, public_key + 33, pubkey.begin());
 
@@ -720,7 +737,11 @@ int32_t hd_btc_p2wpkh_address(
     return static_cast<int32_t>(Error::INVALID_ARGUMENT);
   }
 
-  const BitcoinParams& params = (network == 0) ? BITCOIN_MAINNET : BITCOIN_TESTNET;
+  const BitcoinParams* network_params = bitcoinNetworkParams(network);
+  if (!network_params) {
+    return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+  }
+  const BitcoinParams& params = *network_params;
   Bytes33 pubkey;
   std::copy(public_key, public_key + 33, pubkey.begin());
 
@@ -749,7 +770,11 @@ int32_t hd_btc_p2wsh_address(
     return static_cast<int32_t>(Error::INVALID_ARGUMENT);
   }
 
-  const BitcoinParams& params = (network == 0) ? BITCOIN_MAINNET : BITCOIN_TESTNET;
+  const BitcoinParams* network_params = bitcoinNetworkParams(network);
+  if (!network_params) {
+    return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+  }
+  const BitcoinParams& params = *network_params;
   ByteVector script(witness_script, witness_script + script_len);
 
   auto result = bitcoinP2WSH(script, params);
@@ -777,7 +802,11 @@ int32_t hd_btc_p2tr_address(
     return static_cast<int32_t>(Error::INVALID_ARGUMENT);
   }
 
-  const BitcoinParams& params = (network == 0) ? BITCOIN_MAINNET : BITCOIN_TESTNET;
+  const BitcoinParams* network_params = bitcoinNetworkParams(network);
+  if (!network_params) {
+    return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+  }
+  const BitcoinParams& params = *network_params;
   ByteVector pubkey(public_key, public_key + pubkey_len);
 
   auto result = bitcoinP2TR(pubkey, params);
@@ -799,7 +828,11 @@ int32_t hd_btc_validate_address(const char* address, int32_t network) {
     return static_cast<int32_t>(Error::INVALID_ARGUMENT);
   }
 
-  const BitcoinParams& params = (network == 0) ? BITCOIN_MAINNET : BITCOIN_TESTNET;
+  const BitcoinParams* network_params = bitcoinNetworkParams(network);
+  if (!network_params) {
+    return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+  }
+  const BitcoinParams& params = *network_params;
   auto result = validateBitcoinAddress(address, params);
   return static_cast<int32_t>(result.error);
 }
@@ -810,7 +843,11 @@ int32_t hd_btc_detect_address_type(const char* address, int32_t network) {
     return -1;
   }
 
-  const BitcoinParams& params = (network == 0) ? BITCOIN_MAINNET : BITCOIN_TESTNET;
+  const BitcoinParams* network_params = bitcoinNetworkParams(network);
+  if (!network_params) {
+    return -1;
+  }
+  const BitcoinParams& params = *network_params;
   auto result = detectBitcoinAddressType(address, params);
   if (!result.ok()) return -1;
 
@@ -889,7 +926,11 @@ int32_t hd_btc_verify_message(
     return -static_cast<int32_t>(Error::INVALID_ARGUMENT);
   }
 
-  const BitcoinParams& params = (network == 0) ? BITCOIN_MAINNET : BITCOIN_TESTNET;
+  const BitcoinParams* network_params = bitcoinNetworkParams(network);
+  if (!network_params) {
+    return -static_cast<int32_t>(Error::INVALID_ARGUMENT);
+  }
+  const BitcoinParams& params = *network_params;
   ByteVector sig(signature, signature + signature_len);
 
   auto result = verifyBitcoinMessage(message, sig, address, params);
@@ -915,7 +956,12 @@ int32_t hd_btc_to_wif(
     return static_cast<int32_t>(Error::INVALID_PRIVATE_KEY);
   }
 
-  const BitcoinParams& params = (network == 0) ? BITCOIN_MAINNET : BITCOIN_TESTNET;
+  const BitcoinParams* network_params = bitcoinNetworkParams(network);
+  if (!network_params) {
+    std::memset(wif_out, 0, wif_size);
+    return static_cast<int32_t>(Error::INVALID_ARGUMENT);
+  }
+  const BitcoinParams& params = *network_params;
   Bytes32 priv;
   std::copy(private_key, private_key + 32, priv.begin());
 

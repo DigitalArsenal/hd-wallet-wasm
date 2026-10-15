@@ -820,9 +820,10 @@ export interface BitcoinTx {
   addInput(txid: string, vout: number, sequence?: number): this;
   /**
    * Pay `address`: P2PKH, P2SH, P2WPKH (v0, 20 bytes), P2WSH (v0, 32 bytes)
-   * or P2TR (v1, 32 bytes). Any other address throws (BIP-350).
+   * or P2TR (v1, 32 bytes) of `network` (mainnet by default). Any other
+   * address, or one of the other network, throws (BIP-350).
    */
-  addOutput(address: string, amount: bigint): this;
+  addOutput(address: string, amount: bigint, network?: Network): this;
   sign(inputIndex: number, privateKey: Uint8Array, redeemScript?: Uint8Array): this;
   serialize(): Uint8Array;
   getTxid(): string;
@@ -872,8 +873,9 @@ export interface EthereumAPI {
 }
 
 /**
- * `nonce` and `chainId` are required: a missing nonce, a missing chainId or
- * chainId 0 throws (an explicit nonce 0 is valid). Each field is read once.
+ * `nonce` and `chainId` are required: a missing nonce or chainId, or a chainId
+ * outside 1 to 2^63 - 37 (EIP-2294), throws (an explicit nonce 0 is valid).
+ * Each field is read once.
  */
 export interface EthereumTxBuilder {
   create(params: {

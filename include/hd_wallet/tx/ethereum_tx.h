@@ -42,6 +42,10 @@ namespace tx {
 /// Ethereum mainnet chain ID
 constexpr uint64_t ETH_CHAIN_ID_MAINNET = 1;
 
+/// The largest chain ID (EIP-2294: floor(MAX_UINT64 / 2) - 36), so that a
+/// legacy v = 2 * chainId + 35 + recovery id fits 64 bits.
+constexpr uint64_t ETH_MAX_CHAIN_ID = 9223372036854775771ULL;
+
 /// Ethereum testnet chain IDs
 constexpr uint64_t ETH_CHAIN_ID_SEPOLIA = 11155111;
 constexpr uint64_t ETH_CHAIN_ID_GOERLI = 5;
@@ -230,10 +234,14 @@ public:
 
   /**
    * Create a legacy transaction
-   * @param chainId Chain ID for EIP-155 replay protection (at least 1 to sign)
+   * @param chainId Chain ID for EIP-155 replay protection (1 to
+   *        ETH_MAX_CHAIN_ID to sign)
    *
    * The nonce is required: serialize, sign and validate refuse a transaction
-   * whose nonce was never set (setNonce(0) is a nonce). sign refuses chain ID 0.
+   * whose nonce was never set (setNonce(0) is a nonce). sign refuses chain ID 0
+   * and chain IDs above ETH_MAX_CHAIN_ID. An unsigned legacy transaction
+   * serializes in its EIP-155 signing form (chainId, 0, 0) and parses back
+   * with that chain ID.
    */
   explicit EthereumTransaction(uint64_t chainId);
 
@@ -602,12 +610,12 @@ Result<std::array<uint8_t, 20>> parseAddress(const std::string& addressHex);
 /// Opaque handle for EthereumTransaction
 typedef struct eth_tx_t* eth_tx_handle;
 
-/// Returns NULL for chain_id 0. Set the nonce (hd_eth_tx_set_nonce) before
+/// Returns NULL for chain_id 0 or above ETH_MAX_CHAIN_ID. Set the nonce (hd_eth_tx_set_nonce) before
 /// serializing or signing: it has no default.
 HD_WALLET_C_EXPORT HD_WALLET_EXPORT
 eth_tx_handle hd_eth_tx_create(uint64_t chain_id);
 
-/// Returns NULL for chain_id 0. The nonce is required as for hd_eth_tx_create.
+/// Returns NULL for chain_id 0 or above ETH_MAX_CHAIN_ID. The nonce is required as for hd_eth_tx_create.
 HD_WALLET_C_EXPORT HD_WALLET_EXPORT
 eth_tx_handle hd_eth_tx_create_eip1559(
   uint64_t chain_id,

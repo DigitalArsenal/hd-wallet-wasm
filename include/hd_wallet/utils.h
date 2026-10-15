@@ -168,18 +168,6 @@ Result<std::string> segwitEncode(
     const ByteVector& program
 );
 
-/**
- * Decode SegWit address
- *
- * @param hrp Expected human-readable part
- * @param str Bech32 address string
- * @return Result containing tuple of (version, program) or error
- */
-struct SegwitDecodeResult {
-    uint8_t version;
-    ByteVector program;
-};
-Result<SegwitDecodeResult> segwitDecode(const std::string& hrp, const std::string& str);
 
 /**
  * Convert 8-bit bytes to 5-bit groups for Bech32

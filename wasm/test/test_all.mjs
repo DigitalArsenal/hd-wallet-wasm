@@ -166,6 +166,9 @@ async function runTests() {
     console.log('\n\x1b[1mInput Fuzz (2.1.1):\x1b[0m');
     await import('./test_input_fuzz.mjs');
 
+    console.log('\n\x1b[1mLying Lengths (2.1.2):\x1b[0m');
+    await import('./test_lying_lengths.mjs');
+
   } catch (error) {
     console.error('\nTest suite error:', error.message);
     if (error.message.includes('Cannot find module') || error.message.includes('WASM')) {

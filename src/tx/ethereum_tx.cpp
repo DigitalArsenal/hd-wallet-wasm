@@ -475,10 +475,17 @@ std::vector<ByteVector> EthereumTransaction::encodeFields() const {
       items.push_back(rlp::encodeInteger256(value_));
       items.push_back(rlp::encodeString(data_));
 
-      // Signature
-      items.push_back(rlp::encodeInteger(signatureV_));
-      items.push_back(rlp::encodeInteger256(signatureR_));
-      items.push_back(rlp::encodeInteger256(signatureS_));
+      if (hasSignature()) {
+        items.push_back(rlp::encodeInteger(signatureV_));
+        items.push_back(rlp::encodeInteger256(signatureR_));
+        items.push_back(rlp::encodeInteger256(signatureS_));
+      } else {
+        // Unsigned: the EIP-155 signing form (chainId, 0, 0), which parse
+        // reads back with its chain ID.
+        items.push_back(rlp::encodeInteger(chainId_));
+        items.push_back(rlp::encodeInteger(0));
+        items.push_back(rlp::encodeInteger(0));
+      }
       break;
     }
 
@@ -709,8 +716,9 @@ Error EthereumTransaction::sign(const Bytes32& privateKey, int /* inputIndex */)
   if (!forSigning.ok()) {
     return forSigning.error;
   }
-  // Chain ID 0 would sign a pre-EIP-155 transaction, valid on every chain.
-  if (chainId_ == 0) {
+  // Chain ID 0 would sign a pre-EIP-155 transaction, valid on every chain;
+  // above EIP-2294's bound, v = 2 * chainId + 36 no longer fits 64 bits.
+  if (chainId_ == 0 || chainId_ > ETH_MAX_CHAIN_ID) {
     return Error::INVALID_TRANSACTION;
   }
 
@@ -1005,8 +1013,12 @@ Result<EthereumTransaction> EthereumTransaction::parse(const ByteVector& data) {
       std::copy((*items)[8].begin(), (*items)[8].end(), tx.signatureS_.begin() + start);
     }
 
-    // Extract chain ID from V (EIP-155)
-    if (tx.signatureV_ >= 35) {
+    // Unsigned (r = s = 0): the EIP-155 signing form carries the chain ID
+    // where v goes. Signed: the chain ID is in v (EIP-155).
+    if (!tx.hasSignature()) {
+      tx.chainId_ = tx.signatureV_;
+      tx.signatureV_ = 0;
+    } else if (tx.signatureV_ >= 35) {
       tx.chainId_ = (tx.signatureV_ - 35) / 2;
     } else if (tx.signatureV_ == 27 || tx.signatureV_ == 28) {
       tx.chainId_ = 0;  // Pre-EIP-155
@@ -1155,7 +1167,7 @@ Result<std::array<uint8_t, 20>> parseAddress(const std::string& addressHex) {
 extern "C" {
 
 eth_tx_handle hd_eth_tx_create(uint64_t chain_id) {
-  if (chain_id == 0) {
+  if (chain_id == 0 || chain_id > ETH_MAX_CHAIN_ID) {
     return nullptr;
   }
   return reinterpret_cast<eth_tx_handle>(new EthereumTransaction(chain_id));
@@ -1166,7 +1178,7 @@ eth_tx_handle hd_eth_tx_create_eip1559(
   uint64_t max_priority_fee,
   uint64_t max_fee
 ) {
-  if (chain_id == 0) {
+  if (chain_id == 0 || chain_id > ETH_MAX_CHAIN_ID) {
     return nullptr;
   }
   auto tx = new EthereumTransaction(EthereumTransaction::createEIP1559(chain_id, max_priority_fee, max_fee));

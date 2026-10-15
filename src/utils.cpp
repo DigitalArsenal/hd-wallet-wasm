@@ -625,60 +625,6 @@ std::string segwitEncode(const std::string& hrp, int witness_version,
     return result;
 }
 
-/**
- * Decode SegWit address
- */
-std::tuple<int, std::vector<uint8_t>, std::string> segwitDecode(const std::string& addr) {
-    Bech32Type type;
-    auto [hrp, data] = bech32Decode(addr, &type);
-
-    if (hrp.empty() || data.empty()) {
-        return {-1, {}, ""};
-    }
-
-    // First value is witness version (already in 5-bit form from decode)
-    // We need to look at the raw decoded data before 5->8 conversion
-
-    // Re-decode to get the 5-bit values
-    std::string lower = addr;
-    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-    size_t pos = lower.rfind('1');
-    std::string data_part = lower.substr(pos + 1);
-
-    std::vector<uint8_t> values;
-    for (size_t i = 0; i < data_part.size() - 6; ++i) {
-        values.push_back(BECH32_REVERSE[static_cast<uint8_t>(data_part[i])]);
-    }
-
-    if (values.empty()) {
-        return {-1, {}, ""};
-    }
-
-    int witness_version = values[0];
-
-    // Validate witness version and Bech32 variant
-    if (witness_version == 0 && type != Bech32Type::BECH32) {
-        return {-1, {}, ""};
-    }
-    if (witness_version != 0 && type != Bech32Type::BECH32M) {
-        return {-1, {}, ""};
-    }
-
-    // Convert remaining 5-bit values to 8-bit program
-    std::vector<uint8_t> program_5bit(values.begin() + 1, values.end());
-    auto program = convertBits(program_5bit, 5, 8, false);
-
-    // Validate program length
-    if (program.size() < 2 || program.size() > 40) {
-        return {-1, {}, ""};
-    }
-    if (witness_version == 0 && program.size() != 20 && program.size() != 32) {
-        return {-1, {}, ""};
-    }
-
-    return {witness_version, program, hrp};
-}
-
 // =============================================================================
 // Hex Encoding/Decoding
 // =============================================================================
