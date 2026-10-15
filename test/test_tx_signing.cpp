@@ -16,6 +16,7 @@
  *   encoder that reproduces the EIP-155 example byte for byte.
  */
 
+#include <initializer_list>
 #include "test_framework.h"
 #include "hd_wallet/types.h"
 #include "hd_wallet/coins/bitcoin.h"
@@ -868,7 +869,7 @@ TEST_CASE(TxSigning, BtcNetworkIdsOtherThanMainnetAndTestnetAreRefused) {
 TEST_CASE(TxSigning, EthChainIdAboveEip2294BoundIsRefused) {
   const auto key = test::hexToArray<32>(kEip155PrivateKey);
   // v = 2 * chainId + 35 + recovery id wrapped: 2^63 + 1 signed with v = 37.
-  for (uint64_t chainId : {(1ULL << 63) + 1, tx::ETH_MAX_CHAIN_ID + 1, ~0ULL}) {
+  for (uint64_t chainId : std::initializer_list<uint64_t>{(1ULL << 63) + 1, uint64_t(tx::ETH_MAX_CHAIN_ID) + 1, ~uint64_t(0)}) {
     tx::EthereumTransaction legacy(chainId);
     setTransfer(legacy);
     legacy.setNonce(9);
