@@ -23,13 +23,15 @@ function read(relativePath) {
   return readFileSync(resolve(ROOT, relativePath), 'utf8');
 }
 
+// The bootstrap is src/landing.js, loaded by index.html as an external
+// module (the page's Content-Security-Policy allows no inline script).
 function bootstrapScript() {
   const html = read('index.html');
-  const scripts = [...html.matchAll(/<script type="module">([\s\S]*?)<\/script>/gu)]
-    .map((match) => match[1])
-    .filter((source) => source.includes("from './src/app.js'"));
-  expect(scripts).toHaveLength(1);
-  return scripts[0];
+  expect(html).toContain('<script type="module" src="./src/landing.js"></script>');
+  expect([...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>/gu)]).toHaveLength(0);
+  const source = read('src/landing.js');
+  expect(source).toContain("from './app.js'");
+  return source;
 }
 
 class StubElement {
@@ -54,46 +56,78 @@ class StubElement {
 // Runs the bootstrap with each `import { a, b } from './x.js'` bound to the
 // named exports in `modules`; a name a module does not export is undefined,
 // so a bootstrap that calls it throws.
-async function runBootstrap({ windowHooks = {}, ids = [] } = {}) {
+async function runBootstrap({ windowHooks = {}, ids = [], framed = false, topThrows = false } = {}) {
   const elements = new Map(ids.map((id) => [id, new StubElement(id)]));
-  const document = {
-    body: { tagName: 'BODY' },
-    getElementById: (id) => elements.get(id) ?? null,
+  const created = [];
+  const body = {
+    tagName: 'BODY',
+    children: null,
+    replaceChildren(...nodes) { this.children = nodes; },
   };
-  const window = { ...windowHooks };
-  const calls = { init: [], createWalletUI: [], initI18n: 0 };
+  const document = {
+    body,
+    getElementById: (id) => elements.get(id) ?? null,
+    createElement(tag) {
+      const node = {
+        tag,
+        attributes: {},
+        children: [],
+        textContent: '',
+        setAttribute(name, value) { this.attributes[name] = value; },
+        append(...nodes) { this.children.push(...nodes); },
+      };
+      created.push(node);
+      return node;
+    },
+  };
+  const window = { ...windowHooks, location: { href: 'https://wallet.example/' } };
+  window.self = window;
+  if (topThrows) {
+    Object.defineProperty(window, 'top', { get() { throw new Error('SecurityError'); } });
+  } else {
+    window.top = framed ? { framedBy: 'attacker' } : window;
+  }
+  const calls = { init: [], createWalletUI: [], initI18n: 0, controls: [] };
+  const controls = {
+    openLogin: () => calls.controls.push(['openLogin']),
+    openAccount: (section) => calls.controls.push(['openAccount', section]),
+    closeAccount: () => calls.controls.push(['closeAccount']),
+    logout: () => calls.controls.push(['logout']),
+    destroy: () => calls.controls.push(['destroy']),
+  };
   const modules = {
-    './src/i18n.js': {
+    './i18n.js': {
       applyTranslations() {},
       initI18n() { calls.initI18n += 1; },
     },
-    './src/app.js': {
-      async init(...args) { calls.init.push(args); },
+    './app.js': {
+      async init(...args) { calls.init.push(args); return controls; },
       async createWalletUI(...args) {
         calls.createWalletUI.push(args);
         throw new Error('INVALID_TRANSACTION');
       },
     },
   };
-  const body = bootstrapScript().replace(
+  const script = bootstrapScript().replace(
     /import\s*\{([^}]*)\}\s*from\s*'([^']+)';/gu,
     (_match, names, specifier) => `const {${names}} = __modules[${JSON.stringify(specifier)}];`,
   );
   const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
-  await new AsyncFunction('window', 'document', '__modules', body)(window, document, modules);
+  await new AsyncFunction('window', 'document', '__modules', script)(window, document, modules);
   // Let init(...).then(...) settle.
   await new Promise((resolveTick) => setTimeout(resolveTick, 0));
-  return { calls, elements, window };
+  return { calls, elements, window, body, created };
 }
 
 describe('landing page bootstrap', () => {
   it('boots the in-page demo with init(document.body, opts), never the transaction app', async () => {
-    const { calls } = await runBootstrap();
+    const { calls, body } = await runBootstrap();
 
     expect(calls.createWalletUI).toHaveLength(0);
     expect(calls.init).toHaveLength(1);
     const [root, options] = calls.init[0];
-    expect(root).toEqual({ tagName: 'BODY' });
+    expect(root).toBe(body);
+    expect(body.children).toBeNull();
     expect(options).toEqual({});
     expect(calls.initI18n).toBe(1);
   });
@@ -109,39 +143,56 @@ describe('landing page bootstrap', () => {
     });
 
     expect(calls.init).toHaveLength(1);
+    // autoOpenWallet was read and ignored in 2.x; 3.0 no longer passes it.
     expect(calls.init[0][1]).toEqual({
-      autoOpenWallet: true,
       onLogin,
       openAccountAfterLogin: false,
     });
   });
 
-  it('hands __sdnWalletReady the controls hosts call once init() resolves', async () => {
+  it('hands __sdnWalletReady the controls init() resolves to', async () => {
     let ui = null;
-    const { elements } = await runBootstrap({
-      ids: ['nav-login', 'nav-logout', 'login-modal', 'keys-modal', 'hd-wallet-ui-container'],
+    const { calls } = await runBootstrap({
       windowHooks: { __sdnWalletReady: (value) => { ui = value; } },
     });
 
     expect(ui).not.toBeNull();
     expect(Object.isFrozen(ui)).toBe(true);
-    expect(Object.keys(ui).sort()).toEqual(['destroy', 'logout', 'openAccount', 'openLogin']);
+    expect(Object.keys(ui).sort()).toEqual(['closeAccount', 'destroy', 'logout', 'openAccount', 'openLogin']);
 
     ui.openLogin();
-    expect(elements.get('login-modal').classList.contains('active')).toBe(true);
-    expect(elements.get('keys-modal').classList.contains('active')).toBe(false);
-
-    // Signed in: the demo hides #nav-login, and openLogin shows the account.
-    elements.get('login-modal').classList.remove('active');
-    elements.get('nav-login').style.display = 'none';
-    ui.openLogin();
-    expect(elements.get('login-modal').classList.contains('active')).toBe(false);
-    expect(elements.get('keys-modal').classList.contains('active')).toBe(true);
-
+    ui.openAccount('messages');
+    ui.closeAccount();
     ui.logout();
-    expect(elements.get('nav-logout').clicks).toBe(1);
     ui.destroy();
-    expect(elements.get('hd-wallet-ui-container').removed).toBe(true);
+    expect(calls.controls).toEqual([
+      ['openLogin'],
+      ['openAccount', 'messages'],
+      ['closeAccount'],
+      ['logout'],
+      ['destroy'],
+    ]);
+  });
+});
+
+describe('landing page in a frame (SEC-053)', () => {
+  it('refuses to start the wallet inside a frame and links to the page on its own', async () => {
+    const { calls, body } = await runBootstrap({ framed: true });
+    expect(calls.init).toHaveLength(0);
+    expect(calls.initI18n).toBe(0);
+    expect(body.children).toHaveLength(1);
+    const [notice] = body.children;
+    expect(notice.attributes.role).toBe('alert');
+    expect(notice.textContent).toContain('does not run inside another site');
+    const link = notice.children.find((child) => child.tag === 'a');
+    expect(link.href).toBe('https://wallet.example/');
+    expect(link.target).toBe('_top');
+  });
+
+  it('treats an unreadable (cross-origin) parent as a frame', async () => {
+    const { calls, body } = await runBootstrap({ topThrows: true });
+    expect(calls.init).toHaveLength(0);
+    expect(body.children[0].attributes.role).toBe('alert');
   });
 });
 
@@ -157,11 +208,14 @@ describe('init() wiring the landing page relies on', () => {
     return app.slice(start, ends.length ? Math.min(...ends) : undefined);
   }
 
-  it('injects the modal template and wires the login handlers', () => {
+  it('injects the template, wires the login handlers and resolves to the host controls', () => {
     const init = functionBody('export async function init(');
     expect(init).toContain('appendTrustedStaticTemplate(container, getModalHTML())');
     expect(init).toContain('setupLoginHandlers();');
     expect(init).toContain('setupMainAppHandlers();');
+    for (const name of ['openAccount', 'closeAccount', 'openLogin', 'logout', 'destroy']) {
+      expect(init).toContain(`${name}: (`);
+    }
   });
 
   it('opens #login-modal from both #nav-login and #hero-login', () => {

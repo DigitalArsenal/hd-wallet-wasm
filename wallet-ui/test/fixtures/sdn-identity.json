@@ -1,0 +1,23 @@
+{
+  "description": "SDN identity public keys for the BIP-39 test phrase 'abandon x11 about' (empty passphrase). Ed25519 = SLIP-10 m/44'/0'/N'/0'/0' public key; X25519 = X25519 public key of the SLIP-10 m/44'/0'/N'/1'/0' private key (sdn_identity_secrets.cpp derive_purpose(0) and derive_purpose(1)); peerId = libp2p identity-multihash peer ID of the Ed25519 key. Test vectors only.",
+  "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+  "accounts": {
+    "0": {
+      "ed25519": "7c2e79f3a1701fb2a86a2c24a3fdf8634b7aad80886c0c0a526d44d23fe8e19a",
+      "x25519": "654f607c4395ac0599a6c38bc34315dd6644f405218daa4ec5318068f008a364",
+      "peerId": "12D3KooWJB7pwCc5pMGNVykovHTSMHGTxiQBEFBVwsgFoAmMkmWZ",
+      "btc": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+      "eth": "0x9858effd232b4033e47d90003d41ec34ecaeda94",
+      "sol": "4EngF3p73rFnEgjcAG5DVQ91QGFze4vsvjVUkAwLjv14"
+    },
+    "1": {
+      "ed25519": "2967ced1299600604535a92865e8ff21e70cfd9b55091d43c9a29192dc48ffa6",
+      "x25519": "052889798f4abafaf8111bb1a3e4b407ceb438ab3a510057db8538a613aa7050",
+      "peerId": "12D3KooWCbzh8GgBWc9NC14XLA2ZjeNUQRUsjdH58fk6n5uruRqw",
+      "btc": "15qucUWKf95Fo58FdCBhUTSAtsm22HHE2Q",
+      "eth": "0x6fac4d18c912343bf86fa7049364dd4e424ab9c0",
+      "sol": "6NxTyjBPrTFvMEYQ3PH4sxVCoDbu7GcoxrrFtnvYYceK"
+    }
+  },
+  "fingerprint": "eb0231b2e93aa60c"
+}

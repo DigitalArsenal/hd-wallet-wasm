@@ -45,6 +45,18 @@ export function prefixSelector(selector) {
     if (s === ':root') return NAMESPACE;
     if (s === 'html' || s === 'body') return NAMESPACE;
 
+    // `:root[data-theme="light"]` and the like: the attribute lives on the
+    // host's root element (the SDN theme toggle sets it), so keep that compound
+    // as a host condition above the namespace, which carries the tokens.
+    const rootHost = /^:root((?:\[[^\]]*\]|:(?!root)[\w-]+(?:\([^)]*\))?)+)(?=$|\s)/u.exec(s);
+    if (rootHost) {
+      const tail = s.slice(rootHost[0].length).trim();
+      const host = `:root${rootHost[1]}`;
+      if (!tail) return `${host} ${NAMESPACE}`;
+      if (tail.startsWith(NAMESPACE)) return `${host} ${tail}`;
+      return `${host} ${NAMESPACE} ${tail}`;
+    }
+
     const rtlHostMatch = matchRtlHost(s);
     if (rtlHostMatch) {
       const tail = s.slice(rtlHostMatch[0].length).trim();
@@ -173,9 +185,38 @@ function findMatchingParen(value, openIndex) {
   return scanCss(value, null, true, openIndex);
 }
 
+// `@import url('./x.css')` / `@import './x.css'` with no media list.
+function localImportPath(atRule, fromPath) {
+  const params = String(atRule.params || '').trim();
+  const match = /^(?:url\(\s*)?(["']?)(\.{1,2}\/[^"')\s]+\.css)\1\s*\)?$/u.exec(params);
+  return match ? path.resolve(path.dirname(fromPath), match[2]) : null;
+}
+
+/**
+ * Inline the stylesheet's local @imports, so their selectors are namespaced
+ * too (an @import left in the widget would load the unscoped file and put its
+ * tokens on the host page's :root).
+ */
+async function parseWithImports(sourcePath, seen = new Set()) {
+  const resolved = path.resolve(sourcePath);
+  if (seen.has(resolved)) throw new Error(`circular @import: ${resolved}`);
+  seen.add(resolved);
+  const root = postcss.parse(await fs.readFile(resolved, 'utf8'), { from: resolved });
+  const imports = [];
+  root.each((node) => {
+    if (node.type === 'atrule' && node.name.toLowerCase() === 'import') imports.push(node);
+  });
+  for (const atRule of imports) {
+    const importPath = localImportPath(atRule, resolved);
+    if (!importPath) continue;
+    const child = await parseWithImports(importPath, new Set(seen));
+    atRule.replaceWith(child.nodes.map((node) => node.clone()));
+  }
+  return root;
+}
+
 export async function buildWidgetCss({ sourcePath = SOURCE_CSS, outputPath = OUT_CSS } = {}) {
-  const raw = await fs.readFile(sourcePath, 'utf8');
-  const root = postcss.parse(raw, { from: sourcePath });
+  const root = await parseWithImports(sourcePath);
 
   // Rename keyframes to avoid global collisions.
   const keyframeMap = new Map();
@@ -211,6 +252,9 @@ export async function buildWidgetCss({ sourcePath = SOURCE_CSS, outputPath = OUT
     ` * Generated file: namespaced styles for embedding hd-wallet-ui.\n` +
     ` *\n` +
     ` * - Scopes all selectors under ${NAMESPACE} to avoid host-page CSS collisions.\n` +
+    ` * - Inlines the local @imports (account.css, external-panel.css) so they are scoped too.\n` +
+    ` * - Keeps :root[data-theme=...] as a host condition: the light tokens apply\n` +
+    ` *   when the host page's theme toggle sets data-theme="light".\n` +
     ` * - Renames @keyframes to "${KEYFRAMES_PREFIX}*" to avoid global keyframe collisions.\n` +
     ` *\n` +
     ` * Source: styles/main.css\n` +

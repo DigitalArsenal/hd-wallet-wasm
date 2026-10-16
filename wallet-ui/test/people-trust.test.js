@@ -3,8 +3,10 @@
  * law): the trust/revocation record bytes, the Bitcoin and Solana transaction
  * buildings (RAW BYTES are the outcome — signatures are verified against
  * independently reconstructed BIP-143/legacy digests), the Ethereum scanner's
- * data-field extractor, the SDS TRE/$LOT mapping, and the drain detector
- * truth table. No source patterns, no UI wiring.
+ * data-field extractor, the trust weight map and the drain detector truth
+ * table; then People (people-ui.js): contacts merged with on-chain trust by
+ * verified chain-proof address, the Drained flag, and publishing with the
+ * CURRENT account's keys.
  */
 import { describe, expect, it } from 'vitest';
 import { sha256 } from '@noble/hashes/sha256';
@@ -13,14 +15,13 @@ import { secp256k1 } from '@noble/curves/secp256k1';
 import { ed25519 } from '@noble/curves/ed25519';
 import {
   TrustLevel,
-  buildSdsTrustExport,
+  analyzeTrustRelationships,
   btcTrustTransaction,
   buildSolanaTrustTx,
   encodeRevocationMetadata,
   encodeTrustMetadata,
   evaluateTrustDrain,
   extractEthereumTrustTxs,
-  parseSdsTrustImport,
   trustLevelToWeight,
   trustWeightToLevel,
 } from '../src/blockchain-trust.js';
@@ -341,16 +342,7 @@ describe('Ethereum scanner data-field extractor', () => {
   });
 });
 
-describe('SDS TRE/$LOT map (Themis trust program)', () => {
-  const trustTx = (overrides) => ({
-    type: 'trust', txHash: '0x' + 'aa'.repeat(32), from: '0xOWNER',
-    recipientPubkey: '0x' + 'bb'.repeat(20), level: TrustLevel.FULL,
-    timestamp: 1700000000000, chain: 'ethereum', ...overrides,
-  });
-  const revokeTx = (overrides) => ({
-    type: 'revocation', txHash: '0x' + 'cc'.repeat(32), originalTxHash: '0x' + 'bb'.repeat(20),
-    from: '0xOWNER', timestamp: 1700001000000, chain: 'ethereum', ...overrides,
-  });
+describe('trust weight map (Themis trust program)', () => {
 
   it('maps every level to WEIGHT (n-1)/4 and NEVER to 0.0', () => {
     expect(trustLevelToWeight(TrustLevel.NEVER)).toBe(0.0);
@@ -364,36 +356,6 @@ describe('SDS TRE/$LOT map (Themis trust program)', () => {
     expect(() => trustLevelToWeight(0)).toThrow();
   });
 
-  it('emits TRE edges with TX_HASH provenance and $LOT records for revocations', () => {
-    const doc = buildSdsTrustExport([trustTx(), revokeTx()], { peerId: 'peer-1' });
-    expect(doc.recordTypes).toEqual(['TRE', 'LOT']);
-    expect(doc.tre).toHaveLength(1);
-    expect(doc.tre[0].WEIGHT).toBe(0.75);
-    expect(doc.tre[0].DELETED).toBe(true); // revoked edge is DELETED
-    expect(doc.tre[0].TX_HASH).toBe('0x' + 'aa'.repeat(32));
-    expect(doc.tre[0].PROVIDER_PEER_ID).toBe('peer-1');
-    // $LOT loss-of-trust record bound to the original trust tx
-    expect(doc.lot).toHaveLength(1);
-    expect(doc.lot[0].LOSS_OF_TRUST_ID).toBe('0x' + 'cc'.repeat(32));
-    expect(doc.lot[0].REASON).toBe('Distrust');
-    expect(doc.lot[0].EVIDENCE_CHAIN).toBe('ethereum');
-    expect(doc.lot[0].EVIDENCE_TRANSACTION_HASHES).toEqual([
-      '0x' + 'cc'.repeat(32), '0x' + 'bb'.repeat(20),
-    ]);
-  });
-
-  it('round-trips through parseSdsTrustImport (tre + lot)', () => {
-    const doc = buildSdsTrustExport([trustTx(), revokeTx()]);
-    const txs = parseSdsTrustImport(doc);
-    expect(txs).toHaveLength(2);
-    const trust = txs.find(t => t.type === 'trust');
-    expect(trust.level).toBe(TrustLevel.FULL);
-    expect(trust.recipientPubkey).toBe('0x' + 'bb'.repeat(20));
-    const revoke = txs.find(t => t.type === 'revocation');
-    expect(revoke.originalTxHash).toBe('0x' + 'bb'.repeat(20));
-    expect(txs.find(t => t.type === 'revocation').txHash).toBe('0x' + 'cc'.repeat(32));
-    expect(() => parseSdsTrustImport(null)).toThrow();
-  });
 });
 
 describe('drain detection', () => {
@@ -405,5 +367,161 @@ describe('drain detection', () => {
     const res = evaluateTrustDrain({ previousBalance: 10, currentBalance: 1, dropRatio: 0.9 });
     expect(res.dropRatioObserved).toBe(0.9);
     expect(res.drained).toBe(true);
+  });
+});
+
+// ---- People ----------------------------------------------------------------
+
+import initHDWallet from 'hd-wallet-wasm';
+import {
+  EMPTY_PEOPLE,
+  chainSlug,
+  createPeoplePane,
+  detectChainFromAddress,
+  explorerTxUrl,
+  SELF_ASSERTED_NOTE,
+  mergePeople,
+  personSubline,
+} from '../src/people-ui.js';
+import { chainPaths, deriveAccountAddresses, withChainKey } from '../src/identity-keys.js';
+import { createTestContext } from './helpers/account-context.mjs';
+import { StubDocument, buttonByText, textOf } from './helpers/stub-dom.mjs';
+
+const ALICE = {
+  peerId: '12D3KooWJB7pwCc5pMGNVykovHTSMHGTxiQBEFBVwsgFoAmMkmWZ',
+  name: 'Alice',
+  signingKey: 'aa'.repeat(32),
+  encryptionKey: 'bb'.repeat(32),
+  photo: '',
+  addresses: { eth: '0x9858EfFD232B4033E47d90003D41EC34EcaEda94', btc: '1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA' },
+};
+
+describe('people: contacts merged with on-chain trust', () => {
+  const relationships = [
+    { address: '0x9858effd232b4033e47d90003d41ec34ecaeda94', chain: 'ethereum', level: 4, direction: 'outbound', lastSeen: 2, transactions: [{ txHash: 'ab'.repeat(32), chain: 'ethereum', level: 4, timestamp: 2 }] },
+    { address: 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh', chain: 'bitcoin', level: 1, direction: 'outbound', lastSeen: 1, drained: true },
+  ];
+
+  it('joins a relationship to the contact that proved the address, and lists the rest as on-chain only', () => {
+    const people = mergePeople([ALICE], relationships);
+    expect(people).toHaveLength(2);
+    expect(people[0].contact.peerId).toBe(ALICE.peerId);
+    expect(people[0].relationships).toHaveLength(1);
+    expect(people[0].level).toBe(4);
+    expect(personSubline(people[0])).toBe('12D3KooW…kmWZ · Full');
+    expect(people[1].contact).toBeNull();
+    expect(people[1].addresses).toEqual({ btc: 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh' });
+    expect(personSubline(people[1])).toBe('On-chain only · Never');
+    expect(people[1].drained).toBe(true);
+  });
+
+  it('knows chains and explorer links', () => {
+    expect(chainSlug('ethereum')).toBe('eth');
+    expect(chainSlug('sol')).toBe('sol');
+    expect(detectChainFromAddress('0x' + '1'.repeat(40))).toBe('eth');
+    expect(detectChainFromAddress('bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh')).toBe('btc');
+    expect(explorerTxUrl('bitcoin', 'ab'.repeat(32))).toBe(`https://blockstream.info/tx/${'ab'.repeat(32)}`);
+    expect(explorerTxUrl('ethereum', 'javascript:alert(1)')).toBeNull();
+  });
+
+  it('renders rows, the Drained word, the empty state and the Refresh footer', () => {
+    const doc = new StubDocument();
+    const panel = doc.createElement('section');
+    doc.body.append(panel);
+    const refreshes = [];
+    const ctx = createTestContext({
+      document: doc,
+      contacts: [ALICE],
+      trust: {
+        state: () => ({ relationships, transactions: [], checkedAt: Date.now(), scanning: false, error: '' }),
+        refresh: async (options) => { refreshes.push(options); },
+        publish: async () => ({ txHash: 'a'.repeat(64) }),
+        revoke: async () => ({ txHash: 'b'.repeat(64) }),
+        outboundRecord: (address) => (address === ALICE.addresses.eth ? { txHash: 'ab'.repeat(32), chain: 'ethereum', recipientPubkey: address } : null),
+        canPublish: () => true,
+        supportsChain: () => true,
+        feeEstimate: async () => '5,000 sats',
+      },
+    });
+    const pane = createPeoplePane(panel, ctx);
+    pane.show();
+    expect(refreshes).toEqual([{ force: false }]);
+    const rows = panel.querySelectorAll('.person-row');
+    expect(rows).toHaveLength(2);
+    expect(textOf(rows[1])).toContain('Drained');
+    expect(panel.querySelector('.alert-text')).not.toBeNull();
+    expect(textOf(panel.querySelector('.pane-footer'))).toMatch(/^Checked just now · Refresh$/u);
+
+    rows[0].click();
+    const detail = panel.querySelector('.person-detail');
+    // SEC-056: the card's name is labelled as the owner's claim, not verified.
+    expect(textOf(detail)).toContain(SELF_ASSERTED_NOTE);
+    expect(textOf(panel)).not.toMatch(/\bVerified\b/u);
+    expect(textOf(detail)).toContain('Encrypt a message');
+    expect(textOf(detail)).toContain('Revoke trust');
+    buttonByText(detail, 'Encrypt a message').click();
+    expect(ctx.state.shown.at(-1)).toEqual({ section: 'messages', options: { intent: { mode: 'encrypt', peerId: ALICE.peerId } } });
+
+    buttonByText(panel.querySelector('.person-detail'), 'Remove contact').click();
+    expect(textOf(panel.querySelector('.inline-confirm'))).toContain('Remove Alice?');
+    buttonByText(panel.querySelector('.inline-confirm'), 'Remove').click();
+    expect(ctx.state.contacts).toHaveLength(0);
+
+    buttonByText(panel, 'Refresh').click();
+    expect(refreshes.at(-1)).toEqual({ force: true });
+  });
+
+  it('shows the empty state with no contacts and no records', () => {
+    const doc = new StubDocument();
+    const panel = doc.createElement('section');
+    const pane = createPeoplePane(panel, createTestContext({ document: doc }));
+    pane.show();
+    expect(textOf(panel.querySelector('.empty'))).toBe(EMPTY_PEOPLE);
+  });
+
+  it('Publish trust is an inline sub-view limited to the chains the counterparty has', async () => {
+    const doc = new StubDocument();
+    const panel = doc.createElement('section');
+    const published = [];
+    const ctx = createTestContext({ document: doc, contacts: [ALICE] });
+    ctx.trust.publish = async (request) => { published.push(request); return { txHash: 'f'.repeat(64) }; };
+    const pane = createPeoplePane(panel, ctx);
+    pane.show();
+    buttonByText(panel, 'Publish trust').click();
+    expect(pane.view).toBe('publish');
+    expect(buttonByText(panel, '‹ People')).not.toBeNull();
+    const chips = panel.querySelectorAll('.chip').map(textOf);
+    expect(chips).toEqual(['Bitcoin', 'Ethereum', 'Ultimate', 'Full', 'Marginal', 'Never']);
+    expect(textOf(panel)).toContain('This publishes a public record on Bitcoin.');
+    panel.querySelectorAll('.chip').find((node) => textOf(node) === 'Ethereum').click();
+    panel.querySelectorAll('.chip').find((node) => textOf(node) === 'Marginal').click();
+    buttonByText(panel, 'Publish').click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(published).toEqual([{ network: 'eth', level: 3, recipientAddress: ALICE.addresses.eth }]);
+    expect(pane.view).toBe('list');
+  });
+});
+
+describe('publishing signs with the current account', () => {
+  it('account N signs with the keys of account N’s own addresses', async () => {
+    const wallet = await initHDWallet();
+    const seed = wallet.mnemonic.toSeed('abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about');
+    const root = wallet.hdkey.fromSeed(seed);
+    for (const account of [0, 2]) {
+      const addresses = deriveAccountAddresses(wallet, root, account);
+      const paths = chainPaths(account);
+      // The key app.js's publishTrustRecord derives (chainPaths(state.account))
+      // is the key of the address the record is sent from.
+      const btcPub = withChainKey(root, paths.btc, (key) => wallet.curves.publicKeyFromPrivate(key, 0));
+      expect([...btcPub]).toEqual([...addresses.btc.publicKey]);
+      const solPub = withChainKey(root, paths.sol, (key) => wallet.curves.ed25519.publicKeyFromSeed(key));
+      expect([...solPub]).toEqual([...addresses.sol.publicKey]);
+    }
+    const relationshipsFor = (account) => analyzeTrustRelationships(
+      { btc: deriveAccountAddresses(wallet, root, account).btc.address },
+      [{ type: 'trust', from: deriveAccountAddresses(wallet, root, 1).btc.address, recipientPubkey: 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh', txHash: 'x', timestamp: 1, level: 4, chain: 'bitcoin' }],
+    );
+    expect(relationshipsFor(1)).toHaveLength(1);
+    expect(relationshipsFor(0)).toHaveLength(0);
   });
 });

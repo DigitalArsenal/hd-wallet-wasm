@@ -72,4 +72,27 @@ describe('widget CSS namespace build', () => {
     expect(prefixSelector('body:has(.modal\\)name, [data-label=")"], .dialog:not(.closed)) .nav-bar'))
       .toBe('body:has(#hd-wallet-ui-container .modal\\)name, #hd-wallet-ui-container [data-label=")"], #hd-wallet-ui-container .dialog:not(.closed)) #hd-wallet-ui-container .nav-bar');
   });
+
+  it('keeps :root theme attributes as a host condition above the namespace', async () => {
+    const { prefixSelector } = await loadBuilder();
+    expect(prefixSelector(':root')).toBe('#hd-wallet-ui-container');
+    expect(prefixSelector(':root[data-theme="light"]'))
+      .toBe(':root[data-theme="light"] #hd-wallet-ui-container');
+    expect(prefixSelector(':root[data-theme="light"] .account-view'))
+      .toBe(':root[data-theme="light"] #hd-wallet-ui-container .account-view');
+    expect(prefixSelector(':root:not([data-theme="light"]) .chip'))
+      .toBe(':root:not([data-theme="light"]) #hd-wallet-ui-container .chip');
+  });
+
+  it('inlines the local @imports, so no unscoped stylesheet or :root token reaches the host', () => {
+    const css = readFileSync(WIDGET_CSS, 'utf8');
+    expect(css).not.toMatch(/@import\s+(?:url\(|["'])/u);
+    // Every rule that sets the SDN tokens is on the namespace, and the light set
+    // is conditioned on the host's data-theme.
+    const tokenRules = [...css.matchAll(/([^{}]+)\{[^{}]*--bg:/gu)].map((match) => match[1].replace(/\/\*[\s\S]*?\*\//gu, '').trim());
+    expect(tokenRules.length).toBeGreaterThanOrEqual(2);
+    for (const selector of tokenRules) expect(selector).toMatch(/#hd-wallet-ui-container$/u);
+    expect(tokenRules).toContain(':root[data-theme="light"] #hd-wallet-ui-container');
+    expect(css).toMatch(/#hd-wallet-ui-container #account-view\b/u);
+  });
 });

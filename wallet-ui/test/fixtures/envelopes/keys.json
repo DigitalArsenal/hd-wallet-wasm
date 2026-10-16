@@ -1,0 +1,15 @@
+{
+  "note": "Public BIP-39 test vector \"abandon x11 about\". Test keys only; they control nothing.",
+  "account": 0,
+  "signingKeyPath": "m/44'/0'/0'/0'/0'",
+  "encryptionKeyPath": "m/44'/0'/0'/1'/0'",
+  "edPub": "7c2e79f3a1701fb2a86a2c24a3fdf8634b7aad80886c0c0a526d44d23fe8e19a",
+  "xPub": "654f607c4395ac0599a6c38bc34315dd6644f405218daa4ec5318068f008a364",
+  "peerId": "12D3KooWJB7pwCc5pMGNVykovHTSMHGTxiQBEFBVwsgFoAmMkmWZ",
+  "testOnlyX25519PrivateKey": "ec1f4ac650e363b0a46251bac88b702d22671f2dfead9d6e15accb10036aebec",
+  "messageSha256": "bc57f1de6c09911c0a522fe39df9851696788ec0ef8a0f720edd93d37756b95b",
+  "plainBinSha256": "8b5fc0e9b559acd86a49017943707c53e283f26bb629cb20bce913bac9975c21",
+  "cid": "bafkreif4k7y543ajseoauurp4oo7tbiwsz4i5qhprihxedw5spjxovvzlm",
+  "publishTimestamp": "2026-10-15T00:00:00.000Z",
+  "context": "space-data-network/wallet/message/v1"
+}

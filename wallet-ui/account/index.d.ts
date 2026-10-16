@@ -1,11 +1,8 @@
-export interface AccountViewBond {
-  value?: string;
-  label?: string;
-}
-
-export interface AccountViewWallet {
-  id: string;
-  name?: string;
+export interface AccountViewAvatar {
+  /** A photo URL the caller serves. */
+  url?: string;
+  /** Initials shown when there is no photo (derived from the title when absent). */
+  initials?: string;
 }
 
 export interface AccountViewChip {
@@ -56,10 +53,11 @@ export interface AccountViewIdentity {
 export interface AccountViewOptions {
   document?: Document;
   title?: string;
-  bond?: AccountViewBond;
-  wallets?: AccountViewWallet[];
-  activeWalletId?: string;
-  onWalletChange?: (walletId: string) => void;
+  /** The SDN peer ID: shown short (12D3KooW…x7Qp) and copied in full. */
+  peerId?: string;
+  avatar?: AccountViewAvatar;
+  /** The quiet status word at the right of the identity bar. */
+  status?: string;
   chips?: AccountViewChip[];
   actions?: AccountViewAction[];
   tabs?: AccountViewTab[];
@@ -71,11 +69,11 @@ export interface AccountViewOptions {
 
 export interface AccountViewUpdate {
   title?: string;
-  bond?: AccountViewBond;
+  peerId?: string;
+  avatar?: AccountViewAvatar | null;
+  status?: string;
   chips?: AccountViewChip[];
   actions?: AccountViewAction[];
-  wallets?: AccountViewWallet[];
-  activeWalletId?: string;
   identity?: AccountViewIdentity;
   activeTabId?: string;
 }
@@ -89,6 +87,7 @@ export interface AccountView {
   destroy(): void;
 }
 
+/** Profile · Messages · People · Assets · Settings */
 export declare const DEFAULT_ACCOUNT_TABS: ReadonlyArray<{ id: string; label: string }>;
 
 export declare function createAccountView(options?: AccountViewOptions): AccountView;

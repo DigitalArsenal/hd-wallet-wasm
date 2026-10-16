@@ -43,9 +43,26 @@ export function createReleaseLibraryConfig({
   });
 }
 
+/**
+ * The dev server injects CSS through <style> elements, which index.html's
+ * Content-Security-Policy refuses (style-src 'self'). In `vite` (serve) only,
+ * allow inline styles so the dev page is styled; `vite build` keeps the
+ * strict policy byte for byte (test/csp.test.mjs builds and checks it).
+ */
+export function devStylePolicy() {
+  return {
+    name: 'hd-wallet-dev-style-policy',
+    apply: 'serve',
+    transformIndexHtml(html) {
+      return html.replace("style-src 'self';", "style-src 'self' 'unsafe-inline';");
+    },
+  };
+}
+
 export default defineConfig({
   root: '.',
   base: './',
+  plugins: [devStylePolicy()],
   test: {
     // Relay fixtures use Node's built-in test runner and have their own
     // package command. Keep the UI Vitest suite scoped to UI-owned tests.
@@ -61,7 +78,7 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    include: ['qrcode', 'buffer', 'vcard-cryptoperson'],
+    include: ['qrcode', 'buffer'],
     exclude: ['hd-wallet-wasm'],
   },
   build: {
@@ -134,11 +151,6 @@ export default defineConfig({
         target: 'https://api.coinbase.com',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/coinbase/, ''),
-      },
-      '/api/hiro': {
-        target: 'https://api.hiro.so',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/hiro/, ''),
       },
     },
   },

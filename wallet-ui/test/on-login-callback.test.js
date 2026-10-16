@@ -1,121 +1,78 @@
-import { describe, it, expect } from 'vitest';
-import { ed25519 } from '@noble/curves/ed25519';
-import { hexToBytes } from '../src/address-derivation.js';
+// The onLogin host contract (3.0, breaking): the payload carries the SDN
+// Ed25519 identity of the CURRENT account — its peer ID, Ed25519 signing key
+// (m/44'/0'/N'/0'/0') and X25519 encryption key (m/44'/0'/N'/1'/0') — and an
+// account switch calls the callback again with the new identity.
 
-// =============================================================================
-// Test Fixtures — mirrors the onLogin callback contract from app.js login()
-// =============================================================================
+import { readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-// Deterministic ed25519 key pair (simulates SDN signing key, BIP-44 coin type 0)
-const SDN_PRIVKEY = hexToBytes(
-  '9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60'
-);
-const SDN_PUBKEY = ed25519.getPublicKey(SDN_PRIVKEY);
+import initHDWallet from 'hd-wallet-wasm';
+import { ed25519, x25519 } from '@noble/curves/ed25519';
+import { describe, expect, it } from 'vitest';
 
-/**
- * Replicates the `sign` method attached to the onLogin callback payload.
- * See app.js login() — the callback receives { xpub, signingPublicKey, sign }.
- */
-async function callbackSign(message, privateKey) {
-  const msgBytes = typeof message === 'string'
-    ? new TextEncoder().encode(message)
-    : message;
-  return ed25519.sign(msgBytes, privateKey);
-}
+import { buildLoginPayload, deriveIdentity, peerIdFromEd25519, toHex, withEdKey, withXKey } from '../src/identity-keys.js';
 
-// =============================================================================
-// onLogin Callback Shape
-// =============================================================================
+const here = dirname(fileURLToPath(import.meta.url));
+const vectors = JSON.parse(readFileSync(join(here, 'fixtures', 'sdn-identity.json'), 'utf8'));
+const app = readFileSync(resolve(here, '..', 'src', 'app.js'), 'utf8');
+const wallet = await initHDWallet();
+const seed = wallet.mnemonic.toSeed(vectors.mnemonic);
+const root = wallet.hdkey.fromSeed(seed);
 
-describe('onLogin callback payload shape', () => {
-  it('signingPublicKey is a 32-byte Uint8Array', () => {
-    expect(SDN_PUBKEY).toBeInstanceOf(Uint8Array);
-    expect(SDN_PUBKEY.length).toBe(32);
+describe('onLogin payload', () => {
+  it('peerId is the Ed25519 identity peer ID, not the root secp256k1 key', () => {
+    const payload = buildLoginPayload({ rootXpub: root.toXpub(), identity: deriveIdentity(wallet, seed, 0) });
+    expect(payload.peerId).toBe(vectors.accounts['0'].peerId);
+    expect(payload.peerId.startsWith('12D3KooW')).toBe(true);
+    expect(payload.peerId).not.toBe(root.peerIdString());
+    expect(payload.peerId).toBe(peerIdFromEd25519(wallet, payload.signingPublicKey));
   });
 
-  it('sign function returns a 64-byte ed25519 signature', async () => {
-    const sig = await callbackSign('hello', SDN_PRIVKEY);
-    expect(sig).toBeInstanceOf(Uint8Array);
-    expect(sig.length).toBe(64);
-  });
-});
-
-// =============================================================================
-// sign() — string messages
-// =============================================================================
-
-describe('onLogin sign() with string messages', () => {
-  it('produces a verifiable signature for a string', async () => {
-    const message = 'authenticate me';
-    const sig = await callbackSign(message, SDN_PRIVKEY);
-    const msgBytes = new TextEncoder().encode(message);
-    expect(ed25519.verify(sig, msgBytes, SDN_PUBKEY)).toBe(true);
+  it('signingPublicKey is the account Ed25519 key and verifies its signatures', () => {
+    const payload = buildLoginPayload({ rootXpub: root.toXpub(), identity: deriveIdentity(wallet, seed, 0) });
+    expect(toHex(payload.signingPublicKey)).toBe(vectors.accounts['0'].ed25519);
+    const message = new TextEncoder().encode('authenticate me');
+    const signature = withEdKey(wallet, seed, 0, (key) => wallet.curves.ed25519.sign(message, key));
+    expect(ed25519.verify(signature, message, payload.signingPublicKey)).toBe(true);
   });
 
-  it('produces deterministic signatures', async () => {
-    const sig1 = await callbackSign('deterministic', SDN_PRIVKEY);
-    const sig2 = await callbackSign('deterministic', SDN_PRIVKEY);
-    expect(sig1).toEqual(sig2);
+  it('encryptionPublicKey is the account X25519 key: ECDH with it matches the private side', () => {
+    const payload = buildLoginPayload({ rootXpub: root.toXpub(), identity: deriveIdentity(wallet, seed, 0) });
+    expect(toHex(payload.encryptionPublicKey)).toBe(vectors.accounts['0'].x25519);
+    const other = new Uint8Array(32).fill(9);
+    const theirs = x25519.getSharedSecret(other, payload.encryptionPublicKey);
+    const mine = withXKey(wallet, seed, 0, (key) => wallet.curves.x25519.ecdh(key, x25519.getPublicKey(other)));
+    expect(toHex(mine)).toBe(toHex(theirs));
   });
 
-  it('different messages produce different signatures', async () => {
-    const sig1 = await callbackSign('message-a', SDN_PRIVKEY);
-    const sig2 = await callbackSign('message-b', SDN_PRIVKEY);
-    expect(sig1).not.toEqual(sig2);
-  });
-
-  it('handles empty string', async () => {
-    const sig = await callbackSign('', SDN_PRIVKEY);
-    const msgBytes = new TextEncoder().encode('');
-    expect(ed25519.verify(sig, msgBytes, SDN_PUBKEY)).toBe(true);
-  });
-
-  it('handles unicode strings', async () => {
-    const message = 'héllo wörld 🌍';
-    const sig = await callbackSign(message, SDN_PRIVKEY);
-    const msgBytes = new TextEncoder().encode(message);
-    expect(ed25519.verify(sig, msgBytes, SDN_PUBKEY)).toBe(true);
+  it('a different account is a different identity', () => {
+    const one = buildLoginPayload({ rootXpub: root.toXpub(), identity: deriveIdentity(wallet, seed, 1) });
+    expect(one.peerId).toBe(vectors.accounts['1'].peerId);
+    expect(one.account).toBe(1);
   });
 });
 
-// =============================================================================
-// sign() — Uint8Array messages
-// =============================================================================
+describe('app wiring', () => {
+  function body(name) {
+    const start = app.indexOf(name);
+    expect(start).toBeGreaterThanOrEqual(0);
+    const next = app.indexOf('\nfunction ', start + name.length);
+    const nextAsync = app.indexOf('\nasync function ', start + name.length);
+    const ends = [next, nextAsync].filter((index) => index > start);
+    return app.slice(start, Math.min(...ends));
+  }
 
-describe('onLogin sign() with Uint8Array messages', () => {
-  it('signs raw bytes and produces verifiable signature', async () => {
-    const msgBytes = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
-    const sig = await callbackSign(msgBytes, SDN_PRIVKEY);
-    expect(ed25519.verify(sig, msgBytes, SDN_PUBKEY)).toBe(true);
+  it('login and every account switch call onLogin with the new identity', () => {
+    expect(body('function notifyLogin()')).toContain('buildLoginPayload({ rootXpub: state.hdRoot.toXpub(), identity: state.identity })');
+    expect(body('function login(')).toContain('notifyLogin();');
+    const switchBody = body('async function switchAccount(');
+    expect(switchBody).toContain('deriveAccountSession(n);');
+    expect(switchBody).toContain('state.storage?.writeAccount(n);');
+    expect(switchBody).toContain('notifyLogin();');
   });
 
-  it('string and equivalent bytes produce the same signature', async () => {
-    const str = 'hello';
-    const bytes = new TextEncoder().encode(str);
-    const sigStr = await callbackSign(str, SDN_PRIVKEY);
-    const sigBytes = await callbackSign(bytes, SDN_PRIVKEY);
-    expect(sigStr).toEqual(sigBytes);
-  });
-});
-
-// =============================================================================
-// Signature verification — negative cases
-// =============================================================================
-
-describe('onLogin signature verification', () => {
-  it('rejects signature with wrong public key', async () => {
-    const otherPriv = hexToBytes(
-      'c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7'
-    );
-    const otherPub = ed25519.getPublicKey(otherPriv);
-    const sig = await callbackSign('test', SDN_PRIVKEY);
-    const msgBytes = new TextEncoder().encode('test');
-    expect(ed25519.verify(sig, msgBytes, otherPub)).toBe(false);
-  });
-
-  it('rejects signature with tampered message', async () => {
-    const sig = await callbackSign('original', SDN_PRIVKEY);
-    const tampered = new TextEncoder().encode('tampered');
-    expect(ed25519.verify(sig, tampered, SDN_PUBKEY)).toBe(false);
+  it('never hands a host a private key or a signer', () => {
+    expect(body('function notifyLogin()')).not.toMatch(/privateKey|sign\(/u);
   });
 });

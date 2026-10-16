@@ -1,0 +1,1317 @@
+/* =============================================================================
+   Account view (hd-wallet-ui 3.0) — the SDN page grammar
+   A full-width page panel under the SDN header: identity bar, section tabs,
+   one pane at a time. Pane heads, hairline rows, `.code` blocks, pill buttons.
+   Font sizes: 12, 13, 14, 15, 17, 19 and 24px only. No 20px cards, no tinted
+   boxes, no important-overrides. The rim is for buttons only.
+   ============================================================================= */
+
+:root {
+  --bg: #000;
+  --panel: rgba(28, 28, 30, 0.72);
+  --panel-solid: #161617;
+  --surface-code: #0b0b0c;
+  --border: rgba(255, 255, 255, 0.12);
+  --border-strong: rgba(255, 255, 255, 0.22);
+  --text: #f5f5f7;
+  --text-2: rgba(245, 245, 247, 0.78);
+  --muted: #8e8e93;
+  --accent: #f5a524;
+  --accent-soft: rgba(245, 165, 36, 0.14);
+  --alert: #ff3b30;
+  --wash: rgba(255, 255, 255, 0.06);
+  --card-hover: rgba(40, 40, 44, 0.8);
+  --hi-bg: #fff;
+  --hi-fg: #000;
+  --dim-bg: rgba(0, 0, 0, 0.5);
+  --inline-code: rgba(255, 255, 255, 0.07);
+  --code-text: #e5e5ea;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  --radius: 20px;
+  --radius-sm: 12px;
+  --radius-row: 10px;
+  --radius-chip: 6px;
+  --max: 1120px;
+  --rim-border: rgba(245, 245, 247, 0.16);
+  --rim-border-hover: rgba(245, 245, 247, 0.28);
+  --rim-sheen: linear-gradient(150deg, rgba(255, 255, 255, 0.085), rgba(255, 255, 255, 0.025));
+  --rim-sheen-hover: linear-gradient(150deg, rgba(255, 255, 255, 0.15), rgba(255, 255, 255, 0.05));
+  --rim-inset: inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  --rim-drop: 0 6px 14px rgba(0, 0, 0, 0.42);
+  --rim-drop-hero: 0 16px 36px rgba(0, 0, 0, 0.45);
+  --rim-drop-pressed: 0 2px 5px rgba(0, 0, 0, 0.45);
+  --rim-blur: blur(16px) saturate(165%);
+  --rim-primary-fill: linear-gradient(180deg, #fff 0%, #ececf0 100%);
+  --rim-primary-text: #000;
+  --rim-primary-inset: inset 0 1px 0 #fff, inset 0 -1px 0 rgba(0, 0, 0, 0.16);
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --bg: #f5f5f7;
+  --panel: rgba(255, 255, 255, 0.78);
+  --panel-solid: #fff;
+  --surface-code: #fff;
+  --border: rgba(0, 0, 0, 0.1);
+  --border-strong: rgba(0, 0, 0, 0.2);
+  --text: #1d1d1f;
+  --text-2: rgba(29, 29, 31, 0.8);
+  --muted: #6e6e73;
+  --accent: #c77d00;
+  --accent-soft: rgba(199, 125, 0, 0.12);
+  --wash: rgba(0, 0, 0, 0.05);
+  --card-hover: rgba(255, 255, 255, 0.95);
+  --hi-bg: #1d1d1f;
+  --hi-fg: #fff;
+  --dim-bg: rgba(255, 255, 255, 0.72);
+  --inline-code: rgba(0, 0, 0, 0.06);
+  --code-text: #1d1d1f;
+  --rim-border: rgba(0, 0, 0, 0.12);
+  --rim-border-hover: rgba(0, 0, 0, 0.22);
+  --rim-sheen: linear-gradient(150deg, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.7));
+  --rim-sheen-hover: linear-gradient(150deg, #fff, rgba(255, 255, 255, 0.85));
+  --rim-inset: inset 0 1px 0 #fff;
+  --rim-drop: 0 6px 16px rgba(0, 0, 0, 0.10);
+  --rim-drop-hero: 0 12px 28px rgba(0, 0, 0, 0.12);
+  --rim-drop-pressed: 0 2px 5px rgba(0, 0, 0, 0.12);
+  --rim-primary-fill: #1d1d1f;
+  --rim-primary-text: #fff;
+  --rim-primary-inset: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  color-scheme: light;
+}
+
+/* ---- the page panel --------------------------------------------------------- */
+
+.account-view {
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.6 var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-align: left;
+}
+
+.account-view[hidden] {
+  display: none;
+}
+
+/* `hidden` always wins inside the view, over any class that sets display
+   (.photo-controls is flex, .qr inline-block, ...). The doubled attribute
+   raises the specificity above every two-class rule in this file. */
+#account-view [hidden],
+.account-view [hidden][hidden] {
+  display: none;
+}
+
+/* The polite live region that reads out status lines (ui-dom.js announce). */
+.account-view .account-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+#account-view {
+  position: fixed;
+  top: var(--account-top, 0px);
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 900;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.account-view *,
+.account-view *::before,
+.account-view *::after {
+  box-sizing: border-box;
+}
+
+.account-view h2,
+.account-view h3,
+.account-view p,
+.account-view pre {
+  margin: 0;
+}
+
+.account-view button,
+.account-view input,
+.account-view select,
+.account-view textarea {
+  font-family: var(--font-sans);
+}
+
+.account-view a {
+  color: var(--accent);
+}
+
+.account-view .mono {
+  font: 13px/1.6 var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+/* ---- identity bar --------------------------------------------------------------- */
+
+.account-identity-bar {
+  height: 72px;
+  padding: 0 20px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.account-identity-inner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 880px;
+  height: 100%;
+  margin: 0 auto;
+}
+
+.account-avatar {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--wash);
+  color: var(--text);
+}
+
+.account-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.account-avatar .avatar-initials {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* The SDN mark: a ring and a node, 20px, muted. */
+.account-avatar .avatar-mark {
+  position: relative;
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--muted);
+  border-radius: 50%;
+}
+
+.account-avatar .avatar-mark::after {
+  content: "";
+  position: absolute;
+  top: -5px;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  margin-left: -3px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.account-identity-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.account-name-line {
+  min-width: 0;
+}
+
+.account-name {
+  display: block;
+  overflow: hidden;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-peer-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.account-peer-id {
+  font: 13px/1.5 var(--font-mono);
+  color: var(--muted);
+}
+
+.account-view .copy-chip {
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  background: var(--wash);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.account-view .copy-chip:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.account-status {
+  flex: none;
+  font-size: 13px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.account-view .account-chip {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.account-header-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---- section tabs ------------------------------------------------------------------ */
+
+.account-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 0 20px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.account-tabs-inner {
+  display: flex;
+  gap: 24px;
+  max-width: 880px;
+  margin: 0 auto;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.account-tabs-inner::-webkit-scrollbar {
+  display: none;
+}
+
+.account-tab {
+  flex: none;
+  padding: 14px 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--text-2);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.account-tab:hover,
+.account-tab[aria-selected="true"] {
+  color: var(--text);
+}
+
+.account-tab[aria-selected="true"] {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.account-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* ---- panes ---------------------------------------------------------------------------- */
+
+.account-pane[hidden] {
+  display: none;
+}
+
+.account-view .pane {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 32px 20px 72px;
+}
+
+.account-view .pane-head {
+  margin-bottom: 24px;
+}
+
+.account-view .eyebrow {
+  margin-bottom: 10px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.account-view .pane-title {
+  color: var(--text);
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+/* Section titles (tabindex=-1) are where focus lands after a section
+   switch, so screen readers announce the new section. That programmatic
+   focus (after a click) draws no focus box. When the browser judges the
+   focus keyboard-driven (:focus-visible, e.g. a tab chosen with the
+   keyboard), the outline stays, so keyboard users can see where they are. */
+.account-view [tabindex="-1"]:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.account-view .lede {
+  margin-top: 8px;
+  color: var(--text-2);
+  font-size: 15px;
+}
+
+.account-view .sub-head {
+  margin: 24px 0 8px;
+  color: var(--text);
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.account-view .muted,
+.account-view .empty,
+.account-view .pane-footer {
+  color: var(--muted);
+}
+
+.account-view .muted {
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+.account-view .empty {
+  padding: 12px 0;
+  font-size: 15px;
+}
+
+.account-view .pane-footer {
+  margin-top: 16px;
+  font-size: 13px;
+}
+
+.account-view .alert-text {
+  color: var(--alert);
+}
+
+.account-view .muted-inline {
+  color: var(--muted);
+}
+
+/* ---- rows ------------------------------------------------------------------------------ */
+
+.account-view .row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.account-view .row-label {
+  flex: none;
+  max-width: 40%;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.account-view .row-value {
+  min-width: 0;
+  color: var(--text);
+  font-size: 15px;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.account-view .row-value.mono {
+  font-size: 13px;
+}
+
+.account-view .with-copy {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ---- buttons ------------------------------------------------------------------------- */
+
+.account-view .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 22px;
+  border: 1px solid var(--rim-border);
+  border-radius: 999px;
+  background: var(--rim-sheen);
+  box-shadow: var(--rim-inset), var(--rim-drop);
+  color: var(--text);
+  font: 600 15px/1 var(--font-sans);
+  cursor: pointer;
+  -webkit-backdrop-filter: var(--rim-blur);
+  backdrop-filter: var(--rim-blur);
+  transition: background 0.15s, border-color 0.15s, transform 0.05s;
+}
+
+.account-view .btn:hover {
+  background: var(--rim-sheen-hover);
+  border-color: var(--rim-border-hover);
+}
+
+.account-view .btn:active {
+  transform: translateY(1px);
+  box-shadow: var(--rim-inset), var(--rim-drop-pressed);
+}
+
+.account-view .btn:focus-visible,
+.account-view .link-btn:focus-visible,
+.account-view .chip:focus-visible,
+.account-view .copy:focus-visible,
+.account-view .copy-chip:focus-visible,
+.account-view .asset-toggle:focus-visible,
+.account-view .person-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.account-view .btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.account-view .btn-primary {
+  border-color: transparent;
+  background: var(--rim-primary-fill);
+  box-shadow: var(--rim-primary-inset), var(--rim-drop);
+  color: var(--rim-primary-text);
+}
+
+.account-view .btn-primary:hover {
+  border-color: transparent;
+  background: var(--rim-primary-fill);
+}
+
+.account-view .btn-danger {
+  border-color: transparent;
+  background: var(--alert);
+  box-shadow: var(--rim-drop);
+  color: #fff;
+}
+
+.account-view .btn-danger:hover {
+  border-color: transparent;
+  background: var(--alert);
+}
+
+.account-view .btn-sm {
+  padding: 7px 16px;
+  font-size: 14px;
+}
+
+.account-view .btn-icon {
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+}
+
+.account-view .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.account-view .actions .btn:not(:disabled):hover {
+  background: var(--hi-bg);
+  color: var(--hi-fg);
+}
+
+.account-view .actions:hover .btn-primary:not(:hover):not(:disabled) {
+  background: var(--dim-bg);
+  color: var(--text);
+}
+
+.account-view .actions .btn-danger:not(:disabled):hover {
+  background: var(--alert);
+  color: #fff;
+}
+
+.account-view .head-actions {
+  margin-top: 0;
+  margin-bottom: 8px;
+}
+
+.account-view .link-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: 600 14px/1.6 var(--font-sans);
+  cursor: pointer;
+}
+
+.account-view .link-btn:hover {
+  text-decoration: underline;
+}
+
+.account-view .link-btn.danger {
+  color: var(--alert);
+}
+
+.account-view .link-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ---- chips ---------------------------------------------------------------------------- */
+
+.account-view .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.account-view .chip {
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--wash);
+  color: var(--text-2);
+  font: 14px/1.2 var(--font-sans);
+  cursor: pointer;
+}
+
+.account-view .chip:hover {
+  color: var(--text);
+}
+
+.account-view .chip[aria-pressed="true"] {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+/* ---- fields --------------------------------------------------------------------------- */
+
+.account-view .field {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.account-view .field label,
+.account-view .field-label {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.account-view .input,
+.account-view .select,
+.account-view .textarea {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-solid);
+  color: var(--text);
+  font: 15px/1.5 var(--font-sans);
+}
+
+.account-view .textarea {
+  resize: vertical;
+}
+
+.account-view .input:focus,
+.account-view .select:focus,
+.account-view .textarea:focus {
+  border-color: var(--border-strong);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.account-view .select-inline {
+  width: auto;
+  min-width: 110px;
+  padding: 8px 12px;
+}
+
+.account-view .field-error {
+  color: var(--alert);
+  font-size: 13px;
+}
+
+.account-view .check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  color: var(--text);
+  font-size: 15px;
+}
+
+.account-view .check input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+/* ---- code blocks ---------------------------------------------------------------------- */
+
+.account-view .code {
+  position: relative;
+  margin-top: 12px;
+  padding-top: 34px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-code);
+}
+
+.account-view .code .label {
+  position: absolute;
+  top: 9px;
+  left: 16px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.account-view .code .copy,
+.account-view .with-copy .copy,
+.account-view .asset-address .copy {
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--wash);
+  color: var(--text-2);
+  font: 12px/1.3 var(--font-sans);
+  cursor: pointer;
+}
+
+.account-view .code .copy {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+}
+
+.account-view .code pre {
+  margin: 0;
+  padding: 4px 16px 14px;
+  color: var(--code-text);
+  font: 13px/1.6 var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ---- status ----------------------------------------------------------------------------- */
+
+.account-view .status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.account-view .status::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.account-view .status.error::before {
+  background: var(--alert);
+}
+
+.account-view .status-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin-top: 16px;
+  color: var(--text);
+}
+
+.account-view .status-line.is-error .status-message {
+  color: var(--text);
+}
+
+.account-view .result {
+  margin-top: 24px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.account-view .inline-confirm {
+  margin-top: 16px;
+}
+
+.account-view .inline-confirm .actions {
+  margin-top: 12px;
+}
+
+/* ---- details -------------------------------------------------------------------------- */
+
+.account-view details.more {
+  margin-top: 32px;
+  border-top: 1px solid var(--border);
+}
+
+.account-view details.more > summary {
+  padding: 16px 0;
+  font-weight: 600;
+  list-style: none;
+  cursor: pointer;
+}
+
+.account-view details.more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.account-view details.more > summary::after {
+  content: "+";
+  float: right;
+  color: var(--muted);
+}
+
+.account-view details.more[open] > summary::after {
+  content: "\2212";
+}
+
+/* ---- profile --------------------------------------------------------------------------- */
+
+.account-view .profile-card::after {
+  content: "";
+  display: table;
+  clear: both;
+}
+
+.account-view .photo-circle {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--wash);
+  color: var(--text);
+}
+
+.account-view .photo-96 {
+  width: 96px;
+  height: 96px;
+}
+
+.account-view .photo-96 .avatar-initials {
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.account-view .photo-circle img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.account-view .profile-card .photo-circle {
+  float: left;
+  margin: 0 24px 12px 0;
+}
+
+.account-view .profile-rows {
+  overflow: hidden;
+}
+
+.account-view .photo-edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px 24px;
+  margin-bottom: 20px;
+}
+
+.account-view .photo-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.account-view .camera {
+  margin-bottom: 20px;
+}
+
+.account-view .camera-video {
+  display: block;
+  width: 100%;
+  max-width: 360px;
+  border-radius: 12px;
+  background: var(--panel-solid);
+}
+
+/* ---- messages -------------------------------------------------------------------------- */
+
+.account-view .message-input .link-btn {
+  margin-top: -4px;
+}
+
+.account-view .file-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.account-view .file-row[hidden],
+.account-view .field[hidden] {
+  display: none;
+}
+
+.account-view .file-name {
+  min-width: 0;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.account-view .file-size {
+  flex: 1;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.account-view .signer-line {
+  margin-top: 4px;
+}
+
+.account-view .drop-zone {
+  padding: 28px 20px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 12px;
+  text-align: center;
+}
+
+.account-view .drop-zone.is-over {
+  border-color: var(--accent);
+}
+
+.account-view .drop-zone-text {
+  margin-bottom: 12px;
+  color: var(--text-2);
+  font-size: 15px;
+}
+
+.account-view .second-zone .drop-zone {
+  margin-top: 16px;
+}
+
+.account-view .inline-note {
+  margin-top: 16px;
+}
+
+.account-view .signature-line {
+  margin-top: 8px;
+}
+
+.account-view .format-table .row-value {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+/* ---- people ----------------------------------------------------------------------------- */
+
+.account-view .people-list {
+  margin-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.account-view .person {
+  border-bottom: 1px solid var(--border);
+}
+
+.account-view .person-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.account-view .person-avatar {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--wash);
+}
+
+.account-view .person-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.account-view .person-avatar .avatar-initials {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.account-view .person-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.account-view .person-name {
+  overflow: hidden;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-view .person-sub {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.account-view .chevron {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.account-view .person-detail {
+  padding: 4px 0 16px 44px;
+}
+
+.account-view .address-lines,
+.account-view .trust-history {
+  display: grid;
+  gap: 4px;
+  text-align: right;
+}
+
+.account-view .history-row {
+  font-size: 13px;
+}
+
+.account-view .remove-line,
+.account-view .back-line,
+.account-view .reveal-line,
+.account-view .forget-line {
+  margin-top: 16px;
+}
+
+/* ---- assets ----------------------------------------------------------------------------- */
+
+.account-view .asset-table {
+  border-top: 1px solid var(--border);
+}
+
+.account-view .asset {
+  border-bottom: 1px solid var(--border);
+}
+
+.account-view .asset-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.6fr) minmax(0, 0.9fr) minmax(0, 0.9fr);
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.account-view .asset-head {
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 13px;
+  cursor: default;
+}
+
+.account-view .asset-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.account-view .asset-toggle {
+  align-items: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.account-view .asset-title {
+  font-size: 15px;
+}
+
+.account-view .asset-ticker {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.account-view .asset-address {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.account-view .asset-balance,
+.account-view .asset-value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.account-view .asset-detail {
+  padding: 4px 0 24px;
+}
+
+.account-view .qr {
+  display: inline-block;
+  padding: 8px;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.account-view .qr canvas {
+  display: block;
+  width: 160px;
+  height: 160px;
+}
+
+.account-view .explorer-link {
+  display: inline-block;
+  margin-top: 12px;
+  border-radius: var(--radius-row);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* ---- settings --------------------------------------------------------------------------- */
+
+.account-view .setting-form {
+  padding: 12px 0 4px;
+}
+
+.account-view .setting-form .field {
+  max-width: 200px;
+}
+
+.account-view .secret pre {
+  color: var(--alert);
+}
+
+/* ---- the standalone export's profile editor (account/index.mjs) ------------------------ */
+
+.account-view .identity-card-photo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px 24px;
+  margin-bottom: 20px;
+}
+
+.account-view .photo-preview {
+  width: 96px;
+  height: 96px;
+}
+
+.account-view .photo-preview img,
+.account-view .photo-preview video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.account-view .photo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+}
+
+.account-view .identity-field {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.account-view .identity-field-label {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.account-view .identity-field-value {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.account-view .identity-field-note,
+.account-view .photo-status,
+.account-view .identity-save-status {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.account-view .identity-save-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.account-view .identity-save-row[hidden],
+.account-view .photo-actions [hidden] {
+  display: none;
+}
+
+/* ---- narrow screens ---------------------------------------------------------------------- */
+
+@media (max-width: 600px) {
+  .account-status {
+    display: none;
+  }
+
+  .account-view .profile-card .photo-circle {
+    float: none;
+    margin: 0 0 16px;
+  }
+
+  .account-view .asset-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "name balance"
+      "address value";
+    row-gap: 4px;
+  }
+
+  .account-view .asset-row .asset-name { grid-area: name; }
+  .account-view .asset-row .asset-address { grid-area: address; }
+  .account-view .asset-row .asset-balance { grid-area: balance; }
+  .account-view .asset-row .asset-value { grid-area: value; }
+
+  .account-view .asset-head {
+    display: none;
+  }
+
+  .account-view .person-detail {
+    padding-left: 0;
+  }
+
+  .account-view .row {
+    flex-wrap: wrap;
+  }
+
+  .account-view .row-value {
+    text-align: left;
+  }
+
+  .account-view .address-lines,
+  .account-view .trust-history {
+    text-align: left;
+  }
+}
+
+@media (max-width: 400px) {
+  .account-identity-bar,
+  .account-tabs {
+    padding: 0 16px;
+  }
+
+  .account-view .pane {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .account-view .btn {
+    transition: none;
+  }
+
+  .account-view .btn:active {
+    transform: none;
+  }
+}
+
+/* Send: the reason Review is disabled, under the fields. */
+.account-view .field-hint {
+  min-height: 1.2em;
+  margin: 4px 0 0;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.account-view .send-review .muted {
+  margin-top: 8px;
+}
+
+/* Old password method: the read-only banner and the sweep to a new wallet. */
+.account-view .migration {
+  margin: 16px 0 24px;
+  padding: 16px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+}
+
+.account-view .migration .sub-head {
+  margin-top: 0;
+}
+
+.account-view .migration .field-hint.is-ok {
+  color: var(--text-2);
+}
+
+.account-view .migration .migration-chain {
+  margin-top: 12px;
+}

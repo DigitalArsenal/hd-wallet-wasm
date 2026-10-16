@@ -33,7 +33,6 @@ const proxyMap = {
   'https://s1.ripple.com:51234': '/api/xrp',
   */
   'https://api.coinbase.com': '/api/coinbase',
-  'https://api.hiro.so': '/api/hiro',
 };
 
 export function apiUrl(url) {

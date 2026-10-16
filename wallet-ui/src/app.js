@@ -1,23 +1,27 @@
 /**
- * HD Wallet UI - Main Application
+ * HD Wallet UI - Main Application (the in-page demo behind the landing page)
  *
- * Standalone wallet interface with HD key derivation, multi-chain address
- * generation, balance fetching, and vCard export.
+ * This file keeps login, the session and the wiring. The account view itself
+ * lives in its own modules:
+ *
+ *   account-view.js   shell, identity bar, section tabs, #account/<section> routing
+ *   identity-keys.js  per-account Ed25519 / X25519 keys, peer ID, storage fingerprint
+ *   account-storage.js  hdw:<fp>:… namespaced storage and the 2.x migration
+ *   contact-card.js   the signed $EPM contact card
+ *   envelopes.js      $PNM / $REC / $ENC / $FIL / $EPM builders (spec §4)
+ *   profile-ui.js, messages-ui.js, people-ui.js, assets-ui.js, settings-ui.js
+ *
+ * Private keys are never kept: every operation derives the key it needs from
+ * the session seed and zeroes it afterwards. The session holds only the seed
+ * (zeroed at logout), the BIP-32 root handle and public identity values.
  */
 
 // =============================================================================
 // External Imports
 // =============================================================================
 
-import initHDWallet, { Curve, getSigningKey, getEncryptionKey, buildSigningPath, buildEncryptionPath, WellKnownCoinType } from 'hd-wallet-wasm';
-import { keccak_256 } from '@noble/hashes/sha3';
-import QRCode from 'qrcode';
+import initHDWallet from 'hd-wallet-wasm';
 import { Buffer } from 'buffer';
-import { createV3 } from 'vcard-cryptoperson';
-
-// SpaceDataStandards EME (Encrypted Message Envelope)
-import { EME, EMET } from '@sds/lib/js/EME/EME.js';
-import * as flatbuffers from 'flatbuffers';
 
 // Make Buffer available globally for various crypto libraries
 window.Buffer = Buffer;
@@ -27,6 +31,7 @@ window.Buffer = Buffer;
 // =============================================================================
 
 import { getModalHTML } from './template.js';
+import { createSeedSlots, flashResult } from './seed-slots.js';
 import { createExternalWalletPanel } from './external/panel.js';
 import { decodeBase58 } from './external/accounts.js';
 import {
@@ -37,57 +42,75 @@ import {
   inspectLegacyWalletQuarantine,
   inspectRememberedWalletStorage,
 } from './wallet-storage.js';
-import { safeCopyText } from './clipboard.js';
+import { clearSecretClipboard, copySecretText, safeCopyText } from './clipboard.js';
 import { normalizeTabHash } from './hash.js';
 import { SessionGenerationGuard } from './session-generation.js';
-import {
-  acquireMediaStreamForSession,
-  readFileBytesForSession,
-  readTextFileForSession,
-  stopMediaStream,
-  wipeSessionBytes,
-} from './legacy-media-session.js';
-import { withDerivedHandle } from './derived-key-scope.js';
 import { createWalletOriginApp } from '../origin-app/app.mjs';
 import { PhotoUrlController } from '../origin-app/photo.mjs';
 import { resolveRegistryBinding } from '../origin-app/registry.mjs';
+import { cryptoConfig } from './constants.js';
 import {
-  createSignedVCardArtifacts,
-  updateVCardSignatureBadge,
-  withSelectedWalletSigningKey,
-} from './vcard-signing.js';
-
-import {
-  cryptoConfig,
-  coinTypeToConfig,
-  PKI_STORAGE_KEY,
-} from './constants.js';
-
-import {
-  toHexCompact,
-  toHex,
-  hexToBytes,
-  ensureUint8Array,
-  generateBtcAddress,
-  generateEthAddress,
-  generateSolAddress,
-  deriveEthAddress,
-  // deriveSuiAddress, // Commented out — BTC/ETH/SOL only
-  // deriveMonadAddress,
-  // deriveCardanoAddress,
-  generateAddresses,
-  generateAddressForCoin,
-  truncateAddress,
+  apiUrl,
   fetchBtcBalance,
   fetchEthBalance,
   fetchSolBalance,
-  // fetchSuiBalance, // Commented out — BTC/ETH/SOL only
-  // fetchMonadBalance,
-  // fetchAdaBalance,
-  // generateXrpAddress,
-  // fetchXrpBalance,
-  apiUrl,
+  truncateAddress,
 } from './address-derivation.js';
+import {
+  accountXprv,
+  accountXpub,
+  buildLoginPayload,
+  chainPaths,
+  deriveAccountAddresses,
+  deriveIdentity,
+  namespaceFingerprint,
+  normalizeAccount,
+  shortAddress,
+  withChainKey,
+  withEdKey,
+  withXKey,
+} from './identity-keys.js';
+import {
+  browserStorage,
+  createAccountStorage,
+  dropLegacySecrets,
+  migrateLegacyStorage,
+  readCurrency,
+  writeCurrency,
+} from './account-storage.js';
+import {
+  contactCardBytes,
+  contactCardFileName,
+  contactFromCardBytes,
+  initialsOf,
+  normalizeProfile,
+  photoBytesFromDataUrl,
+  sanitizeStoredContact,
+  upsertContact,
+} from './contact-card.js';
+import { createAccountShell, isAccountHash, parseAccountHash } from './account-view.js';
+import { createProfilePane } from './profile-ui.js';
+import { createMessagesPane } from './messages-ui.js';
+import { createPeoplePane } from './people-ui.js';
+import { createAssetsPane, ASSET_CHAINS } from './assets-ui.js';
+import { createSettingsPane } from './settings-ui.js';
+import { downloadBytes, setBusy } from './ui-dom.js';
+import { createBalanceScanner } from './balances.js';
+import { buildEthTransaction, createSendFlow } from './send-flow.js';
+import {
+  MIN_GUESSES_LOG10,
+  assessNewPassword,
+  canonicalizeUsername,
+  deriveLegacyPasswordSeed,
+  derivePasswordSeed,
+  loadStrengthEstimator,
+} from './password-login.js';
+import {
+  ETH_MAINNET_CHAIN_ID,
+  assertEthTransactionMatches,
+  decodeEip1559,
+  parseEthRecipient,
+} from './send-safety.js';
 
 // =============================================================================
 // DOM Helper
@@ -104,7 +127,6 @@ const $ = (id) => {
 
 export { normalizeTabHash };
 
-const $q = (sel) => _root.querySelector(sel) || (_root !== document ? document.querySelector(sel) : null);
 const $qa = (sel) => {
   const list = _root.querySelectorAll(sel);
   if (list.length > 0 || _root === document) return list;
@@ -136,76 +158,29 @@ function setStaticSymbol(element, symbol, label) {
 // =============================================================================
 
 function dismissWalletInfo() {
-  localStorage.setItem('walletInfoDismissed', '1');
+  try { localStorage.setItem('walletInfoDismissed', '1'); } catch { /* per-viewer only */ }
   $('wallet-info-expanded').style.display = 'none';
   $('wallet-info-collapsed').style.display = 'flex';
 }
 
 function showWalletInfo() {
-  localStorage.removeItem('walletInfoDismissed');
+  try { localStorage.removeItem('walletInfoDismissed'); } catch { /* per-viewer only */ }
   $('wallet-info-expanded').style.display = 'flex';
   $('wallet-info-collapsed').style.display = 'none';
 }
 
 function initWalletInfoBox() {
-  if (localStorage.getItem('walletInfoDismissed') === '1') {
+  let dismissed = false;
+  try { dismissed = localStorage.getItem('walletInfoDismissed') === '1'; } catch { /* default shown */ }
+  if (dismissed && $('wallet-info-expanded')) {
     $('wallet-info-expanded').style.display = 'none';
     $('wallet-info-collapsed').style.display = 'flex';
   }
 }
 
-function toggleXpubInfo() {
-  const box = $('xpub-info-box');
-  if (box) box.style.display = box.style.display === 'none' ? 'flex' : 'none';
-}
-
-function toggleMemoryInfo() {
-  const box = $('memory-info-box');
-  if (box) box.style.display = box.style.display === 'none' ? 'flex' : 'none';
-}
-
 function bindInfoHandlers() {
   $('wallet-info-dismiss')?.addEventListener('click', dismissWalletInfo);
   $('wallet-info-collapsed')?.addEventListener('click', showWalletInfo);
-  $('xpub-info-toggle')?.addEventListener('click', toggleXpubInfo);
-  $('xpub-info-close')?.addEventListener('click', toggleXpubInfo);
-  $('memory-info-toggle')?.addEventListener('click', toggleMemoryInfo);
-  $('memory-info-close')?.addEventListener('click', toggleMemoryInfo);
-}
-
-// =============================================================================
-// Utilities
-// =============================================================================
-
-function setTruncatedValue(el, value) {
-  if (!el) return;
-  el.textContent = middleTruncate(value, 17, 17);
-}
-
-function middleTruncate(str, startChars, endChars) {
-  if (!str || str.length <= startChars + endChars + 3) return str;
-  return str.slice(0, startChars) + '…' + str.slice(-endChars);
-}
-
-function toBase64(arr) {
-  return btoa(String.fromCharCode(...arr));
-}
-
-function base64ToBytes(b64) {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-
-function bytesToBase64(bytes) {
-  // Avoid spreading large arrays into String.fromCharCode.
-  let binary = '';
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary);
 }
 
 // =============================================================================
@@ -234,98 +209,30 @@ async function hkdf(ikm, salt, info, length) {
   return hdWallet().utils.hkdf(asUint8Array(ikm), asUint8Array(salt), asUint8Array(info), length);
 }
 
-async function aesGcmEncryptJson(keyBytes, obj, aadStr) {
-  if (!(keyBytes instanceof Uint8Array)) throw new Error('Invalid AES key');
-  const iv = hdWallet().utils.getRandomBytes(12);
-  const plaintext = new TextEncoder().encode(JSON.stringify(obj));
-  const aad = aadStr ? new TextEncoder().encode(aadStr) : new Uint8Array(0);
-  const { ciphertext, tag } = hdWallet().utils.aesGcm.encrypt(keyBytes, plaintext, iv, aad);
-  const sealed = new Uint8Array(ciphertext.length + tag.length);
-  sealed.set(ciphertext, 0);
-  sealed.set(tag, ciphertext.length);
-  return { iv, ciphertext: sealed };
-}
-
-async function aesGcmDecryptJson(keyBytes, iv, ciphertextBytes, aadStr) {
-  if (!(keyBytes instanceof Uint8Array)) throw new Error('Invalid AES key');
-  const sealed = asUint8Array(ciphertextBytes);
-  if (sealed.length <= 16) throw new Error('Ciphertext is too short');
-  const aad = aadStr ? new TextEncoder().encode(aadStr) : new Uint8Array(0);
-  const plaintext = hdWallet().utils.aesGcm.decrypt(
-    keyBytes,
-    sealed.subarray(0, sealed.length - 16),
-    sealed.subarray(sealed.length - 16),
-    asUint8Array(iv),
-    aad
-  );
-  return JSON.parse(new TextDecoder().decode(plaintext));
-}
-
-// =============================================================================
-// Key Generation
-// =============================================================================
-
-function generateKeyPair(curveType) {
-  const w = hdWallet();
-  if (curveType === Curve.SECP256K1) {
-    return generateEcKeyPair(w, Curve.SECP256K1, 32);
-  }
-  if (curveType === Curve.X25519) {
-    const privateKey = w.utils.getRandomBytes(32);
-    const publicKey = w.curves.x25519.publicKey(privateKey);
-    return { privateKey, publicKey };
-  }
-  throw new Error(`Unsupported curve type: ${curveType}`);
-}
-
-function generateEcKeyPair(w, curveType, privateKeyLength) {
-  let lastError = null;
-  for (let i = 0; i < 16; i += 1) {
-    const privateKey = w.utils.getRandomBytes(privateKeyLength);
-    try {
-      const publicKey = w.curves.publicKeyFromPrivate(privateKey, curveType);
-      return { privateKey, publicKey };
-    } catch (err) {
-      lastError = err;
-      privateKey.fill(0);
-    }
-  }
-  throw lastError || new Error('Failed to generate curve keypair');
-}
-
-async function p256GenerateKeyPairAsync() {
-  return generateEcKeyPair(hdWallet(), Curve.P256, 32);
-}
-
-async function p384GenerateKeyPairAsync() {
-  return generateEcKeyPair(hdWallet(), Curve.P384, 48);
+function bytesToHexStr(bytes) {
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 // =============================================================================
 // State
 // =============================================================================
 
-// Integration callback — set via options.onLogin in createWalletUI / init
+// Integration callback — set via options.onLogin in init
 let _onLoginCallback = null;
 
-// When false, login() will NOT auto-open the Account modal after authentication.
-// Set via options.openAccountAfterLogin in createWalletUI / init (default: true).
+// When false, login() will NOT auto-open the account view after authentication.
 let _openAccountAfterLogin = true;
-const MAX_VCARD_FILE_BYTES = 256 * 1024;
 
 // Trust event surface (owner 2026-08-21): consuming apps (SDN dashboard,
 // /beta) receive trust lifecycle + drain alerts through the init
 // onTrustEvent option AND through the external wallet panel controller's
-// notifyTrustEvent. The panel's own onTrustEvent option is NOT wired back
-// here — that would self-loop through the controller.
+// notifyTrustEvent.
 let _onTrustEventCallback = null;
 let _externalPanelController = null;
 
 function dispatchTrustEvent(event) {
   const stamped = { at: Date.now(), ...event };
-  // Consuming apps holding the panel controller subscribe here.
   _externalPanelController?.notifyTrustEvent?.(stamped);
-  // Consuming apps that passed init({ onTrustEvent }) receive every event.
   if (typeof _onTrustEventCallback === 'function') {
     try {
       _onTrustEventCallback(stamped);
@@ -335,62 +242,46 @@ function dispatchTrustEvent(event) {
   }
 }
 
+const TRUST_SCAN_MIN_INTERVAL_MS = 2 * 60 * 1000;
+const TRUST_SCAN_FAIL_COOLDOWN_MS = 5 * 60 * 1000;
+const MAX_CONTACT_CARD_BYTES = 256 * 1024;
+
+function emptyAddresses() {
+  return { btc: null, eth: null, sol: null };
+}
+
 const state = {
   initialized: false,
   loggedIn: false,
+  // 'seed' (mnemonic), 'password' (password-derived seed) or 'external'
+  sessionKind: null,
   selectedCrypto: 'btc',
-  addresses: {
-    btc: null,
-    eth: null,
-    sol: null,
-  },
-  wallet: {
-    x25519: null,
-    ed25519: null,
-    secp256k1: null,
-    p256: null,
-    p384: null,
-  },
+  addresses: { btc: null, eth: null, sol: null },
   // HD wallet state
   hdWalletModule: null,
   masterSeed: null,
   hdRoot: null,
-  mnemonic: null,
-  // Encryption keys (derived from password/seed)
-  encryptionKey: null,
-  encryptionIV: null,
-  // Local caller-supplied photo bytes and a revocable blob URL.
-  vcardPhotoBytes: null,
-  vcardPhotoUrl: null,
-  _exportedVCard: null,
-  _vcardEditSnapshot: null,
-  _vcardImportAbortController: null,
-  // Active accounts discovered by scanning or manually added
-  activeAccounts: [],
-  // Wallet groups (Phantom-style: each wallet = same account index across chains)
-  wallets: [{ id: 0, name: 'Wallet 1', accountIndex: 0 }],
-  activeWalletId: 0,
-  walletManageTab: 'active',
-  walletFiatTotals: {},
-  walletFiatCurrency: 'USD',
-  balanceCache: {},
-  balanceCacheLoaded: false,
-  balanceRateLimitUntil: {},
-  scanInProgress: false,
-  scanGeneration: null,
-  trustGraph: null,
+  // The current BIP-44 account number and its public identity
+  account: 0,
+  identity: null,
+  chainAccounts: null,
+  storage: null,
+  externalAccount: null,
+  // Balances for the current account's addresses
+  balances: {},
+  balanceUpdatedAt: 0,
+  balanceError: '',
+  balanceScanning: false,
+  balanceGeneration: null,
+  prices: null,
+  // Trust
   trustTransactions: [],
   trustRelationships: [],
-  _trustImportAbortController: null,
-  // PKI Demo state
-  pki: {
-    alice: null,
-    bob: null,
-    algorithm: 'x25519',
-  },
+  trustCheckedAt: 0,
+  trustScanning: false,
+  trustError: '',
 };
 const legacySessionGuard = new SessionGenerationGuard();
-const legacyPhotoUrls = new PhotoUrlController();
 const walletOriginRegistry = Object.freeze({ resolveRegistryBinding });
 
 function currentLegacySession() {
@@ -401,68 +292,103 @@ function isCurrentLegacySession(sessionGeneration) {
   return state.loggedIn && legacySessionGuard.isCurrent(sessionGeneration);
 }
 
+function isHdSession() {
+  return state.loggedIn
+    && (state.sessionKind === 'seed' || state.sessionKind === 'password' || state.sessionKind === 'password-legacy')
+    && state.masterSeed instanceof Uint8Array && Boolean(state.hdRoot);
+}
+
+/** A wallet opened with the retired fast password method: read-only. */
+function isLegacyPasswordSession() {
+  return isHdSession() && state.sessionKind === 'password-legacy';
+}
+
 // =============================================================================
-// Entropy Calculation & Password Strength
+// Password strength and sign-in (SEC-015)
 // =============================================================================
+//
+// New password wallets derive through the memory-hard scrypt profile
+// (password-login.js: native canonicalization, length and common-password
+// policy, scrypt N=2^16 r=8 p=1, cross-checked against the native profile).
+// Sign-in is gated on a zxcvbn guess estimate, never on character classes.
+// Wallets from the retired fast method open read-only and can only sweep
+// their funds to a new wallet.
 
-function calculateEntropy(password) {
-  if (!password) return 0;
+const LEGACY_READ_ONLY_MESSAGE = 'This wallet uses the old password method and is read-only. Move its funds to a new wallet from Assets.';
+let _strengthEstimator = null;
+let _strengthLoadFailed = false;
 
-  let charsetSize = 0;
-  if (/[a-z]/.test(password)) charsetSize += 26;
-  if (/[A-Z]/.test(password)) charsetSize += 26;
-  if (/[0-9]/.test(password)) charsetSize += 10;
-  if (/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]/.test(password)) charsetSize += 32;
-  if (/\s/.test(password)) charsetSize += 1;
-  if (/[^\x00-\x7F]/.test(password)) charsetSize += 100;
+function ensureStrengthEstimator() {
+  if (_strengthEstimator) return Promise.resolve(_strengthEstimator);
+  return loadStrengthEstimator().then((estimator) => {
+    _strengthEstimator = estimator;
+    _strengthLoadFailed = false;
+    updatePasswordStrength($('wallet-password')?.value ?? '');
+    emitEvent('migration');
+    return estimator;
+  }, (error) => {
+    _strengthLoadFailed = true;
+    updatePasswordStrength($('wallet-password')?.value ?? '');
+    throw error;
+  });
+}
 
-  if (charsetSize === 0) return 0;
-  return Math.round(password.length * Math.log2(charsetSize));
+function setPasswordFeedback(text, { error = false } = {}) {
+  const feedback = $('password-feedback');
+  if (!feedback) return;
+  feedback.textContent = text;
+  feedback.classList.toggle('is-error', Boolean(error && text));
+}
+
+function paintStrength(guessesLog10) {
+  const fill = $('strength-fill');
+  if (!fill) return;
+  // The threshold mark sits at 75%: 10^MIN_GUESSES_LOG10 guesses.
+  const percentage = Math.max(0, Math.min(100, (guessesLog10 / MIN_GUESSES_LOG10) * 75));
+  fill.style.width = `${percentage}%`;
+  const ratio = percentage / 100;
+  let r;
+  let g;
+  if (ratio < 0.5) {
+    r = 180 + Math.round(75 * (ratio / 0.5));
+    g = Math.round(140 * (ratio / 0.5));
+  } else {
+    r = 255 - Math.round(200 * ((ratio - 0.5) / 0.5));
+    g = 140 + Math.round(115 * ((ratio - 0.5) / 0.5));
+  }
+  fill.style.background = `rgb(${r}, ${g}, 30)`;
 }
 
 function updatePasswordStrength(password) {
-  const entropy = calculateEntropy(password);
-  const fill = $('strength-fill');
   const bits = $('entropy-bits');
   const btn = $('derive-from-password');
-
-  if (bits) bits.textContent = `${entropy}`;
-
-  const MIN_SAFE_ENTROPY = 112;
-
-  let strength, percentage;
-
-  if (entropy < 40) {
-    strength = 'weak';
-    percentage = Math.min(25, (entropy / 40) * 25);
-  } else if (entropy < 80) {
-    strength = 'fair';
-    percentage = 25 + ((entropy - 40) / 40) * 25;
-  } else if (entropy < MIN_SAFE_ENTROPY) {
-    strength = 'good';
-    percentage = 50 + ((entropy - 80) / (MIN_SAFE_ENTROPY - 80)) * 25;
-  } else {
-    strength = 'strong';
-    percentage = 75 + Math.min(25, ((entropy - MIN_SAFE_ENTROPY) / 50) * 25);
+  const legacyBtn = $('derive-from-legacy-password');
+  const username = $('wallet-username')?.value ?? '';
+  if (legacyBtn) legacyBtn.disabled = !username || !password;
+  if (!password) {
+    if (bits) bits.textContent = '0';
+    paintStrength(0);
+    setPasswordFeedback('');
+    if (btn) btn.disabled = true;
+    return;
   }
-
-  if (fill) {
-    fill.style.width = `${percentage}%`;
-    // Gradient: deep red (0) → orange (50%) → green (100%)
-    const ratio = percentage / 100;
-    let r, g;
-    if (ratio < 0.5) {
-      r = 180 + Math.round(75 * (ratio / 0.5));  // 180→255
-      g = Math.round(140 * (ratio / 0.5));        // 0→140
+  if (!_strengthEstimator) {
+    if (btn) btn.disabled = true;
+    if (bits) bits.textContent = '0';
+    paintStrength(0);
+    if (_strengthLoadFailed) {
+      setPasswordFeedback('The password checker could not load, so password sign-in is unavailable.', { error: true });
     } else {
-      r = 255 - Math.round(200 * ((ratio - 0.5) / 0.5)); // 255→55
-      g = 140 + Math.round(115 * ((ratio - 0.5) / 0.5)); // 140→255
+      setPasswordFeedback('Loading the password checker…');
+      void ensureStrengthEstimator().catch(() => {});
     }
-    fill.style.background = `rgb(${r}, ${g}, 30)`;
+    return;
   }
-
-  const username = $('wallet-username')?.value;
-  if (btn) btn.disabled = !username || password.length < 24;
+  const assessment = assessNewPassword({ username, password, estimator: _strengthEstimator });
+  if (bits) bits.textContent = String(Math.round(assessment.bits));
+  paintStrength(assessment.guessesLog10);
+  setPasswordFeedback(assessment.ok ? 'Strong enough for a password wallet.' : assessment.message, { error: !assessment.ok });
+  if (btn) btn.disabled = !assessment.ok;
 }
 
 // =============================================================================
@@ -470,116 +396,44 @@ function updatePasswordStrength(password) {
 // =============================================================================
 
 async function deriveKeysFromPassword(username, password) {
-  const encoder = new TextEncoder();
-  const usernameSalt = encoder.encode(username);
-  const passwordBytes = encoder.encode(password);
-
-  const initialHash = await sha256(new Uint8Array([...usernameSalt, ...passwordBytes]));
-  const masterKey = await hkdf(initialHash, usernameSalt, encoder.encode('master-key'), 32);
-
-  // Create 64-byte seed for HD wallet (password-based, not BIP39)
-  const hdSeed = await hkdf(masterKey, new Uint8Array(0), encoder.encode('hd-wallet-seed'), 64);
-
+  const seed = await derivePasswordSeed(hdWallet(), { username, password });
   try {
-    // Derive session keys from the master seed so "remember wallet" can unlock without
-    // storing the user password/seed phrase at rest.
-    return await deriveKeysFromMasterSeed(hdSeed);
+    return installMasterSeed(seed);
   } finally {
-    // Best-effort JS-layer cleanup (strings cannot be wiped).
-    passwordBytes.fill(0);
-    initialHash.fill(0);
-    masterKey.fill(0);
-    hdSeed.fill(0);
+    seed.fill(0);
+  }
+}
+
+async function deriveKeysFromLegacyPassword(username, password) {
+  const seed = await deriveLegacyPasswordSeed(hdWallet(), { username, password });
+  try {
+    return installMasterSeed(seed);
+  } finally {
+    seed.fill(0);
   }
 }
 
 async function deriveKeysFromSeed(seedPhrase) {
-  const encoder = new TextEncoder();
-  const seed = state.hdWalletModule.mnemonic.toSeed(seedPhrase);
+  // The phrase that was validated is the phrase that is derived (B20): the
+  // word slots already hand over lowercase words joined by single spaces.
+  const normalized = String(seedPhrase).trim().toLowerCase().split(/\s+/u).join(' ');
+  const seed = state.hdWalletModule.mnemonic.toSeed(normalized);
   const seedBytes = seed instanceof Uint8Array ? seed : new Uint8Array(seed);
 
   try {
-    return await deriveKeysFromMasterSeed(seedBytes);
+    return installMasterSeed(seedBytes);
   } finally {
-    // Don't retain the seed phrase in JS state.
-    // (Seed phrase strings can't be wiped; we just avoid storing them.)
+    // Seed phrase strings can't be wiped; we just avoid storing them.
     seedBytes.fill(0);
   }
 }
 
-async function deriveKeysFromMasterSeed(masterSeedBytes) {
-  const encoder = new TextEncoder();
-
-  // Copy seed into state; callers can wipe their input buffer.
+/** Copy the seed into the session and build the BIP-32 root. */
+function installMasterSeed(masterSeedBytes) {
+  wipeSession();
   state.masterSeed = new Uint8Array(masterSeedBytes);
   state.hdRoot = state.hdWalletModule.hdkey.fromSeed(state.masterSeed);
-  state.mnemonic = null;
-
-  // Session encryption key for local encrypted blobs (PKI, etc).
-  state.encryptionKey = await hkdf(state.masterSeed, new Uint8Array(0), encoder.encode('buffer-encryption-key'), 32);
-  state.encryptionIV = await hkdf(state.masterSeed, new Uint8Array(0), encoder.encode('buffer-encryption-iv'), 16);
-
-  const keys = deriveKeysFromHDRoot(state.hdRoot);
-  keys.x25519 = generateKeyPair(Curve.X25519);
-  keys.p256 = await p256GenerateKeyPairAsync();
-  keys.p384 = await p384GenerateKeyPairAsync();
-  return keys;
-}
-
-/**
- * Derive secp256k1 and ed25519 signing keys from the HD root using BIP44 signing paths.
- * This ensures addresses match what the HD derivation grid produces.
- */
-function deriveKeysFromHDRoot(hdRoot) {
-  // BTC signing key m/44'/0'/0'/0/0 — secp256k1
-  const btcSigning = getSigningKey(hdRoot, 0, 0, 0);
-
-  // SOL signing key m/44'/501'/0'/0/0 — ed25519
-  const solSigning = getSigningKey(hdRoot, 501, 0, 0);
-  const ed25519PubKey = hdWallet().curves.ed25519.publicKeyFromSeed(solSigning.privateKey);
-
-  return {
-    secp256k1: { privateKey: btcSigning.privateKey, publicKey: btcSigning.publicKey },
-    ed25519: { privateKey: solSigning.privateKey, publicKey: ed25519PubKey },
-  };
-}
-
-/**
- * Derive all blockchain addresses from the HD root using signing paths.
- * Each coin uses its own BIP44 signing path: m/44'/{coinType}'/0'/0/0
- */
-function deriveAllAddressesFromHD() {
-  if (!state.hdRoot) return {};
-
-  const deriveAddress = (coinType) => {
-    try {
-      const path = buildSigningPath(coinType, 0, 0);
-      const derived = state.hdRoot.derivePath(path);
-      const pubKey = derived.publicKey();
-      return generateAddressForCoin(pubKey, coinType);
-    } catch (e) {
-      console.error(`Failed to derive address for coinType ${coinType}:`, e);
-      return null;
-    }
-  };
-
-  // For SOL, derive ed25519 key and use it directly
-  let solAddress = null;
-  try {
-    const solPath = buildSigningPath(501, 0, 0);
-    const solDerived = state.hdRoot.derivePath(solPath);
-    const solPrivKey = solDerived.privateKey();
-    solAddress = generateSolAddress(hdWallet().curves.ed25519.publicKeyFromSeed(solPrivKey));
-  } catch (e) {
-    console.error('Failed to derive SOL address:', e);
-  }
-
-  return {
-    btc: deriveAddress(0),
-    eth: deriveAddress(60),
-    sol: solAddress,
-    // xrp: deriveAddress(144), // Commented out — BTC/ETH/SOL only
-  };
+  return true;
 }
 
 function generateSeedPhrase() {
@@ -590,3047 +444,430 @@ function validateSeedPhrase(phrase) {
   return state.hdWalletModule.mnemonic.validate(phrase.trim().toLowerCase());
 }
 
-// =============================================================================
-// HD Wallet Derivation
-// =============================================================================
+// The login modal's seed word slots (seed-slots.js). They are the only place
+// the typed, pasted or generated phrase lives; readSeedPhrase() is the single
+// way to read it.
+let _seedSlots = null;
+let _seedSlotsMaskChanged = () => {};
 
-function deriveHDKey(path) {
-  if (!state.hdRoot) {
-    throw new Error('HD wallet not initialized');
-  }
+function readSeedPhrase() {
+  return _seedSlots ? _seedSlots.read() : '';
+}
+
+function clearSeedPhrase() {
+  _seedSlots?.clear();
+  _seedSlotsMaskChanged();
+}
+
+function seedPhraseIsValid(phrase) {
+  if (!phrase || !state.hdWalletModule || _seedSlots?.overflow) return false;
   try {
-    return state.hdRoot.derivePath(path);
-  } catch (e) {
-    console.error('HD derivation error:', e, 'path:', path);
-    throw e;
+    return Boolean(validateSeedPhrase(phrase));
+  } catch {
+    return false;
   }
 }
 
-function deriveAccountPeerId() {
-  if (!state.hdRoot) return null;
+// Login is enabled for a valid phrase of 12 or more words (never after a
+// paste of more than 24 words).
+function updateSeedLoginButton() {
+  const deriveBtn = $('derive-from-seed');
+  if (!deriveBtn) return;
+  const phrase = readSeedPhrase();
+  deriveBtn.disabled = !(phrase && phrase.split(' ').length >= 12 && seedPhraseIsValid(phrase));
+}
+
+function seedWordIsUnknown(word) {
   try {
-    return state.hdRoot.peerIdString();
-  } catch (e) {
-    console.warn('Failed to derive account PeerID:', e);
-    return null;
+    return !state.hdWalletModule.mnemonic.checkWord(word);
+  } catch {
+    return false;
   }
-}
-
-function getWalletIdentityPath(wallet = getCurrentWallet()) {
-  if (!wallet) return "m/44'/0'/0'";
-  return `m/44'/0'/${wallet.accountIndex}'`;
-}
-
-function getCurrentWalletIdentity(wallet = getCurrentWallet()) {
-  if (!state.hdRoot || !wallet) return { xpub: '', peerId: '', path: getWalletIdentityPath(wallet) };
-  const path = getWalletIdentityPath(wallet);
-  try {
-    return withDerivedHandle(
-      () => deriveHDKey(path),
-      (accountKey) => ({
-        xpub: accountKey?.toXpub?.() || '',
-        peerId: accountKey?.peerIdString?.() || '',
-        path,
-      }),
-    );
-  } catch (e) {
-    console.warn('Failed to derive wallet identity keys:', e);
-    return { xpub: '', peerId: '', path };
-  }
-}
-
-function getCurrentWalletSigningAccounts(wallet = getCurrentWallet()) {
-  if (!wallet) return [];
-  return state.activeAccounts.filter(a => a.active && getAccountWalletId(a) === wallet.id && isSigningAccountForWallet(a, wallet));
-}
-
-function updatePathDisplay() {
-  const coin = $('hd-coin')?.value;
-  const account = $('hd-account')?.value || '0';
-  const index = $('hd-index')?.value || '0';
-
-  const signingPath = buildSigningPath(coin, account, index);
-  const encryptionPath = buildEncryptionPath(coin, account, index);
-
-  const signingPathEl = $('signing-path');
-  const encryptionPathEl = $('encryption-path');
-
-  if (signingPathEl) signingPathEl.textContent = signingPath;
-  if (encryptionPathEl) encryptionPathEl.textContent = encryptionPath;
 }
 
 // =============================================================================
-// Active Accounts: Derivation, Persistence, Scanning, Rendering
+// Session identity (account N)
 // =============================================================================
+
+/** Derive the identity, addresses and storage of account N for the HD session. */
+function deriveAccountSession(account) {
+  const wasm = hdWallet();
+  const n = normalizeAccount(account);
+  state.account = n;
+  state.identity = deriveIdentity(wasm, state.masterSeed, n);
+  state.chainAccounts = deriveAccountAddresses(wasm, state.hdRoot, n);
+  state.addresses = {
+    btc: state.chainAccounts.btc.address,
+    eth: state.chainAccounts.eth.address,
+    sol: state.chainAccounts.sol.address,
+  };
+  state.balances = {};
+  state.balanceUpdatedAt = 0;
+  state.balanceError = '';
+  state.trustTransactions = [];
+  state.trustRelationships = [];
+  state.trustCheckedAt = 0;
+  state.trustError = '';
+}
+
+function notifyLogin() {
+  if (!_onLoginCallback || !isHdSession() || !state.identity) return;
+  try {
+    _onLoginCallback(buildLoginPayload({ rootXpub: state.hdRoot.toXpub(), identity: state.identity }));
+  } catch (err) {
+    console.error('onLogin callback error:', err);
+  }
+}
+
+function scopedEdKey(fn) {
+  if (!isHdSession()) throw new Error('This needs a seed-phrase session.');
+  if (isLegacyPasswordSession()) throw new Error(LEGACY_READ_ONLY_MESSAGE);
+  return withEdKey(hdWallet(), state.masterSeed, state.account, fn);
+}
+
+function scopedXKey(fn) {
+  if (!isHdSession()) throw new Error('This needs a seed-phrase session.');
+  return withXKey(hdWallet(), state.masterSeed, state.account, fn);
+}
+
+// A read-only (old password method) session signs nothing but the sweep:
+// withSweepSigning() opens this gate for the synchronous signing step of a
+// sweep plan that prepareSendFromAccount checked.
+let _sweepSigning = false;
+
+function scopedChainKey(path, fn) {
+  if (!isHdSession()) throw new Error('This needs a seed-phrase session.');
+  if (isLegacyPasswordSession() && !_sweepSigning) throw new Error(LEGACY_READ_ONLY_MESSAGE);
+  return withChainKey(state.hdRoot, path, fn);
+}
+
+function withSweepSigning(run) {
+  _sweepSigning = true;
+  try {
+    return run();
+  } finally {
+    _sweepSigning = false;
+  }
+}
+
+// =============================================================================
+// Profile and contacts (namespaced storage)
+// =============================================================================
+
+const _events = new Map();
+
+function onEvent(name, handler) {
+  if (!_events.has(name)) _events.set(name, new Set());
+  _events.get(name).add(handler);
+  return () => _events.get(name)?.delete(handler);
+}
+
+function emitEvent(name) {
+  for (const handler of [..._events.get(name) ?? []]) {
+    try { handler(); } catch (e) { console.warn(`account ${name} listener failed:`, e); }
+  }
+}
+
+function readProfile() {
+  if (!state.storage) return normalizeProfile({});
+  return normalizeProfile(state.storage.read(state.account, 'profile', {}));
+}
+
+function saveProfile(profile) {
+  if (!state.storage) return;
+  state.storage.write(state.account, 'profile', normalizeProfile(profile));
+  void refreshIdentityBar();
+  emitEvent('profile');
+}
+
+function readContacts() {
+  if (!state.storage) return [];
+  const raw = state.storage.read(state.account, 'contacts', []);
+  return (Array.isArray(raw) ? raw : []).map(sanitizeStoredContact).filter(Boolean);
+}
+
+function writeContacts(contacts) {
+  state.storage?.write(state.account, 'contacts', contacts);
+  emitEvent('contacts');
+}
+
+async function loadEnvelopes() {
+  return import('./envelopes.js');
+}
+
+async function importContactFile(file) {
+  if (!isHdSession()) throw new Error('This needs a seed-phrase session.');
+  if (!file || !Number.isSafeInteger(file.size) || file.size <= 0 || file.size > MAX_CONTACT_CARD_BYTES) {
+    throw new Error('This is not an SDS contact card (.epm).');
+  }
+  const sessionGeneration = currentLegacySession();
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (!isCurrentLegacySession(sessionGeneration)) throw new Error('Wallet session ended');
+  const envelopes = await loadEnvelopes();
+  const contact = contactFromCardBytes(hdWallet(), envelopes, bytes);
+  if (!isCurrentLegacySession(sessionGeneration)) throw new Error('Wallet session ended');
+  writeContacts(upsertContact(readContacts(), contact));
+  return contact;
+}
+
+function removeContact(peerId) {
+  writeContacts(readContacts().filter((contact) => contact.peerId !== peerId));
+}
+
+async function buildContactCard() {
+  if (!isHdSession()) throw new Error('This needs a seed-phrase session.');
+  const wasm = hdWallet();
+  const profile = readProfile();
+  const envelopes = await loadEnvelopes();
+  if (!isHdSession()) throw new Error('Wallet session ended');
+  const bytes = contactCardBytes(wasm, envelopes, {
+    profile,
+    identity: state.identity,
+    addresses: state.chainAccounts,
+    withChainKey: scopedChainKey,
+    withEdKey: scopedEdKey,
+  });
+  return { bytes, fileName: contactCardFileName(profile.name) };
+}
+
+// =============================================================================
+// Balances: the current account's three addresses
+// =============================================================================
+
+const CHAIN_FETCHERS = Object.freeze({ btc: fetchBtcBalance, eth: fetchEthBalance, sol: fetchSolBalance });
+
+// The balance cache lives with the account (hdw:<fp>:a<N>:scan-cache); an
+// external session keeps it in memory only.
+let _memoryBalanceCache = {};
+
+function readBalanceCache() {
+  if (state.storage) {
+    const cache = state.storage.read(state.account, 'scan-cache', {});
+    return cache && typeof cache === 'object' && !Array.isArray(cache) ? cache : {};
+  }
+  return _memoryBalanceCache;
+}
+
+function writeBalanceCache(cache) {
+  if (state.storage) state.storage.write(state.account, 'scan-cache', cache);
+  else _memoryBalanceCache = cache;
+}
+
+const balanceScanner = createBalanceScanner({
+  fetchers: CHAIN_FETCHERS,
+  readCache: readBalanceCache,
+  writeCache: writeBalanceCache,
+});
+
+/** The scan targets: exactly the current account's addresses (3), or the connected one. */
+function balanceTargets() {
+  return ['btc', 'eth', 'sol']
+    .filter((chain) => state.addresses?.[chain])
+    .map((chain) => ({ chain, address: state.addresses[chain] }));
+}
 
 /**
- * Derive an address for a given BIP44 path.
- * SOL (501) uses ed25519; BTC (0) and ETH (60) use secp256k1.
- * @returns {{ address: string, publicKey: Uint8Array, path: string }}
+ * Fetch the balances of the current account's addresses: 3 requests at most
+ * (the 2-minute cache answers the rest), then the prices once.
  */
-function deriveAddressForPath(coinType, account, index) {
-  if (!state.hdRoot) throw new Error('HD wallet not initialized');
-  const path = buildSigningPath(coinType, account, index);
-  const derived = state.hdRoot.derivePath(path);
-
-  if (coinType === 501) {
-    // Solana: ed25519
-    const privKey = derived.privateKey();
-    const pubKey = hdWallet().curves.ed25519.publicKeyFromSeed(privKey);
-    return { address: generateSolAddress(pubKey), publicKey: pubKey, path };
-  }
-
-  // BTC/ETH: secp256k1
-  const pubKey = derived.publicKey();
-  return { address: generateAddressForCoin(pubKey, coinType), publicKey: pubKey, path };
-}
-
-const ACTIVE_ACCOUNTS_KEY = 'hd-wallet-active-accounts';
-const WALLETS_KEY = 'hd-wallet-wallets';
-const DEFAULT_WALLET_COUNT = 10;
-const WALLET_OVERLAY_VIEWS = ['wallet-wallets-view', 'wallet-export-view', 'wallet-advanced-view', 'wallet-send-view'];
-const BALANCE_CACHE_KEY = 'hd-wallet-scan-balance-cache-v1';
-const BALANCE_CACHE_TTL_MS = 2 * 60 * 1000;
-const BALANCE_CACHE_STALE_MS = 30 * 60 * 1000;
-const SCAN_REQUEST_DELAY_MS = 700;
-const SCAN_RETRY_BASE_DELAY_MS = 1200;
-const SCAN_MAX_RETRIES = 2;
-const BALANCE_RATE_LIMIT_COOLDOWN_MS = 2 * 60 * 1000;
-let _scanLastRequestAt = 0;
-let _balanceCacheDirty = false;
-
-function getDefaultWalletState() {
-  return [{ id: 0, name: 'Wallet 1', accountIndex: 0, inactive: false }];
-}
-
-function getDefaultWalletName(accountIndex) {
-  return `Wallet ${accountIndex + 1}`;
-}
-
-function normalizeWalletName(rawName, accountIndex) {
-  const fallback = getDefaultWalletName(accountIndex);
-  const trimmed = (rawName || '').toString().trim();
-  if (!trimmed) return fallback;
-  if (/^wallet(?:\s+\d+)?$/i.test(trimmed)) return fallback;
-  return trimmed;
-}
-
-function ensureWalletNamesNormalized() {
-  let changed = false;
-  state.wallets.forEach((wallet) => {
-    const normalized = normalizeWalletName(wallet.name, wallet.accountIndex);
-    if (normalized !== wallet.name) {
-      wallet.name = normalized;
-      changed = true;
+async function refreshBalances({ force = false } = {}) {
+  const sessionGeneration = currentLegacySession();
+  if (!isCurrentLegacySession(sessionGeneration)) return;
+  if (state.balanceScanning && state.balanceGeneration === sessionGeneration) return;
+  state.balanceScanning = true;
+  state.balanceGeneration = sessionGeneration;
+  state.balanceError = '';
+  const account = state.account;
+  const current = () => isCurrentLegacySession(sessionGeneration) && account === state.account;
+  emitEvent('assets');
+  try {
+    const targets = balanceTargets();
+    const { balances, failures, cancelled } = await balanceScanner.scan(targets, current, { force });
+    if (cancelled || !current()) return;
+    Object.assign(state.balances, balances);
+    if (state.externalAccount) {
+      state.externalAccount.balance = state.balances[state.externalAccount.chain] ?? state.externalAccount.balance;
     }
-  });
-  if (changed) saveWallets();
-  return changed;
-}
-
-function getWalletDerivationEntries(wallet) {
-  return [
-    { coinType: 0, name: 'BTC', account: wallet.accountIndex, index: 0 },
-    { coinType: 60, name: 'ETH', account: 0, index: wallet.accountIndex },
-    { coinType: 501, name: 'SOL', account: wallet.accountIndex, index: 0 },
-  ];
-}
-
-function getWalletIdForPath(coinType, account, index) {
-  const accountIndex = coinType === 60 ? index : account;
-  const wallet = state.wallets.find(w => w.accountIndex === accountIndex);
-  return wallet ? wallet.id : 0;
-}
-
-function isWalletInactive(wallet) {
-  return Boolean(wallet?.inactive);
-}
-
-function getActiveWallets() {
-  return state.wallets.filter(wallet => !isWalletInactive(wallet));
-}
-
-function getInactiveWallets() {
-  return state.wallets.filter(wallet => isWalletInactive(wallet));
-}
-
-function normalizeWallets(wallets) {
-  const normalized = [];
-  const source = Array.isArray(wallets) ? wallets : [];
-  const usedIds = new Set();
-  const usedAccountIndexes = new Set();
-
-  for (const wallet of source) {
-    const id = Number.parseInt(wallet?.id, 10);
-    const accountIndex = Number.parseInt(wallet?.accountIndex, 10);
-    if (Number.isNaN(id) || Number.isNaN(accountIndex)) continue;
-    if (usedIds.has(id) || usedAccountIndexes.has(accountIndex)) continue;
-
-    const name = normalizeWalletName(wallet?.name, accountIndex);
-    const inactive = Boolean(wallet?.inactive);
-    normalized.push({ id, name, accountIndex, inactive });
-    usedIds.add(id);
-    usedAccountIndexes.add(accountIndex);
+    try {
+      state.prices = await fetchCryptoPrices(getSelectedCurrency());
+    } catch (e) {
+      console.warn('Price fetch failed:', e?.message || e);
+    }
+    if (!current()) return;
+    state.balanceUpdatedAt = Date.now();
+    state.balanceError = failures === targets.length && targets.length > 0 ? 'Balances are unavailable right now.' : '';
+  } finally {
+    if (state.balanceGeneration === sessionGeneration) {
+      state.balanceScanning = false;
+      state.balanceGeneration = null;
+      emitEvent('assets');
+    }
   }
-
-  let nextId = normalized.reduce((max, wallet) => Math.max(max, wallet.id), -1) + 1;
-  for (let accountIndex = 0; accountIndex < DEFAULT_WALLET_COUNT; accountIndex++) {
-    if (usedAccountIndexes.has(accountIndex)) continue;
-    while (usedIds.has(nextId)) nextId++;
-    normalized.push({
-      id: nextId,
-      name: getDefaultWalletName(accountIndex),
-      accountIndex,
-      inactive: false,
-    });
-    usedIds.add(nextId);
-  }
-
-  if (normalized.length === 0) return getDefaultWalletState();
-  normalized.sort((a, b) => a.accountIndex - b.accountIndex || a.id - b.id);
-  return normalized;
 }
 
-function normalizeActiveAccounts(accounts) {
-  const source = Array.isArray(accounts) ? accounts : [];
-  return source.map((acct) => {
-    const existingWalletId = Number.parseInt(acct.walletId, 10);
-    const walletExists = state.wallets.some(w => w.id === existingWalletId);
-    const walletId = walletExists
-      ? existingWalletId
-      : getWalletIdForPath(Number.parseInt(acct.coinType, 10), Number.parseInt(acct.account, 10), Number.parseInt(acct.index, 10));
-    return { ...acct, walletId };
-  });
-}
-
-function ensureWalletAccounts() {
-  if (!state.hdRoot) return false;
-
-  const existing = new Set(
-    state.activeAccounts.map(a => `${a.walletId ?? getWalletIdForPath(a.coinType, a.account, a.index)}:${a.coinType}:${a.account}:${a.index}`)
-  );
-  let added = false;
-
-  for (const wallet of state.wallets) {
-    for (const entry of getWalletDerivationEntries(wallet)) {
-      const key = `${wallet.id}:${entry.coinType}:${entry.account}:${entry.index}`;
-      if (existing.has(key)) continue;
-      try {
-        const { address, path } = deriveAddressForPath(entry.coinType, entry.account, entry.index);
-        state.activeAccounts.push({
-          coinType: entry.coinType,
-          name: entry.name,
-          account: entry.account,
-          index: entry.index,
-          address,
-          path,
-          balance: '--',
-          active: false,
-          walletId: wallet.id,
-        });
-        existing.add(key);
-        added = true;
-      } catch (e) {
-        console.warn('Failed to derive wallet account:', entry, e);
+function assetsState() {
+  const currency = getSelectedCurrency();
+  const prices = state.prices;
+  let total = 0;
+  let priced = false;
+  const rows = ASSET_CHAINS
+    .filter((chain) => state.addresses?.[chain.id])
+    .map((chain) => {
+      const balance = state.balances[chain.id] ?? '--';
+      const amount = Number.parseFloat(balance);
+      const price = Number.parseFloat(prices?.[chain.ticker]);
+      let valueText = '';
+      if (Number.isFinite(amount) && Number.isFinite(price) && price > 0) {
+        const value = amount * price;
+        total += value;
+        priced = true;
+        valueText = formatCurrencyValue(value, currency);
       }
-    }
-  }
-
-  if (added) saveActiveAccounts();
-  return added;
-}
-
-function getWalletById(walletId) {
-  return state.wallets.find(w => w.id === walletId);
-}
-
-function getCurrentWallet() {
-  const activeWallets = getActiveWallets();
-  if (activeWallets.length === 0) return null;
-  const current = activeWallets.find(wallet => wallet.id === state.activeWalletId);
-  return current || activeWallets[0] || null;
-}
-
-function getAccountWalletId(acct) {
-  if (!acct) return 0;
-  if (acct.walletId !== undefined && getWalletById(acct.walletId)) return acct.walletId;
-  return getWalletIdForPath(acct.coinType, acct.account, acct.index);
-}
-
-function isSigningAccountForWallet(acct, wallet) {
-  if (!acct || !wallet) return false;
-  const coinType = Number.parseInt(acct.coinType, 10);
-  const account = Number.parseInt(acct.account, 10);
-  const index = Number.parseInt(acct.index, 10);
-  if (Number.isNaN(coinType) || Number.isNaN(account) || Number.isNaN(index)) return false;
-
-  if (coinType === 60) return account === 0 && index === wallet.accountIndex;
-  if (coinType === 0 || coinType === 501) return account === wallet.accountIndex && index === 0;
-  return false;
-}
-
-function isSigningAccount(acct) {
-  const wallet = getWalletById(getAccountWalletId(acct));
-  return isSigningAccountForWallet(acct, wallet);
-}
-
-function updateCustomPathWalletLabel() {
-  const label = $('custom-path-wallet-label');
-  const wallet = getCurrentWallet();
-  if (!label) return;
-  label.textContent = wallet ? `${wallet.name} (account ${wallet.accountIndex})` : `${getDefaultWalletName(0)} (account 0)`;
-}
-
-function updateCustomPathDefault() {
-  const chainSelect = $('custom-path-chain');
-  const input = $('custom-path-input');
-  const wallet = getCurrentWallet();
-  if (!chainSelect || !input || !wallet) return;
-
-  const coinType = Number.parseInt(chainSelect.value, 10);
-  if (Number.isNaN(coinType)) return;
-  const account = coinType === 60 ? 0 : wallet.accountIndex;
-  const index = coinType === 60 ? wallet.accountIndex : 0;
-  input.value = buildSigningPath(coinType, account, index);
-  input.dataset.autogenerated = 'true';
-}
-
-function fitWalletSelectorToSelectedLabel(select) {
-  if (!select) return;
-  const selected = select.options[select.selectedIndex];
-  const label = selected?.textContent || '';
-  const width = Math.max(72, Math.min(260, (label.length * 8) + 46));
-  select.style.width = `${width}px`;
-}
-
-function renderWalletSelector() {
-  const selects = [$('account-wallet-select'), $('wallet-active-select')].filter(Boolean);
-  if (selects.length === 0) return;
-  ensureWalletNamesNormalized();
-
-  const currentWallet = getCurrentWallet();
-  if (!currentWallet) {
-    selects.forEach((select) => { select.replaceChildren(); });
-    return;
-  }
-  state.activeWalletId = currentWallet.id;
-
-  const displayCurrency = state.walletFiatCurrency || getSelectedCurrency();
-  const activeWallets = getActiveWallets();
-  selects.forEach((select) => {
-    select.replaceChildren();
-    activeWallets.forEach((wallet) => {
-      const option = document.createElement('option');
-      option.value = String(wallet.id);
-      const walletValue = state.walletFiatTotals[wallet.id] ?? 0;
-      option.textContent = wallet.id === state.activeWalletId
-        ? wallet.name
-        : `${wallet.name} (${formatCurrencyValue(walletValue, displayCurrency)})`;
-      select.appendChild(option);
-    });
-    select.value = String(state.activeWalletId);
-    fitWalletSelectorToSelectedLabel(select);
-  });
-  updateCustomPathWalletLabel();
-  updateIdentityWalletKeys();
-}
-
-function updateWalletBondDisplay(currency = state.walletFiatCurrency || getSelectedCurrency()) {
-  const valueEl = $('wallet-bond-value');
-  const wallet = getCurrentWallet();
-  const walletValue = wallet ? state.walletFiatTotals?.[wallet.id] ?? 0 : 0;
-  if (valueEl) valueEl.textContent = formatCurrencyValue(walletValue, currency);
-}
-
-function updateIdentityWalletKeys() {
-  const identity = getCurrentWalletIdentity();
-  const xpubEl = $('identity-wallet-xpub');
-  const peerIdEl = $('identity-wallet-peerid');
-
-  if (xpubEl) setTruncatedValue(xpubEl, identity.xpub || 'N/A');
-  if (peerIdEl) setTruncatedValue(peerIdEl, identity.peerId || 'N/A');
-}
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function loadBalanceCache() {
-  try {
-    const raw = localStorage.getItem(BALANCE_CACHE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function saveBalanceCache() {
-  if (!_balanceCacheDirty) return;
-  try {
-    localStorage.setItem(BALANCE_CACHE_KEY, JSON.stringify(state.balanceCache));
-    _balanceCacheDirty = false;
-  } catch (e) {
-    console.warn('Failed to save balance cache:', e);
-  }
-}
-
-function pruneBalanceCache() {
-  const now = Date.now();
-  let changed = false;
-  Object.entries(state.balanceCache).forEach(([key, entry]) => {
-    if (!entry || typeof entry.ts !== 'number' || now - entry.ts > BALANCE_CACHE_STALE_MS) {
-      delete state.balanceCache[key];
-      changed = true;
-    }
-  });
-  if (changed) _balanceCacheDirty = true;
-}
-
-function getBalanceCacheKey(coinType, address) {
-  return `${coinType}:${address}`;
-}
-
-function isNumericBalance(balance) {
-  const n = Number.parseFloat(balance);
-  return Number.isFinite(n) && n >= 0;
-}
-
-function getCachedBalance(coinType, address, { allowStale = false } = {}) {
-  const key = getBalanceCacheKey(coinType, address);
-  const entry = state.balanceCache[key];
-  if (!entry || typeof entry.balance !== 'string' || typeof entry.ts !== 'number') return null;
-
-  const age = Date.now() - entry.ts;
-  if (age <= BALANCE_CACHE_TTL_MS) return { ...entry, stale: false };
-  if (allowStale && age <= BALANCE_CACHE_STALE_MS) return { ...entry, stale: true };
-  return null;
-}
-
-function setCachedBalance(coinType, address, balance) {
-  if (!isNumericBalance(balance)) return;
-  state.balanceCache[getBalanceCacheKey(coinType, address)] = {
-    balance: String(balance),
-    ts: Date.now(),
-  };
-  _balanceCacheDirty = true;
-}
-
-function hydrateAccountsFromBalanceCache() {
-  let changed = false;
-  for (const acct of state.activeAccounts) {
-    if (!acct?.address) continue;
-    const cached = getCachedBalance(acct.coinType, acct.address, { allowStale: true });
-    if (!cached || !isNumericBalance(cached.balance)) continue;
-
-    const prev = Number.parseFloat(acct.balance);
-    const next = Number.parseFloat(cached.balance);
-    if (!Number.isFinite(prev) || Math.abs(prev - next) > 1e-12) {
-      acct.balance = cached.balance;
-      changed = true;
-    }
-    if (next > 0 && !acct.active) {
-      acct.active = true;
-      changed = true;
-    }
-  }
-  if (changed) saveActiveAccounts();
-  return changed;
-}
-
-function isRateLimitError(message) {
-  const text = (message || '').toLowerCase();
-  return text.includes('429')
-    || text.includes('rate')
-    || text.includes('limit')
-    || text.includes('too many')
-    || text.includes('throttl')
-    || text.includes('quota');
-}
-
-async function waitForScanThrottle(sessionGeneration) {
-  const now = Date.now();
-  const elapsed = now - _scanLastRequestAt;
-  if (elapsed < SCAN_REQUEST_DELAY_MS) {
-    await sleep(SCAN_REQUEST_DELAY_MS - elapsed);
-  }
-  if (!isCurrentLegacySession(sessionGeneration)) return false;
-  _scanLastRequestAt = Date.now();
-  return true;
-}
-
-function findExistingAccountForTarget(target) {
-  return state.activeAccounts.find(a =>
-    getAccountWalletId(a) === target.walletId
-    && a.coinType === target.coinType
-    && a.account === target.account
-    && a.index === target.index
-  );
-}
-
-function cancelledBalanceScanResult() {
-  return Object.freeze({
-    balance: '--',
-    cancelled: true,
-    error: 'Wallet session ended',
-    ok: false,
-    source: 'none',
-    stale: false,
-  });
-}
-
-async function fetchBalanceForScanTarget(target, address, sessionGeneration) {
-  if (!isCurrentLegacySession(sessionGeneration)) return cancelledBalanceScanResult();
-  const cooldownUntil = state.balanceRateLimitUntil[target.coinType] || 0;
-  if (Date.now() < cooldownUntil) {
-    const stale = getCachedBalance(target.coinType, address, { allowStale: true });
-    if (stale) {
       return {
-        ok: true,
-        balance: stale.balance,
-        source: 'cache',
-        stale: true,
-        error: 'Rate-limited; using cached balance',
+        chain: chain.id,
+        address: state.addresses[chain.id],
+        path: state.chainAccounts?.[chain.id]?.path ?? '',
+        balance,
+        valueText,
       };
-    }
-    return {
-      ok: false,
-      balance: '--',
-      source: 'none',
-      stale: false,
-      error: 'Rate-limited; retrying later',
-    };
-  }
-
-  const fresh = getCachedBalance(target.coinType, address);
-  if (fresh) {
-    return {
-      ok: true,
-      balance: fresh.balance,
-      source: 'cache',
-      stale: false,
-    };
-  }
-
-  let lastError = '';
-  for (let attempt = 0; attempt <= SCAN_MAX_RETRIES; attempt++) {
-    if (!await waitForScanThrottle(sessionGeneration)) return cancelledBalanceScanResult();
-    try {
-      const result = await target.fetchBalance(address);
-      if (!isCurrentLegacySession(sessionGeneration)) return cancelledBalanceScanResult();
-      const balance = result?.balance;
-      const error = result?.error;
-      if (!error && isNumericBalance(balance)) {
-        if (!isCurrentLegacySession(sessionGeneration)) return cancelledBalanceScanResult();
-        state.balanceRateLimitUntil[target.coinType] = 0;
-        setCachedBalance(target.coinType, address, balance);
-        return {
-          ok: true,
-          balance: String(balance),
-          source: 'network',
-          stale: false,
-        };
-      }
-
-      lastError = error || 'Unknown balance fetch error';
-      if (isRateLimitError(lastError)) {
-        if (!isCurrentLegacySession(sessionGeneration)) return cancelledBalanceScanResult();
-        state.balanceRateLimitUntil[target.coinType] = Date.now() + BALANCE_RATE_LIMIT_COOLDOWN_MS;
-      }
-    } catch (e) {
-      if (!isCurrentLegacySession(sessionGeneration)) return cancelledBalanceScanResult();
-      lastError = e?.message || 'Unknown balance fetch exception';
-      if (isRateLimitError(lastError)) {
-        state.balanceRateLimitUntil[target.coinType] = Date.now() + BALANCE_RATE_LIMIT_COOLDOWN_MS;
-      }
-    }
-
-    const retryable = isRateLimitError(lastError) || lastError.length > 0;
-    if (attempt < SCAN_MAX_RETRIES && retryable) {
-      const delay = SCAN_RETRY_BASE_DELAY_MS * (attempt + 1);
-      await sleep(delay);
-      if (!isCurrentLegacySession(sessionGeneration)) return cancelledBalanceScanResult();
-      continue;
-    }
-  }
-
-  if (!isCurrentLegacySession(sessionGeneration)) return cancelledBalanceScanResult();
-  const stale = getCachedBalance(target.coinType, address, { allowStale: true });
-  if (stale) {
-    return {
-      ok: true,
-      balance: stale.balance,
-      source: 'cache',
-      stale: true,
-      error: lastError,
-    };
-  }
-
+    });
   return {
-    ok: false,
-    balance: '--',
-    source: 'none',
-    stale: false,
-    error: lastError || 'Balance unavailable',
+    rows,
+    currency,
+    updatedAt: state.balanceUpdatedAt,
+    totalText: priced || state.balanceUpdatedAt ? formatCurrencyValue(total, currency) : '--',
+    scanning: state.balanceScanning,
+    error: state.balanceError,
   };
 }
 
-function saveActiveAccounts() {
-  try {
-    const serializable = state.activeAccounts.map(a => ({
-      coinType: a.coinType,
-      name: a.name,
-      account: a.account,
-      index: a.index,
-      address: a.address,
-      balance: a.balance,
-      active: a.active,
-      path: a.path,
-      walletId: a.walletId ?? 0,
-    }));
-    localStorage.setItem(ACTIVE_ACCOUNTS_KEY, JSON.stringify(serializable));
-  } catch (e) {
-    console.warn('Failed to save active accounts:', e);
+// =============================================================================
+// Send (Bitcoin and Ethereum): prepare → review the DECODED transaction → send
+// =============================================================================
+
+// send-flow.js builds the unsigned transaction at review time and shows the
+// recipient and amount decoded from its bytes; Send signs that exact plan and
+// refuses to broadcast unless the signed bytes decode to it (SEC-014/057).
+let _sendFlow = null;
+
+function sendFlow() {
+  if (!_sendFlow) {
+    _sendFlow = createSendFlow({
+      wasm: hdWallet,
+      ethRpc,
+      fetchBtcUtxos: (address) => fetchVerifiedBtcUtxos(address),
+      broadcastBtc: (rawHex) => broadcastBtcTx(rawHex),
+      withChainKey: (path, fn) => scopedChainKey(path, fn),
+      btcSign: (opts) => signBtcTransaction(opts),
+    });
   }
+  return _sendFlow;
 }
 
-function loadActiveAccounts() {
-  try {
-    const saved = localStorage.getItem(ACTIVE_ACCOUNTS_KEY);
-    return saved ? JSON.parse(saved) : [];
-  } catch {
-    return [];
-  }
+let _trustModule = null;
+async function trustModule() {
+  _trustModule ??= await import('./blockchain-trust.js');
+  return _trustModule;
 }
 
-function saveWallets() {
-  try {
-    localStorage.setItem(WALLETS_KEY, JSON.stringify(state.wallets));
-  } catch (e) {
-    console.warn('Failed to save wallets:', e);
-  }
+async function fetchVerifiedBtcUtxos(address) {
+  return (await trustModule()).fetchBtcUtxos(address);
 }
 
-function loadWallets() {
-  try {
-    const saved = localStorage.getItem(WALLETS_KEY);
-    return normalizeWallets(saved ? JSON.parse(saved) : getDefaultWalletState());
-  } catch {
-    return normalizeWallets(getDefaultWalletState());
-  }
+async function broadcastBtcTx(rawHex) {
+  return (await trustModule()).broadcastBtcRawTx(rawHex);
+}
+
+// Called inside the scoped-key callback, which is synchronous; prepare()
+// has already loaded the module.
+function signBtcTransaction(opts) {
+  if (!_trustModule) throw new Error('Bitcoin signer not loaded.');
+  return _trustModule.btcSignedTransaction(opts);
 }
 
 /**
- * Create a new wallet (Phantom-style: all chains at same account index N).
- * BTC: m/44'/0'/N'/0/0, ETH: m/44'/60'/0'/0/N, SOL: m/44'/501'/N'/0
+ * Review step: parse, fetch, build unsigned and decode. Returns the plan the
+ * review screen shows (plan.review) and Send executes.
  */
-function createNewWallet(walletName) {
-  if (!state.hdRoot) return;
-
-  const maxIdx = state.wallets.reduce((m, w) => Math.max(m, w.accountIndex), -1);
-  const nextIdx = maxIdx + 1;
-  const nextId = state.wallets.reduce((m, w) => Math.max(m, w.id), -1) + 1;
-  const name = normalizeWalletName(walletName, nextIdx);
-
-  const wallet = { id: nextId, name, accountIndex: nextIdx, inactive: false };
-  state.wallets.push(wallet);
-  saveWallets();
-
-  // Derive addresses for each chain at the new account index
-  const chainDerivations = [
-    { coinType: 0,   name: 'BTC', account: nextIdx, index: 0 },     // BTC: m/44'/0'/N'/0/0
-    { coinType: 60,  name: 'ETH', account: 0,       index: nextIdx }, // ETH: m/44'/60'/0'/0/N
-    { coinType: 501, name: 'SOL', account: nextIdx,  index: 0 },     // SOL: m/44'/501'/N'/0
-  ];
-
-  for (const cd of chainDerivations) {
-    try {
-      const { address, path } = deriveAddressForPath(cd.coinType, cd.account, cd.index);
-      state.activeAccounts.push({
-        coinType: cd.coinType,
-        name: cd.name,
-        account: cd.account,
-        index: cd.index,
-        address,
-        path,
-        balance: '--',
-        active: false,
-        walletId: nextId,
-      });
-    } catch (e) {
-      console.warn('Failed to derive for new wallet:', cd.name, e);
-    }
+async function prepareSendFromAccount({ chain, to, amount, sweep = false }) {
+  const sessionGeneration = currentLegacySession();
+  if (!isHdSession()) throw new Error('Sending needs a seed-phrase session.');
+  if (isLegacyPasswordSession() && !sweep) throw new Error(LEGACY_READ_ONLY_MESSAGE);
+  // A sweep moves a read-only (old password method) wallet's whole balance,
+  // and only ever to the new wallet the migration just derived.
+  if (sweep && (!isLegacyPasswordSession() || !state.migrationDestination?.[chain]
+      || String(to) !== state.migrationDestination[chain])) {
+    throw new Error('Funds can only be swept to the new wallet set up on this page.');
   }
-
-  saveActiveAccounts();
-  state.activeWalletId = nextId;
-  renderAccountsList();
-  renderWalletList();
-  renderWalletSelector();
-  updateCustomPathDefault();
+  const entry = state.chainAccounts?.[chain];
+  if (!entry) throw new Error('No address for this chain.');
+  if (chain === 'btc') await trustModule();
+  const plan = await sendFlow().prepare({ chain, from: entry, to: String(to ?? ''), amount: String(amount ?? ''), sweep });
+  if (!isCurrentLegacySession(sessionGeneration)) throw new Error('Wallet session ended');
+  _preparedPlans.set(plan, { sessionGeneration, sweep });
+  return plan;
 }
 
-function renameWallet(walletId, newName) {
-  const wallet = state.wallets.find(w => w.id === walletId);
-  if (!wallet) return;
-  wallet.name = normalizeWalletName(newName, wallet.accountIndex);
-  saveWallets();
-  renderAccountsList();
-  renderWalletSelector();
-  updateCustomPathWalletLabel();
-}
+const _preparedPlans = new WeakMap();
 
-function setWalletInactive(walletId, inactive) {
-  const wallet = getWalletById(walletId);
-  if (!wallet) return;
-
-  if (!inactive && !isWalletInactive(wallet)) return;
-  if (inactive && isWalletInactive(wallet)) return;
-
-  if (inactive && getActiveWallets().length <= 1) {
-    alert('At least one active wallet is required.');
-    return;
+/** Send step: only a plan this session prepared (and the user reviewed). */
+async function sendFromAccount(plan) {
+  const prepared = _preparedPlans.get(plan);
+  if (!prepared || !isCurrentLegacySession(prepared.sessionGeneration)) {
+    throw new Error('Review the transaction again before sending.');
   }
-
-  wallet.inactive = inactive;
-  if (inactive && state.activeWalletId === walletId) {
-    const fallback = getActiveWallets()[0];
-    state.activeWalletId = fallback ? fallback.id : 0;
-  }
-
-  saveWallets();
-  renderWalletList();
-  renderWalletSelector();
-  renderAccountsList();
-  updateCustomPathDefault();
-  updateWalletBondTotal();
-}
-
-function setWalletManageTab(tabName) {
-  state.walletManageTab = tabName === 'inactive' ? 'inactive' : 'active';
-
-  const activeBtn = $('wallet-manage-tab-active');
-  const inactiveBtn = $('wallet-manage-tab-inactive');
-  if (activeBtn) activeBtn.classList.toggle('active', state.walletManageTab === 'active');
-  if (inactiveBtn) inactiveBtn.classList.toggle('active', state.walletManageTab === 'inactive');
-
-  renderWalletList();
-}
-
-function renderWalletList() {
-  const listEl = $('wallet-list');
-  if (!listEl) return;
-  listEl.replaceChildren();
-  ensureWalletNamesNormalized();
-
-  const activeWalletCount = getActiveWallets().length;
-  const walletsToRender = state.walletManageTab === 'inactive'
-    ? getInactiveWallets()
-    : getActiveWallets();
-
-  if (walletsToRender.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'wallet-manage-empty';
-    empty.textContent = state.walletManageTab === 'inactive'
-      ? 'No inactive wallets.'
-      : 'No active wallets.';
-    listEl.appendChild(empty);
-    return;
-  }
-
-  for (const w of walletsToRender) {
-    const count = state.activeAccounts.filter(a => getAccountWalletId(a) === w.id && isSigningAccountForWallet(a, w)).length;
-    const actionLabel = isWalletInactive(w) ? 'Active' : 'Inactive';
-    const disableAction = !isWalletInactive(w) && activeWalletCount <= 1;
-    const derivationSummary = getWalletDerivationEntries(w)
-      .map(entry => buildSigningPath(entry.coinType, entry.account, entry.index))
-      .join(' • ');
-    const row = document.createElement('div');
-    row.className = 'wallet-name-row';
-    const nameCell = createNode('div', 'wallet-name-cell');
-    const nameInput = createNode('input', 'wallet-name-input glass-input compact');
-    nameInput.value = w.name || '';
-    nameInput.dataset.walletId = String(w.id);
-    const derivation = createNode('div', 'wallet-derivation-path', derivationSummary);
-    derivation.title = derivationSummary;
-    nameCell.append(nameInput, derivation);
-    const accountCount = createNode(
-      'span',
-      'wallet-account-count',
-      String(count) + ' account' + (count !== 1 ? 's' : ''),
-    );
-    const statusButton = createNode(
-      'button',
-      'wallet-status-btn glass-btn small' + (disableAction ? ' disabled' : ''),
-      actionLabel,
-    );
-    statusButton.type = 'button';
-    statusButton.dataset.walletId = String(w.id);
-    statusButton.dataset.targetInactive = String(!isWalletInactive(w));
-    statusButton.disabled = disableAction;
-    row.append(nameCell, accountCount, statusButton);
-    listEl.appendChild(row);
-  }
-
-  listEl.querySelectorAll('.wallet-name-input').forEach(input => {
-    input.addEventListener('change', (e) => {
-      const id = Number.parseInt(e.target.dataset.walletId, 10);
-      const wallet = getWalletById(id);
-      renameWallet(id, e.target.value.trim() || getDefaultWalletName(wallet ? wallet.accountIndex : id));
-    });
-  });
-
-  listEl.querySelectorAll('.wallet-status-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      const id = Number.parseInt(e.currentTarget.dataset.walletId, 10);
-      if (Number.isNaN(id)) return;
-      const targetInactive = e.currentTarget.dataset.targetInactive === 'true';
-      setWalletInactive(id, targetInactive);
-    });
-  });
-}
-
-// --- Wallet Overlay Navigation ---
-
-function hideWalletOverlays() {
-  WALLET_OVERLAY_VIEWS.forEach((viewId) => {
-    const view = $(viewId);
-    if (view) view.style.display = 'none';
-  });
-}
-
-function showWalletMainView() {
-  const main = $('wallet-main-view');
-  hideWalletOverlays();
-  closeAssetActionOverlay();
-  if (main) main.style.display = 'block';
-}
-
-function showWalletView(viewId) {
-  const main = $('wallet-main-view');
-  hideWalletOverlays();
-  if (main) main.style.display = 'none';
-  const view = $(viewId);
-  if (view) view.style.display = viewId === 'wallet-wallets-view' ? 'flex' : 'block';
-}
-
-function showWalletsView() {
-  showWalletView('wallet-wallets-view');
-  setWalletManageTab(state.walletManageTab);
-}
-
-function showExportView() {
-  showWalletView('wallet-export-view');
-}
-
-function showAdvancedView() {
-  showWalletView('wallet-advanced-view');
-  updateCustomPathWalletLabel();
-  updateCustomPathDefault();
-}
-
-function showSendView(preselectedIdx) {
-  showWalletView('wallet-send-view');
-  populateSendForm(preselectedIdx);
-}
-
-function hideSendView() {
-  showWalletMainView();
-  // Reset form
-  const compose = $('send-compose-step');
-  const review = $('send-review-step');
-  if (compose) compose.style.display = 'block';
-  if (review) review.style.display = 'none';
-}
-
-function addCustomPathAccount() {
-  if (!state.hdRoot) return;
-  const chainSelect = $('custom-path-chain');
-  const pathInput = $('custom-path-input');
-  if (!chainSelect || !pathInput) return;
-
-  const coinType = Number.parseInt(chainSelect.value, 10);
-  const pathStr = pathInput.value.trim();
-  if (!pathStr || Number.isNaN(coinType)) return;
-
-  // Parse account/index from path (m/44'/coin'/account'/0/index)
-  const parts = pathStr.replace(/'/g, '').split('/');
-  const account = Number.parseInt(parts[3], 10) || 0;
-  const index = Number.parseInt(parts[5], 10) || 0;
-  const wallet = getCurrentWallet();
-  const walletId = wallet ? wallet.id : 0;
-  if (!wallet) return;
-
-  const proposed = { coinType, account, index, walletId };
-  if (!isSigningAccountForWallet(proposed, wallet)) {
-    alert('Only signing-path accounts are supported for wallet availability.');
-    updateCustomPathDefault();
-    return;
-  }
-
-  const chainName = CHAIN_CONFIG.find(c => c.coinType === coinType)?.name || 'BTC';
-  const exists = state.activeAccounts.some(
-    a => getAccountWalletId(a) === walletId
-      && a.coinType === coinType
-      && a.account === account
-      && a.index === index
-  );
-  if (exists) return;
-
-  try {
-    const { address, path } = deriveAddressForPath(coinType, account, index);
-    state.activeAccounts.push({
-      coinType,
-      name: chainName,
-      account,
-      index,
-      address,
-      path,
-      balance: '--',
-      active: false,
-      walletId,
-    });
-    saveActiveAccounts();
-    renderAccountsList();
-    updateWalletBondTotal();
-    updateCustomPathDefault();
-  } catch (e) {
-    console.warn('Failed to add custom path:', e);
-  }
-}
-
-/**
- * Merge newly scanned accounts with existing ones.
- * Preserves user's active/inactive choices; updates balances.
- */
-function mergeAccounts(existing, scanned) {
-  const key = (a) => `${getAccountWalletId(a)}:${a.coinType}:${a.account}:${a.index}`;
-  const map = new Map();
-
-  // Existing accounts keep their active state
-  for (const a of existing) {
-    map.set(key(a), { ...a, walletId: getAccountWalletId(a) });
-  }
-
-  // Scanned accounts update balances, add new entries
-  for (const a of scanned) {
-    const k = key(a);
-    if (map.has(k)) {
-      const prev = map.get(k);
-      prev.balance = a.balance;
-      prev.address = a.address;
-      prev.path = a.path;
-      prev.name = a.name;
-      prev.walletId = getAccountWalletId(a);
-    } else {
-      map.set(k, { ...a, walletId: getAccountWalletId(a) });
-    }
-  }
-
-  return Array.from(map.values());
-}
-
-const CHAIN_CONFIG = [
-  { coinType: 0,   name: 'BTC', fetchBalance: fetchBtcBalance },
-  { coinType: 60,  name: 'ETH', fetchBalance: fetchEthBalance },
-  { coinType: 501, name: 'SOL', fetchBalance: fetchSolBalance },
-];
-
-async function scanActiveAccounts(sessionGeneration = currentLegacySession()) {
-  if (!state.hdRoot || !isCurrentLegacySession(sessionGeneration)) return;
-  if (state.scanInProgress && state.scanGeneration === sessionGeneration) return;
-  state.scanInProgress = true;
-  state.scanGeneration = sessionGeneration;
-
-  if (!state.balanceCacheLoaded) {
-    state.balanceCache = loadBalanceCache();
-    state.balanceCacheLoaded = true;
-  }
-  pruneBalanceCache();
-  const ensuredAccounts = ensureWalletAccounts();
-  const hydratedFromCache = hydrateAccountsFromBalanceCache();
-  if (ensuredAccounts || hydratedFromCache) {
-    renderAccountsList(sessionGeneration);
-  }
-  updateWalletBondTotal(sessionGeneration);
-
-  const statusEl = $('wallet-scan-status');
-  const barEl = $('wallet-scan-bar');
-  const scanBtn = $('wallet-scan-btn');
-  if (statusEl) statusEl.style.display = 'block';
-  if (barEl) barEl.style.width = '0%';
-  if (scanBtn) scanBtn.disabled = true;
-
-  try {
-    const found = [];
-    const chainByCoinType = new Map(CHAIN_CONFIG.map(chain => [chain.coinType, chain]));
-    const targets = [];
-    const seen = new Set();
-    const addTarget = (coinType, account, index, walletId, name) => {
-      const chain = chainByCoinType.get(coinType);
-      if (!chain) return;
-      const key = `${walletId}:${coinType}:${account}:${index}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      targets.push({
-        coinType,
-        account,
-        index,
-        walletId,
-        name: name || chain.name,
-        fetchBalance: chain.fetchBalance,
-      });
-    };
-
-    getActiveWallets().forEach((wallet) => {
-      getWalletDerivationEntries(wallet).forEach((entry) => {
-        addTarget(entry.coinType, entry.account, entry.index, wallet.id, entry.name);
-      });
-    });
-
-    for (let ti = 0; ti < targets.length; ti++) {
-      if (!isCurrentLegacySession(sessionGeneration)) return;
-      const target = targets[ti];
-      if (barEl) barEl.style.width = Math.round(((ti + 1) / targets.length) * 100) + '%';
-
-      let derived;
-      try {
-        derived = deriveAddressForPath(target.coinType, target.account, target.index);
-      } catch (deriveErr) {
-        console.warn(`Derivation failed ${target.name} ${target.account}/${target.index}:`, deriveErr);
-        continue;
-      }
-
-      const existing = findExistingAccountForTarget(target);
-      const result = await fetchBalanceForScanTarget(target, derived.address, sessionGeneration);
-      if (result.cancelled || !isCurrentLegacySession(sessionGeneration)) return;
-      if (!result.ok) {
-        console.warn(`Balance fetch failed ${target.name} ${target.account}/${target.index}:`, result.error);
-      }
-
-      // Never clobber a known balance with "--" when the network call fails/rate-limits.
-      const resolvedBalance = result.ok
-        ? result.balance
-        : (existing?.balance && existing.balance !== '--' ? existing.balance : '--');
-      const balNum = Number.parseFloat(resolvedBalance);
-
-      found.push({
-        coinType: target.coinType,
-        name: target.name,
-        account: target.account,
-        index: target.index,
-        address: derived.address,
-        path: derived.path,
-        balance: resolvedBalance,
-        active: Number.isFinite(balNum) ? balNum > 0 : (existing?.active || false),
-        walletId: target.walletId,
-      });
-
-      // Surface funded accounts quickly instead of waiting for full scan completion.
-      if (Number.isFinite(balNum) && balNum > 0) {
-        if (!isCurrentLegacySession(sessionGeneration)) return;
-        state.activeAccounts = mergeAccounts(state.activeAccounts, [found[found.length - 1]]).filter(isSigningAccount);
-        saveActiveAccounts();
-        renderAccountsList(sessionGeneration);
-        updateWalletBondTotal(sessionGeneration);
-      }
-    }
-
-    if (!isCurrentLegacySession(sessionGeneration)) return;
-    state.activeAccounts = mergeAccounts(state.activeAccounts, found).filter(isSigningAccount);
-    saveActiveAccounts();
-    saveBalanceCache();
-    renderAccountsList(sessionGeneration);
-    updateWalletBondTotal(sessionGeneration);
-  } finally {
-    if (state.scanGeneration === sessionGeneration) {
-      if (statusEl) statusEl.style.display = 'none';
-      if (scanBtn) scanBtn.disabled = false;
-      state.scanInProgress = false;
-      state.scanGeneration = null;
-    }
-  }
-}
-
-const CHAIN_ICONS = {
-  BTC: { color: '#F7931A', symbol: '\u20BF' },
-  ETH: { color: '#627EEA', symbol: '\u039E' },
-  SOL: { color: '#9945FF', symbol: 'S' },
-};
-
-const CHAIN_FULL_NAMES = {
-  BTC: 'Bitcoin',
-  ETH: 'Ethereum',
-  SOL: 'Solana',
-};
-
-function getVisibleWalletEntries() {
-  const wallet = getCurrentWallet();
-  if (!wallet) return [];
-  const chainOrder = { BTC: 0, ETH: 1, SOL: 2 };
-  const entries = state.activeAccounts
-    .map((acct, idx) => ({ acct, idx, walletId: getAccountWalletId(acct) }))
-    .filter(entry => entry.walletId === wallet.id && isSigningAccountForWallet(entry.acct, wallet));
-
-  entries.sort((a, b) => {
-    const chainDelta = (chainOrder[a.acct.name] ?? 99) - (chainOrder[b.acct.name] ?? 99);
-    if (chainDelta !== 0) return chainDelta;
-    const accountDelta = (a.acct.account ?? 0) - (b.acct.account ?? 0);
-    if (accountDelta !== 0) return accountDelta;
-    return (a.acct.index ?? 0) - (b.acct.index ?? 0);
-  });
-  return entries;
-}
-
-function getWalletAccountForChain(chainName) {
-  const matches = getVisibleWalletEntries()
-    .map(entry => entry.acct)
-    .filter(acct => acct.name === chainName);
-  if (matches.length === 0) return null;
-
-  const funded = matches.filter(acct => (Number.parseFloat(acct.balance) || 0) > 0);
-  const activeFunded = funded.find(acct => acct.active);
-  if (activeFunded) return activeFunded;
-  if (funded.length > 0) return funded[0];
-
-  const active = matches.find(acct => acct.active);
-  if (active) return active;
-  return matches[0];
-}
-
-function updateWalletActionMenus() {
-  ['BTC', 'ETH', 'SOL'].forEach((chain) => {
-    const available = Boolean(getWalletAccountForChain(chain));
-    $qa(`.ph-action-menu-item[data-chain="${chain}"]`).forEach((btn) => {
-      btn.disabled = !available;
-      btn.title = available ? '' : `No ${chain} account in this wallet`;
-    });
-  });
-}
-
-function closeWalletActionMenus() {
-  $('wallet-send-menu')?.classList.remove('visible');
-  $('wallet-receive-menu')?.classList.remove('visible');
-}
-
-function closeAssetActionOverlay() {
-  const overlay = $('wallet-asset-action-overlay');
-  if (overlay) overlay.style.display = 'none';
-  state.selectedWalletAssetIdx = null;
-}
-
-function showAssetActionOverlay(acct, idx) {
-  const overlay = $('wallet-asset-action-overlay');
-  if (!overlay || !acct) return;
-
-  state.selectedWalletAssetIdx = idx;
-  const icon = CHAIN_ICONS[acct.name] || { symbol: '?' };
-  const fullName = CHAIN_FULL_NAMES[acct.name] || acct.name;
-  const pathLabel = acct.path || `m/44'/${acct.coinType}'/${acct.account}'/0/${acct.index}`;
-
-  const titleEl = $('wallet-asset-action-title');
-  const pathEl = $('wallet-asset-action-path');
-  const addressEl = $('wallet-asset-action-address');
-  if (titleEl) titleEl.textContent = `${icon.symbol} ${fullName}`;
-  if (pathEl) pathEl.textContent = pathLabel;
-  if (addressEl) {
-    addressEl.textContent = acct.address || '';
-    addressEl.title = acct.address || '';
-  }
-
-  const sendBtn = $('wallet-asset-send');
-  const receiveBtn = $('wallet-asset-receive');
-  if (sendBtn) {
-    sendBtn.onclick = () => {
-      closeAssetActionOverlay();
-      showSendView(idx);
-    };
-  }
-  if (receiveBtn) {
-    receiveBtn.onclick = () => {
-      closeAssetActionOverlay();
-      showReceiveModal(acct);
-    };
-  }
-
-  overlay.style.display = 'flex';
-}
-
-function renderAccountsList(sessionGeneration = currentLegacySession()) {
-  if (!isCurrentLegacySession(sessionGeneration)) return;
-  const listEl = $('wallet-accounts-list');
-  const emptyEl = $('wallet-accounts-empty');
-  if (!listEl) return;
-
-  // Clear all dynamic content (wallet headers + token rows)
-  listEl.querySelectorAll('.ph-token-row, .ph-wallet-header').forEach(r => r.remove());
-
-  // External session: ONE row — the connected account (no derivation, no
-  // wallet selector). Wallet-supplied strings go in via textContent only.
-  if (state.externalAccount && !state.hdRoot) {
-    if (emptyEl) emptyEl.style.display = 'none';
-    const acct = state.externalAccount;
-    const symbol = acct.chain.toUpperCase();
-    const icon = CHAIN_ICONS[symbol] || { color: '#888', symbol: '?' };
-    const bal = parseFloat(acct.balance);
-    const balDisplay = isNaN(bal) ? '--' : (bal > 0 ? bal.toFixed(bal < 0.001 ? 8 : 4) : '0');
-
-    // Built as DOM nodes, not markup: app.js carries no HTML sinks
-    // (Task 9 hardening). Wallet-supplied strings go in via textContent only.
-    const el = (tag, cls, text) => {
-      const n = document.createElement(tag);
-      if (cls) n.className = cls;
-      if (text !== undefined) n.textContent = text;
-      return n;
-    };
-
-    const row = el('div', 'ph-token-row');
-
-    const iconEl = el('div', 'ph-token-icon', icon.symbol);
-    iconEl.style.background = icon.color;
-
-    const infoEl = el('div', 'ph-token-info');
-    const nameEl = el('div', 'ph-token-name',
-      acct.walletName || (CHAIN_FULL_NAMES[symbol] || symbol));
-    const pathEl = el('div', 'ph-token-path', truncateAddress(acct.address));
-    pathEl.title = acct.address;
-    infoEl.append(nameEl, pathEl);
-
-    const amountsEl = el('div', 'ph-token-amounts');
-    const fiatEl = el('div', 'ph-token-fiat');
-    fiatEl.id = 'ph-fiat-external';
-    amountsEl.append(el('div', 'ph-token-balance', balDisplay + ' ' + symbol), fiatEl);
-
-    row.append(iconEl, infoEl, amountsEl);
-    listEl.appendChild(row);
-
-    if (!isNaN(bal) && bal > 0) {
-      fetchCryptoPrices(getSelectedCurrency()).then((prices) => {
-        const price = Number.parseFloat(prices?.[symbol]);
-        const fiatEl = $('ph-fiat-external');
-        if (fiatEl && Number.isFinite(price) && price > 0) {
-          fiatEl.textContent = formatCurrencyValue(bal * price, getSelectedCurrency());
-        }
-      }).catch(() => {});
-    }
-    updateWalletActionMenus();
-    return;
-  }
-
-  const entries = getVisibleWalletEntries();
-  if (entries.length === 0) {
-    if (emptyEl) emptyEl.style.display = 'flex';
-    const emptySub = emptyEl?.querySelector('.ph-token-empty-sub');
-    if (emptySub) {
-      const wallet = getCurrentWallet();
-      emptySub.textContent = wallet
-        ? `No accounts yet for ${wallet.name}. Tap Scan or add one from Advanced.`
-        : 'No accounts yet.';
-    }
-    updateWalletActionMenus();
-    return;
-  }
-
-  if (emptyEl) emptyEl.style.display = 'none';
-
-  const pricesPromise = fetchCryptoPrices(getSelectedCurrency()).catch(() => null);
-
-  for (const { acct, idx } of entries) {
-    const row = document.createElement('div');
-    row.className = 'ph-token-row' + (acct.active ? '' : ' ph-token-inactive');
-    row.dataset.idx = idx;
-
-    const bal = parseFloat(acct.balance);
-    const balDisplay = isNaN(bal) ? acct.balance : (bal > 0 ? bal.toFixed(bal < 0.001 ? 8 : 4) : '0');
-    const icon = CHAIN_ICONS[acct.name] || { color: '#888', symbol: '?' };
-    const fullName = CHAIN_FULL_NAMES[acct.name] || acct.name;
-    const pathLabel = acct.path || "m/44'/" + acct.coinType + "'/" + acct.account + "'/0/" + acct.index;
-
-    const tokenIcon = createNode('div', 'ph-token-icon', icon.symbol);
-    tokenIcon.style.background = icon.color;
-    const tokenInfo = createNode('div', 'ph-token-info');
-    tokenInfo.append(
-      createNode('div', 'ph-token-name', fullName),
-      createNode('div', 'ph-token-path', pathLabel),
-    );
-    const amounts = createNode('div', 'ph-token-amounts');
-    const fiat = createNode('div', 'ph-token-fiat');
-    fiat.id = 'ph-fiat-' + idx;
-    amounts.append(
-      createNode('div', 'ph-token-balance', balDisplay + ' ' + acct.name),
-      fiat,
-    );
-    row.append(tokenIcon, tokenInfo, amounts);
-
-    row.addEventListener('click', () => {
-      if (!isCurrentLegacySession(sessionGeneration)) return;
-      showAssetActionOverlay(acct, idx);
-    });
-
-    listEl.appendChild(row);
-  }
-  updateWalletActionMenus();
-
-  pricesPromise.then(prices => {
-    if (!prices || !isCurrentLegacySession(sessionGeneration)) return;
-    const currency = getSelectedCurrency();
-    entries.forEach(({ acct, idx }) => {
-      const bal = parseFloat(acct.balance) || 0;
-      const priceKey = acct.name.toUpperCase();
-      const fiatVal = bal * (prices[priceKey] || 0);
-      const el = $('ph-fiat-' + idx);
-      if (el) el.textContent = fiatVal > 0 ? formatCurrencyValue(fiatVal, currency) : '';
-    });
-  });
-}
-
-function toggleAccountActive(idx) {
-  if (idx < 0 || idx >= state.activeAccounts.length) return;
-  state.activeAccounts[idx].active = !state.activeAccounts[idx].active;
-  saveActiveAccounts();
-  renderAccountsList();
-}
-
-async function handleAccountAction(action, idx) {
-  const acct = state.activeAccounts[idx];
-  if (!acct) return;
-
-  switch (action) {
-    case 'receive':
-      showReceiveModal(acct);
-      break;
-    case 'copy':
-      await safeCopyText(acct.address);
-      break;
-    case 'toggle':
-      toggleAccountActive(idx);
-      break;
-    case 'remove':
-      state.activeAccounts.splice(idx, 1);
-      saveActiveAccounts();
-      renderAccountsList();
-      break;
-  }
-}
-
-async function showReceiveModal(acct, sessionGeneration = currentLegacySession()) {
-  if (!isCurrentLegacySession(sessionGeneration)) return;
-  // Create a simple receive overlay
-  let overlay = $('wallet-receive-overlay');
-  if (!overlay) {
-    overlay = document.createElement('div');
-    overlay.id = 'wallet-receive-overlay';
-    overlay.className = 'wallet-receive-overlay';
-    const card = createNode('div', 'wallet-receive-card');
-    const title = createNode('h4', 'section-label');
-    title.id = 'wallet-receive-title';
-    const qr = createNode('canvas');
-    qr.id = 'wallet-receive-qr';
-    const address = createNode('code', 'wallet-receive-address');
-    address.id = 'wallet-receive-address';
-    const actions = createNode('div', 'wallet-receive-actions');
-    const copy = createNode('button', 'glass-btn small', 'Copy Address');
-    copy.id = 'wallet-receive-copy';
-    copy.type = 'button';
-    const close = createNode('button', 'glass-btn small', 'Close');
-    close.id = 'wallet-receive-close';
-    close.type = 'button';
-    actions.append(copy, close);
-    card.append(title, qr, address, actions);
-    overlay.append(card);
-    $('wallet-tab-content')?.appendChild(overlay);
-  }
-
-  const titleEl = overlay.querySelector('#wallet-receive-title');
-  const addrEl = overlay.querySelector('#wallet-receive-address');
-  if (titleEl) titleEl.textContent = `Receive ${acct.name}`;
-  if (addrEl) addrEl.textContent = acct.address;
-
-  try {
-    const qrCanvas = overlay.querySelector('#wallet-receive-qr');
-    if (qrCanvas) {
-      await QRCode.toCanvas(qrCanvas, acct.address, {
-        width: 180,
-        margin: 2,
-        color: { dark: '#1e293b', light: '#ffffff' },
-      });
-    }
-  } catch (e) {
-    console.warn('QR generation failed:', e);
-  }
-
-  if (!isCurrentLegacySession(sessionGeneration)) {
-    const qrCanvas = overlay.querySelector('#wallet-receive-qr');
-    clearCanvas(qrCanvas);
-    overlay.remove();
-    return;
-  }
-
-  overlay.style.display = 'flex';
-
-  overlay.querySelector('#wallet-receive-copy')?.addEventListener('click', () => {
-    if (!isCurrentLegacySession(sessionGeneration)) return;
-    void safeCopyText(acct.address);
-  }, { once: true });
-
-  overlay.querySelector('#wallet-receive-close')?.addEventListener('click', () => {
-    if (!isCurrentLegacySession(sessionGeneration)) return;
-    overlay.style.display = 'none';
-  }, { once: true });
-}
-
-// =============================================================================
-// Send Flow
-// =============================================================================
-
-function populateSendForm(preselectedIdx) {
-  const select = $('send-from-account');
-  if (!select) return;
-  select.replaceChildren();
-
-  const walletEntries = getVisibleWalletEntries();
-  const walletAccounts = walletEntries.map(entry => entry.acct);
-  const activeAccts = walletAccounts.filter(a => a.active || parseFloat(a.balance) > 0);
-  const accts = activeAccts.length > 0 ? [...activeAccts] : [...walletAccounts];
-  const preselectedAcct = typeof preselectedIdx === 'number' ? state.activeAccounts[preselectedIdx] : null;
-  if (preselectedAcct && walletAccounts.includes(preselectedAcct) && !accts.includes(preselectedAcct)) {
-    accts.unshift(preselectedAcct);
-  }
-
-  accts.forEach((acct) => {
-    const opt = document.createElement('option');
-    const origIdx = state.activeAccounts.indexOf(acct);
-    opt.value = origIdx;
-    const bal = parseFloat(acct.balance);
-    const balStr = isNaN(bal) ? '' : (' — ' + bal.toFixed(bal < 0.001 ? 8 : 4) + ' ' + acct.name);
-    opt.textContent = acct.name + ' ' + truncateAddress(acct.address) + balStr;
-    select.appendChild(opt);
-  });
-
-  if (typeof preselectedIdx === 'number') {
-    select.value = String(preselectedIdx);
-  }
-
-  if (select.options.length > 0) {
-    updateSendFromSelection();
-  } else {
-    const balEl = $('send-available-balance');
-    const labelEl = $('send-currency-label');
-    if (balEl) balEl.textContent = '--';
-    if (labelEl) labelEl.textContent = '--';
-  }
-
-  // Reset review step
-  const compose = $('send-compose-step');
-  const review = $('send-review-step');
-  if (compose) compose.style.display = 'block';
-  if (review) review.style.display = 'none';
-  const statusEl = $('send-status');
-  if (statusEl) statusEl.style.display = 'none';
-
-  // Clear inputs
-  const toAddr = $('send-to-address');
-  const amount = $('send-amount');
-  if (toAddr) toAddr.value = '';
-  if (amount) amount.value = '';
-  const fiatEst = $('send-fiat-estimate');
-  if (fiatEst) fiatEst.textContent = '';
-  const reviewBtn = $('send-review-btn');
-  if (reviewBtn) reviewBtn.disabled = true;
-}
-
-function updateSendFromSelection() {
-  const select = $('send-from-account');
-  if (!select) return;
-  const idx = parseInt(select.value);
-  const acct = state.activeAccounts[idx];
-  if (!acct) return;
-
-  const balEl = $('send-available-balance');
-  const labelEl = $('send-currency-label');
-  if (balEl) {
-    const bal = parseFloat(acct.balance);
-    balEl.textContent = (isNaN(bal) ? acct.balance : bal.toFixed(bal < 0.001 ? 8 : 4)) + ' ' + acct.name;
-  }
-  if (labelEl) labelEl.textContent = acct.name;
-}
-
-function validateSendForm() {
-  const select = $('send-from-account');
-  const toAddr = $('send-to-address');
-  const amount = $('send-amount');
-  const reviewBtn = $('send-review-btn');
-  if (!select || !toAddr || !amount || !reviewBtn) return;
-
-  const idx = parseInt(select.value);
-  const acct = state.activeAccounts[idx];
-  const addr = toAddr.value.trim();
-  const amt = parseFloat(amount.value);
-
-  reviewBtn.disabled = !(acct && addr.length > 10 && amt > 0);
-}
-
-function showSendReview() {
-  const select = $('send-from-account');
-  const toAddr = $('send-to-address');
-  const amount = $('send-amount');
-  if (!select || !toAddr || !amount) return;
-
-  const idx = parseInt(select.value);
-  const acct = state.activeAccounts[idx];
-  if (!acct) return;
-
-  const amt = parseFloat(amount.value);
-  const fee = acct.name === 'BTC' ? 0.0001 : (acct.name === 'ETH' ? 0.002 : 0.000005);
-
-  const reviewTo = $('send-review-to');
-  const reviewAmt = $('send-review-amount');
-  const reviewFee = $('send-review-fee');
-  const reviewTotal = $('send-review-total');
-
-  if (reviewTo) reviewTo.textContent = toAddr.value.trim();
-  if (reviewAmt) reviewAmt.textContent = amt.toFixed(amt < 0.001 ? 8 : 4) + ' ' + acct.name;
-  if (reviewFee) reviewFee.textContent = '~' + fee + ' ' + acct.name;
-  if (reviewTotal) reviewTotal.textContent = (amt + fee).toFixed(8) + ' ' + acct.name;
-
-  const compose = $('send-compose-step');
-  const review = $('send-review-step');
-  if (compose) compose.style.display = 'none';
-  if (review) review.style.display = 'block';
-}
-
-async function executeSend(sessionGeneration = currentLegacySession()) {
-  if (!isCurrentLegacySession(sessionGeneration)) return;
-  const select = $('send-from-account');
-  const toAddr = $('send-to-address');
-  const amount = $('send-amount');
-  const statusEl = $('send-status');
-  const confirmBtn = $('send-confirm-btn');
-
-  if (!select || !toAddr || !amount) return;
-
-  const idx = parseInt(select.value);
-  const acct = state.activeAccounts[idx];
-  if (!acct) return;
-
-  const to = toAddr.value.trim();
-  const amt = parseFloat(amount.value);
-
-  if (statusEl) {
-    statusEl.style.display = 'block';
-    statusEl.className = 'send-status send-status-pending';
-    statusEl.textContent = 'Broadcasting transaction...';
-  }
-  if (confirmBtn) confirmBtn.disabled = true;
-
-  try {
-    let txHash;
-
-    if (acct.coinType === 0) {
-      txHash = await sendBtcTransaction(acct, to, amt);
-    } else if (acct.coinType === 60) {
-      txHash = await sendEthTransaction(acct, to, amt);
-    } else if (acct.coinType === 501) {
-      txHash = await sendSolTransaction(acct, to, amt);
-    } else {
-      throw new Error('Unsupported chain: ' + acct.name);
-    }
-
-    if (!isCurrentLegacySession(sessionGeneration)) return;
-    if (statusEl) {
-      statusEl.className = 'send-status send-status-success';
-      statusEl.replaceChildren(
-        document.createTextNode('Transaction sent! Hash: '),
-        createNode('code', 'truncate', txHash || 'pending'),
-      );
-    }
-
-    // Refresh balances after a short delay
+  _preparedPlans.delete(plan);
+  if (isLegacyPasswordSession() && !prepared.sweep) throw new Error(LEGACY_READ_ONLY_MESSAGE);
+  const sessionGeneration = prepared.sessionGeneration;
+  const txHash = prepared.sweep
+    ? await withSweepSigning(() => sendFlow().execute(plan))
+    : await sendFlow().execute(plan);
+  if (isCurrentLegacySession(sessionGeneration)) {
     setTimeout(() => {
-      if (isCurrentLegacySession(sessionGeneration)) scanActiveAccounts(sessionGeneration);
+      if (isCurrentLegacySession(sessionGeneration)) void refreshBalances({ force: true });
     }, 5000);
-  } catch (e) {
-    if (!isCurrentLegacySession(sessionGeneration)) return;
-    console.error('Send failed:', e);
-    if (statusEl) {
-      statusEl.className = 'send-status send-status-error';
-      statusEl.textContent = 'Failed: ' + (e.message || 'Unknown error');
-    }
-  } finally {
-    if (confirmBtn && isCurrentLegacySession(sessionGeneration)) confirmBtn.disabled = false;
   }
-}
-
-// --- Per-chain transaction construction ---
-
-async function sendBtcTransaction(acct, toAddress, amountBtc) {
-  const module = state.hdWalletModule;
-  if (!module?.bitcoin?.tx) throw new Error('Bitcoin tx builder not available');
-
-  // Fetch UTXOs
-  const utxoResp = await fetch(apiUrl('https://blockchain.info/unspent?active=' + acct.address));
-  if (!utxoResp.ok) throw new Error('Failed to fetch UTXOs (address may have no unspent outputs)');
-  const utxoData = await utxoResp.json();
-  const utxos = utxoData.unspent_outputs || [];
-  if (utxos.length === 0) throw new Error('No UTXOs available');
-
-  const amountSats = BigInt(Math.round(amountBtc * 1e8));
-  const feeSats = BigInt(10000); // ~0.0001 BTC flat fee estimate
-  const totalNeeded = amountSats + feeSats;
-
-  // Select UTXOs (simple greedy)
-  let inputSum = BigInt(0);
-  const selectedUtxos = [];
-  for (const utxo of utxos) {
-    selectedUtxos.push(utxo);
-    inputSum += BigInt(utxo.value);
-    if (inputSum >= totalNeeded) break;
-  }
-  if (inputSum < totalNeeded) throw new Error('Insufficient funds');
-
-  // Build transaction
-  const tx = module.bitcoin.tx.create();
-  for (const utxo of selectedUtxos) {
-    tx.addInput(utxo.tx_hash_big_endian, utxo.tx_output_n);
-  }
-  tx.addOutput(toAddress, amountSats);
-
-  // Change output
-  const change = inputSum - amountSats - feeSats;
-  if (change > BigInt(546)) { // dust threshold
-    tx.addOutput(acct.address, change);
-  }
-
-  // Sign each input
-  const path = acct.path || buildSigningPath(acct.coinType, acct.account, acct.index);
-  const derived = state.hdRoot.derivePath(path);
-  const privKey = derived.privateKey();
-  for (let i = 0; i < selectedUtxos.length; i++) {
-    tx.sign(i, privKey);
-  }
-
-  const rawTx = tx.serialize();
-  const hexTx = Array.from(rawTx).map(b => b.toString(16).padStart(2, '0')).join('');
-
-  // Broadcast
-  const broadcastResp = await fetch(apiUrl('https://blockchain.info/pushtx'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: 'tx=' + hexTx,
-  });
-  if (!broadcastResp.ok) {
-    const errText = await broadcastResp.text();
-    throw new Error('Broadcast failed: ' + errText);
-  }
-
-  return tx.getTxid();
-}
-
-async function sendEthTransaction(acct, toAddress, amountEth) {
-  const module = state.hdWalletModule;
-  if (!module?.ethereum?.tx) throw new Error('Ethereum tx builder not available');
-
-  const ETH_RPC = 'https://cloudflare-eth.com';
-  const rpc = async (method, params) => {
-    const resp = await fetch(ETH_RPC, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-    });
-    const data = await resp.json();
-    if (data.error) throw new Error(data.error.message);
-    return data.result;
-  };
-
-  // Get nonce, gas price, estimate gas
-  const [nonceHex, baseFeeBlock] = await Promise.all([
-    rpc('eth_getTransactionCount', [acct.address, 'latest']),
-    rpc('eth_getBlockByNumber', ['latest', false]),
-  ]);
-
-  const nonce = parseInt(nonceHex, 16);
-  const baseFee = BigInt(baseFeeBlock.baseFeePerGas || '0x0');
-  const maxPriorityFee = BigInt(2000000000); // 2 gwei
-  const maxFee = baseFee * BigInt(2) + maxPriorityFee;
-  const gasLimit = BigInt(21000);
-
-  // Convert ETH to wei
-  const weiStr = BigInt(Math.round(amountEth * 1e18));
-
-  const tx = module.ethereum.tx.createEIP1559({
-    nonce,
-    maxFeePerGas: maxFee,
-    maxPriorityFeePerGas: maxPriorityFee,
-    gasLimit,
-    to: toAddress,
-    value: weiStr,
-    chainId: 1,
-  });
-
-  // Sign
-  const path = acct.path || buildSigningPath(acct.coinType, acct.account, acct.index);
-  const derived = state.hdRoot.derivePath(path);
-  const privKey = derived.privateKey();
-  tx.sign(privKey);
-
-  const rawTx = tx.serialize();
-  const hexTx = '0x' + Array.from(rawTx).map(b => b.toString(16).padStart(2, '0')).join('');
-
-  // Broadcast
-  const txHash = await rpc('eth_sendRawTransaction', [hexTx]);
   return txHash;
 }
 
-async function sendSolTransaction(acct, toAddress, amountSol) {
-  // Solana transfer via RPC (no WASM builder — manual SystemProgram.transfer)
-  const SOL_ENDPOINTS = [
-    'https://api.mainnet-beta.solana.com',
-    'https://solana-mainnet.g.alchemy.com/v2/demo',
-    'https://rpc.ankr.com/solana',
-  ];
-
-  const rpc = async (method, params) => {
-    for (const endpoint of SOL_ENDPOINTS) {
-      try {
-        const resp = await fetch(endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-        });
-        const data = await resp.json();
-        if (data.error) throw new Error(data.error.message);
-        return data.result;
-      } catch (e) {
-        continue;
-      }
-    }
-    throw new Error('All Solana RPC endpoints failed');
-  };
-
-  // For Solana, we need @solana/web3.js which may not be available
-  // Try dynamic import, otherwise fail gracefully
-  throw new Error('Solana send requires @solana/web3.js (not yet integrated). Use a Solana wallet to send SOL.');
-}
-
-async function updateSendFiatEstimate(sessionGeneration = currentLegacySession()) {
-  if (!isCurrentLegacySession(sessionGeneration)) return;
-  const select = $('send-from-account');
-  const amount = $('send-amount');
-  const fiatEst = $('send-fiat-estimate');
-  if (!select || !amount || !fiatEst) return;
-
-  const idx = parseInt(select.value);
-  const acct = state.activeAccounts[idx];
-  if (!acct) return;
-
-  const amt = parseFloat(amount.value) || 0;
-  if (amt <= 0) { fiatEst.textContent = ''; return; }
-
-  try {
-    const currency = getSelectedCurrency();
-    const prices = await fetchCryptoPrices(currency);
-    if (!isCurrentLegacySession(sessionGeneration)) return;
-    const price = prices[acct.name.toUpperCase()] || 0;
-    const fiat = amt * price;
-    fiatEst.textContent = fiat > 0 ? '~ ' + formatCurrencyValue(fiat, currency) : '';
-  } catch {
-    if (isCurrentLegacySession(sessionGeneration)) fiatEst.textContent = '';
-  }
-}
-
-async function updateWalletBondTotal(sessionGeneration = currentLegacySession()) {
-  if (!isCurrentLegacySession(sessionGeneration)) return;
-  const valueEl = $('wallet-bond-value');
-
-  try {
-    const currency = getSelectedCurrency();
-    const prices = await fetchCryptoPrices(currency);
-    if (!isCurrentLegacySession(sessionGeneration)) return;
-
-    const walletTotals = {};
-    let hasPositiveBalance = false;
-    let missingPriceForFundedAccount = false;
-    for (const acct of state.activeAccounts.filter(isSigningAccount)) {
-      const bal = Number.parseFloat(acct.balance);
-      if (!Number.isFinite(bal) || bal <= 0) continue;
-      hasPositiveBalance = true;
-
-      const priceKey = acct.name.toUpperCase();
-      const price = Number.parseFloat(prices[priceKey]);
-      if (!Number.isFinite(price) || price <= 0) {
-        missingPriceForFundedAccount = true;
-        continue;
-      }
-
-      const fiatValue = bal * price;
-      const walletId = getAccountWalletId(acct);
-      walletTotals[walletId] = (walletTotals[walletId] || 0) + fiatValue;
-    }
-
-    // External session: the connected address's balance IS the bond. Folded
-    // into walletTotals under the current wallet id so their wallet-scoped
-    // updateWalletBondDisplay renders it and pricedTotal accounts for it.
-    if (state.externalAccount) {
-      const bal = Number.parseFloat(state.externalAccount.balance);
-      if (Number.isFinite(bal) && bal > 0) {
-        hasPositiveBalance = true;
-        const price = Number.parseFloat(prices[state.externalAccount.chain.toUpperCase()]);
-        if (Number.isFinite(price) && price > 0) {
-          const walletId = getCurrentWallet()?.id ?? 0;
-          walletTotals[walletId] = (walletTotals[walletId] || 0) + bal * price;
-        } else {
-          missingPriceForFundedAccount = true;
-        }
-      }
-    }
-
-    const pricedTotal = Object.values(walletTotals).reduce((sum, v) => sum + (Number.isFinite(v) ? v : 0), 0);
-    if (hasPositiveBalance && pricedTotal <= 0 && missingPriceForFundedAccount) {
-      throw new Error('Funded accounts found but fiat pricing is unavailable');
-    }
-
-    state.walletFiatTotals = walletTotals;
-    state.walletFiatCurrency = currency;
-
-    updateWalletBondDisplay(currency);
-    renderWalletSelector();
-  } catch (e) {
-    if (!isCurrentLegacySession(sessionGeneration)) return;
-    console.warn('Bond total calculation failed:', e);
-    // Keep last known totals if pricing endpoint is temporarily unavailable.
-    const cachedTotals = state.walletFiatTotals || {};
-    const cachedTotal = Object.values(cachedTotals).reduce((sum, v) => sum + (Number.isFinite(v) ? v : 0), 0);
-    if (cachedTotal > 0) {
-      const displayCurrency = state.walletFiatCurrency || getSelectedCurrency();
-      updateWalletBondDisplay(displayCurrency);
-    } else if (valueEl && !valueEl.textContent) {
-      valueEl.textContent = '$0.00';
-    }
-    renderWalletSelector();
-  }
-}
-
-
-async function deriveAndDisplayAddress(sessionGeneration = currentLegacySession()) {
-  if (!isCurrentLegacySession(sessionGeneration)) return;
-  console.log('deriveAndDisplayAddress called, hdRoot:', !!state.hdRoot);
-
-  const hdNotInitialized = $('hd-not-initialized');
-  const derivedResult = $('derived-result');
-
-  if (!state.hdRoot) {
-    console.log('HD not initialized, showing warning.');
-    if (hdNotInitialized) hdNotInitialized.style.display = 'block';
-    if (derivedResult) derivedResult.style.display = 'none';
-    return;
-  }
-
-  if (hdNotInitialized) hdNotInitialized.style.display = 'none';
-
-  const coin = $('hd-coin')?.value;
-  const account = $('hd-account')?.value || '0';
-  const index = $('hd-index')?.value || '0';
-  const coinType = parseInt(coin);
-  const coinOption = $('hd-coin')?.selectedOptions[0];
-  const cryptoName = coinOption?.dataset.name || 'Unknown';
-  const cryptoSymbol = coinOption?.dataset.symbol || '???';
-
-  const signingPath = buildSigningPath(coin, account, index);
-  const encryptionPath = buildEncryptionPath(coin, account, index);
-
-  console.log('Deriving signing path:', signingPath);
-  console.log('Deriving encryption path:', encryptionPath);
-
-  try {
-    const signingKey = deriveHDKey(signingPath);
-    const signingPubKey = signingKey.publicKey();
-
-    const encryptionKey = deriveHDKey(encryptionPath);
-    const encryptionPubKey = encryptionKey.publicKey();
-
-    const address = generateAddressForCoin(signingPubKey, coinType);
-    console.log('Generated address:', address);
-
-    const config = coinTypeToConfig[coinType];
-    const explorerUrl = config ? config.explorer + address : null;
-
-    if (derivedResult) derivedResult.style.display = 'block';
-
-    const signingPathEl = $('signing-path');
-    const encryptionPathEl = $('encryption-path');
-    if (signingPathEl) signingPathEl.textContent = signingPath;
-    if (encryptionPathEl) encryptionPathEl.textContent = encryptionPath;
-
-    const signingPubkeyEl = $('signing-pubkey');
-    const encryptionPubkeyEl = $('encryption-pubkey');
-    if (signingPubkeyEl) signingPubkeyEl.textContent = toHexCompact(signingPubKey);
-    if (encryptionPubkeyEl) encryptionPubkeyEl.textContent = toHexCompact(encryptionPubKey);
-
-    const derivedCryptoName = $('derived-crypto-name');
-    const derivedIcon = $('derived-icon');
-    const derivedAddress = $('derived-address');
-    if (derivedCryptoName) derivedCryptoName.textContent = cryptoName;
-    if (derivedIcon) derivedIcon.textContent = cryptoSymbol.substring(0, 2);
-    if (derivedAddress) derivedAddress.textContent = address;
-
-    const explorerLink = $('derived-explorer-link');
-    if (explorerLink) {
-      if (explorerUrl) {
-        explorerLink.href = explorerUrl;
-        explorerLink.style.display = 'inline-flex';
-      } else {
-        explorerLink.style.display = 'none';
-      }
-    }
-
-    // Generate QR code
-    try {
-      const qrCanvas = $('address-qr');
-      if (qrCanvas) {
-        await QRCode.toCanvas(qrCanvas, address, {
-          width: 64,
-          margin: 1,
-          color: { dark: '#1e293b', light: '#ffffff' },
-        });
-        if (!isCurrentLegacySession(sessionGeneration)) {
-          clearCanvas(qrCanvas);
-          return;
-        }
-      }
-    } catch (qrErr) {
-      console.warn('QR generation failed:', qrErr);
-    }
-
-  } catch (err) {
-    console.error('Derivation failed:', err);
-  }
-}
-
-// =============================================================================
-// PKI Key Derivation from HD Wallet
-// =============================================================================
-
-function deriveKeyFromPath(path) {
-  if (!state.hdRoot) {
-    throw new Error('HD wallet not initialized');
-  }
-  const derived = state.hdRoot.derivePath(path);
-  return derived.privateKey();
-}
-
-function deriveX25519FromSeed(seed) {
-  const privateKey = new Uint8Array(seed);
-  const publicKey = hdWallet().curves.x25519.publicKey(privateKey);
-  return {
-    privateKey,
-    publicKey: new Uint8Array(publicKey),
-  };
-}
-
-function deriveSecp256k1FromSeed(seed) {
-  const privateKey = new Uint8Array(seed);
-  const publicKey = hdWallet().curves.publicKeyFromPrivate(privateKey, Curve.SECP256K1);
-  return {
-    privateKey,
-    publicKey: new Uint8Array(publicKey),
-  };
-}
-
-function deriveP256FromSeed(seed) {
-  const privateKey = new Uint8Array(seed);
-  const publicKey = hdWallet().curves.publicKeyFromPrivate(privateKey, Curve.P256);
-  return {
-    privateKey,
-    publicKey: new Uint8Array(publicKey),
-  };
-}
-
-function derivePKIKeysFromHD() {
-  if (!state.hdRoot) {
-    console.warn('HD wallet not initialized, cannot derive PKI keys');
-    return false;
-  }
-
-  const algorithm = $('pki-algorithm')?.value || 'x25519';
-  state.pki.algorithm = algorithm;
-
-  try {
-    const alicePath = "m/44'/0'/0'/0/0";
-    const bobPath = "m/44'/0'/0'/0/1";
-
-    const aliceSeed = deriveKeyFromPath(alicePath);
-    const bobSeed = deriveKeyFromPath(bobPath);
-
-    switch (algorithm) {
-      case 'x25519':
-        state.pki.alice = deriveX25519FromSeed(aliceSeed);
-        state.pki.bob = deriveX25519FromSeed(bobSeed);
-        break;
-      case 'secp256k1':
-        state.pki.alice = deriveSecp256k1FromSeed(aliceSeed);
-        state.pki.bob = deriveSecp256k1FromSeed(bobSeed);
-        break;
-      case 'p256':
-        state.pki.alice = deriveP256FromSeed(aliceSeed);
-        state.pki.bob = deriveP256FromSeed(bobSeed);
-        break;
-      default:
-        state.pki.alice = deriveX25519FromSeed(aliceSeed);
-        state.pki.bob = deriveX25519FromSeed(bobSeed);
-    }
-
-    return true;
-  } catch (e) {
-    console.error('Failed to derive PKI keys from HD:', e);
-    return false;
-  }
-}
-
-async function savePKIKeys(sessionGeneration = currentLegacySession()) {
-  if (!isCurrentLegacySession(sessionGeneration)) return false;
-  if (!state.pki.alice || !state.pki.bob) {
-    console.warn('Cannot save PKI keys: alice or bob is null');
-    return false;
-  }
-
-  // SECURITY: Never persist private keys in plaintext localStorage.
-  // Persist encrypted only when a session encryption key exists (i.e., after wallet login).
-  if (!(state.encryptionKey instanceof Uint8Array) || state.encryptionKey.length < 16) {
-    console.warn('Skipping PKI key persistence: session encryption key not available (login required)');
-    return false;
-  }
-
-  const encryptionKey = new Uint8Array(state.encryptionKey);
-  const plaintext = {
-    algorithm: state.pki.algorithm,
-    alice: {
-      publicKey: toHexCompact(state.pki.alice.publicKey),
-      privateKey: toHexCompact(state.pki.alice.privateKey),
-    },
-    bob: {
-      publicKey: toHexCompact(state.pki.bob.publicKey),
-      privateKey: toHexCompact(state.pki.bob.privateKey),
-    },
-    savedAt: new Date().toISOString(),
-  };
-
-  try {
-    const { iv, ciphertext } = await aesGcmEncryptJson(encryptionKey, plaintext, 'wallet-ui|pki-keys');
-    if (!isCurrentLegacySession(sessionGeneration)) return false;
-    const stored = {
-      v: 1,
-      iv: bytesToBase64(iv),
-      ciphertext: bytesToBase64(ciphertext),
-    };
-    if (!isCurrentLegacySession(sessionGeneration)) return false;
-    localStorage.setItem(PKI_STORAGE_KEY, JSON.stringify(stored));
-    return true;
-  } catch (e) {
-    if (isCurrentLegacySession(sessionGeneration)) {
-      console.warn('Failed to encrypt+save PKI keys to localStorage:', e);
-    }
-    return false;
-  } finally {
-    encryptionKey.fill(0);
-  }
-}
-
-async function loadPKIKeys(sessionGeneration = currentLegacySession()) {
-  if (!isCurrentLegacySession(sessionGeneration)) return false;
-  let encryptionKey = null;
-  try {
-    const stored = localStorage.getItem(PKI_STORAGE_KEY);
-    if (!stored) return false;
-
-    const data = JSON.parse(stored);
-    const hasEncryptedShape = data && typeof data === 'object' && typeof data.iv === 'string' && typeof data.ciphertext === 'string';
-
-    // Legacy plaintext format (insecure): refuse to load until logged in, then upgrade.
-    const hasLegacyPlaintextShape = data?.alice?.privateKey && data?.bob?.privateKey && data?.algorithm;
-
-    if (!hasEncryptedShape && !hasLegacyPlaintextShape) {
-      console.warn('Invalid PKI data in localStorage');
-      return false;
-    }
-
-    if (!(state.encryptionKey instanceof Uint8Array) || state.encryptionKey.length < 16) {
-      // Not logged in yet; don't load private keys.
-      return false;
-    }
-    encryptionKey = new Uint8Array(state.encryptionKey);
-
-    let plaintext;
-    if (hasEncryptedShape) {
-      const iv = base64ToBytes(data.iv);
-      const ciphertext = base64ToBytes(data.ciphertext);
-      plaintext = await aesGcmDecryptJson(encryptionKey, iv, ciphertext, 'wallet-ui|pki-keys');
-      if (!isCurrentLegacySession(sessionGeneration)) return false;
-    } else {
-      // Legacy plaintext: load and immediately re-encrypt on next save.
-      plaintext = data;
-      // Upgrade-in-place.
-      try {
-        const { iv, ciphertext } = await aesGcmEncryptJson(encryptionKey, plaintext, 'wallet-ui|pki-keys');
-        if (!isCurrentLegacySession(sessionGeneration)) return false;
-        localStorage.setItem(PKI_STORAGE_KEY, JSON.stringify({
-          v: 1,
-          iv: bytesToBase64(iv),
-          ciphertext: bytesToBase64(ciphertext),
-        }));
-      } catch (e) {
-        console.warn('Failed to upgrade legacy plaintext PKI storage:', e);
-      }
-    }
-
-    if (!plaintext?.alice || !plaintext?.bob || !plaintext?.algorithm) {
-      console.warn('Invalid decrypted PKI data');
-      return false;
-    }
-
-    if (!isCurrentLegacySession(sessionGeneration)) return false;
-    state.pki.algorithm = plaintext.algorithm;
-    state.pki.alice = {
-      publicKey: hexToBytes(plaintext.alice.publicKey),
-      privateKey: hexToBytes(plaintext.alice.privateKey),
-    };
-    state.pki.bob = {
-      publicKey: hexToBytes(plaintext.bob.publicKey),
-      privateKey: hexToBytes(plaintext.bob.privateKey),
-    };
-
-    // Update UI
-    const alicePublicKey = $('alice-public-key');
-    const alicePrivateKey = $('alice-private-key');
-    const bobPublicKey = $('bob-public-key');
-    const bobPrivateKey = $('bob-private-key');
-    const pkiParties = $('pki-parties');
-    const pkiDemo = $('pki-demo');
-    const pkiSecurity = $('pki-security');
-    const pkiClearKeys = $('pki-clear-keys');
-
-    if (!isCurrentLegacySession(sessionGeneration)) return false;
-    const pkiAlgorithm = $('pki-algorithm');
-    if (pkiAlgorithm) pkiAlgorithm.value = plaintext.algorithm;
-    if (alicePublicKey) alicePublicKey.textContent = plaintext.alice.publicKey;
-    if (alicePrivateKey) alicePrivateKey.textContent = plaintext.alice.privateKey;
-    if (bobPublicKey) bobPublicKey.textContent = plaintext.bob.publicKey;
-    if (bobPrivateKey) bobPrivateKey.textContent = plaintext.bob.privateKey;
-    if (pkiParties) pkiParties.style.display = 'grid';
-    if (pkiDemo) pkiDemo.style.display = 'block';
-    if (pkiSecurity) pkiSecurity.style.display = 'block';
-    if (pkiClearKeys) pkiClearKeys.style.display = 'inline-flex';
-
-    return true;
-  } catch (e) {
-    if (isCurrentLegacySession(sessionGeneration)) {
-      console.warn('Failed to load PKI keys from localStorage:', e);
-    }
-    return false;
-  } finally {
-    encryptionKey?.fill(0);
-  }
-}
-
-function clearPKIKeys() {
-  try {
-    localStorage.removeItem(PKI_STORAGE_KEY);
-  } catch (e) {
-    console.warn('Failed to clear PKI keys:', e);
-  }
-
-  try {
-    if (state.pki?.alice?.privateKey instanceof Uint8Array) state.pki.alice.privateKey.fill(0);
-    if (state.pki?.bob?.privateKey instanceof Uint8Array) state.pki.bob.privateKey.fill(0);
-  } catch {
-    // ignore
-  }
-
-  state.pki.alice = null;
-  state.pki.bob = null;
-  state.pki.algorithm = 'x25519';
-
-  const els = ['alice-public-key', 'alice-private-key', 'bob-public-key', 'bob-private-key'];
-  els.forEach(id => {
-    const el = $(id);
-    if (el) el.textContent = '--';
+const ETH_RPC = 'https://cloudflare-eth.com';
+
+async function ethRpc(method, params) {
+  const resp = await fetch(apiUrl(ETH_RPC), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
   });
-
-  const loginPrompt = $('pki-login-prompt');
-  if (loginPrompt) loginPrompt.style.display = 'block';
-  const pkiControls = $('pki-controls');
-  if (pkiControls) pkiControls.style.display = 'none';
-  const pkiParties = $('pki-parties');
-  if (pkiParties) pkiParties.style.display = 'none';
-  const pkiDemo = $('pki-demo');
-  if (pkiDemo) pkiDemo.style.display = 'none';
-  const pkiSecurity = $('pki-security');
-  if (pkiSecurity) pkiSecurity.style.display = 'none';
-  const pkiClearKeys = $('pki-clear-keys');
-  if (pkiClearKeys) pkiClearKeys.style.display = 'none';
+  if (!resp.ok) throw new Error(`Ethereum RPC error ${resp.status}`);
+  const data = await resp.json();
+  if (data?.error) throw new Error(String(data.error.message ?? 'Ethereum RPC error'));
+  return data?.result;
 }
 
-function wipePKIKeyPair(keyPair) {
-  try { keyPair?.privateKey?.fill?.(0); } catch { /* best effort */ }
+async function ethFeeParameters() {
+  const block = await ethRpc('eth_getBlockByNumber', ['latest', false]);
+  const baseFee = BigInt(block?.baseFeePerGas || '0x0');
+  const maxPriorityFee = 2000000000n; // 2 gwei
+  return { maxPriorityFee, maxFee: baseFee * 2n + maxPriorityFee };
 }
 
-async function generatePKIKeyPairs(sessionGeneration = currentLegacySession()) {
-  if (!isCurrentLegacySession(sessionGeneration)) return false;
-  // First try to derive from HD wallet
-  if (state.hdRoot && derivePKIKeysFromHD()) {
-    // PKI keys derived from HD wallet
-  } else {
-    // Fallback to random generation
-    const algorithm = $('pki-algorithm')?.value || 'x25519';
-    let alice = null;
-    let bob = null;
+function formatEth(wei) {
+  const value = Number(wei) / 1e18;
+  return `${value.toFixed(value < 0.001 ? 6 : 4)} ETH`;
+}
 
-    try {
-      if (algorithm === 'p256') {
-        alice = await p256GenerateKeyPairAsync();
-        if (!isCurrentLegacySession(sessionGeneration)) {
-          wipePKIKeyPair(alice);
-          return false;
-        }
-        bob = await p256GenerateKeyPairAsync();
-      } else if (algorithm === 'p384') {
-        alice = await p384GenerateKeyPairAsync();
-        if (!isCurrentLegacySession(sessionGeneration)) {
-          wipePKIKeyPair(alice);
-          return false;
-        }
-        bob = await p384GenerateKeyPairAsync();
-      } else {
-        const curveType = algorithm === 'secp256k1' ? Curve.SECP256K1 : Curve.X25519;
-        alice = generateKeyPair(curveType);
-        bob = generateKeyPair(curveType);
-      }
-      if (!isCurrentLegacySession(sessionGeneration)) {
-        wipePKIKeyPair(alice);
-        wipePKIKeyPair(bob);
-        return false;
-      }
-      state.pki.algorithm = algorithm;
-      state.pki.alice = alice;
-      state.pki.bob = bob;
-    } catch (e) {
-      wipePKIKeyPair(alice);
-      wipePKIKeyPair(bob);
-      if (!isCurrentLegacySession(sessionGeneration)) return false;
-      console.error('Failed to generate PKI keys:', e);
-      alert('Failed to generate keys: ' + e.message);
-      return false;
-    }
-  }
-
-  if (!isCurrentLegacySession(sessionGeneration)) return false;
-  void savePKIKeys(sessionGeneration);
-
-  // Display keys
-  const alicePub = $('alice-public-key');
-  const alicePriv = $('alice-private-key');
-  const bobPub = $('bob-public-key');
-  const bobPriv = $('bob-private-key');
-  if (alicePub) alicePub.textContent = toHexCompact(state.pki.alice.publicKey);
-  if (alicePriv) alicePriv.textContent = toHexCompact(state.pki.alice.privateKey);
-  if (bobPub) bobPub.textContent = toHexCompact(state.pki.bob.publicKey);
-  if (bobPriv) bobPriv.textContent = toHexCompact(state.pki.bob.privateKey);
-
-  const algorithmNames = {
-    x25519: 'X25519 (Curve25519)',
-    secp256k1: 'secp256k1 (Bitcoin/Ethereum)',
-    p256: 'P-256 / secp256r1 (NIST)',
-    p384: 'P-384 / secp384r1 (NIST)',
-  };
-  const algDisplay = $('pki-algorithm-display');
-  if (algDisplay) algDisplay.textContent = algorithmNames[state.pki.algorithm] || state.pki.algorithm;
-
-  const selector = $('pki-algorithm');
-  if (selector) selector.value = state.pki.algorithm;
-
-  // Show UI sections
-  const loginPrompt = $('pki-login-prompt');
-  if (loginPrompt) loginPrompt.style.display = 'none';
-  const pkiControls = $('pki-controls');
-  if (pkiControls) pkiControls.style.display = 'flex';
-  const pkiParties = $('pki-parties');
-  if (pkiParties) pkiParties.style.display = 'grid';
-  const pkiDemo = $('pki-demo');
-  if (pkiDemo) pkiDemo.style.display = 'block';
-  const pkiSecurity = $('pki-security');
-  if (pkiSecurity) pkiSecurity.style.display = 'block';
-  const pkiClearKeys = $('pki-clear-keys');
-  if (pkiClearKeys) pkiClearKeys.style.display = 'inline-flex';
-  return true;
+async function ethSendFeeLine() {
+  const { maxFee } = await ethFeeParameters();
+  return `Network fee: up to ${formatEth(maxFee * 21000n)}`;
 }
 
 // =============================================================================
-// Login / Logout
-// =============================================================================
-
-/**
- * EXTERNAL-WALLET SESSION (owner 2026-08-20: "we need the old interface back
- * with the bond, etc."): a connected external wallet opens the SAME account
- * interface an HD login does — the bond total, the account row with its live
- * balance, the bond-tab address rows, name resolution, and trust scanning —
- * all driven by the connected ADDRESS. No custody is fabricated: state.hdRoot
- * and state.wallet stay null, so every custody surface (xpub/xprv/seed, PKI,
- * derivation, export) keeps its existing guarded behavior. DISCONNECT in the
- * external panel is the logout affordance for this session.
- */
-async function loginExternal(account) {
-  state.loggedIn = true;
-  const chain = account.lane === 'evm' ? 'eth' : 'sol';
-  state.externalAccount = { ...account, chain, balance: null };
-  state.addresses = { [chain]: account.address };
-  state.selectedCrypto = chain;
-
-  // Close the login modal; flip nav + hero to the signed-in state.
-  $('login-modal')?.classList.remove('active');
-  const heroWalletType = $('hero-wallet-type');
-  const heroAddress = $('hero-address');
-  const heroStats = $('hero-stats');
-  if (heroWalletType) heroWalletType.textContent = account.walletName || cryptoConfig[chain].name;
-  if (heroAddress) heroAddress.textContent = truncateAddress(account.address);
-  if (heroStats) heroStats.classList.remove('hidden');
-  const navLogin = $('nav-login');
-  const navKeys = $('nav-keys');
-  const navLogout = $('nav-logout');
-  if (navLogin) navLogin.style.display = 'none';
-  if (navKeys) navKeys.style.display = 'flex';
-  if (navLogout) navLogout.style.display = 'flex';
-  const mobileLogin = $('mobile-login');
-  const mobileLogout = $('mobile-logout');
-  if (mobileLogin) mobileLogin.style.display = 'none';
-  if (mobileLogout) mobileLogout.style.display = 'block';
-
-  // The account's public identity is its ADDRESS — the header and wallet-tab
-  // rows that show the xpub for HD sessions show the address here.
-  const headerLabel = $q('.account-address-label');
-  const headerDisplay = $('account-address-display');
-  if (headerLabel) headerLabel.textContent = 'address';
-  if (headerDisplay) {
-    headerDisplay.textContent = account.address;
-    headerDisplay.title = account.address;
-  }
-  const walletTabXpub = $('wallet-tab-xpub');
-  if (walletTabXpub) {
-    walletTabXpub.textContent = account.address;
-    walletTabXpub.title = account.address;
-  }
-
-  // Custody-only controls have nothing to act on without keys — hide them
-  // rather than leave dead buttons. Receive stays: it shows the connected
-  // address as a QR (see the receive handler's external branch).
-  $q('.wallet-selector-row')?.style.setProperty('display', 'none');
-  $('wallet-scan-btn')?.style.setProperty('display', 'none');
-  $('wallet-send-action')?.style.setProperty('display', 'none');
-  $('wallet-export-btn-main')?.style.setProperty('display', 'none');
-  $('wallet-advanced-btn-main')?.style.setProperty('display', 'none');
-
-  populateWalletAddresses();
-  renderAccountsList();
-  updateWalletBondTotal();
-
-  // Open the Account modal so the user sees the account they just connected.
-  if (_openAccountAfterLogin) {
-    $('keys-modal')?.classList.add('active');
-  }
-
-  clearNameCache();
-  resolveNames().then(names => updateAccountTitle(names));
-
-  // Trust scanning runs off state.addresses — the address IS the identity.
-  if (state._startTrustScanning) state._startTrustScanning();
-
-  // Live balance for the connected address, then the bond total from it.
-  try {
-    const result = chain === 'eth'
-      ? await fetchEthBalance(account.address)
-      : await fetchSolBalance(account.address);
-    state.externalAccount.balance = result?.balance ?? '--';
-  } catch (e) {
-    console.warn('External balance fetch failed:', e);
-  }
-  renderAccountsList();
-  updateWalletBondTotal();
-}
-
-function login(keys) {
-  const sessionGeneration = legacySessionGuard.begin();
-  state.loggedIn = true;
-  state.scanInProgress = false;
-  state.scanGeneration = null;
-  state.wallet = keys;
-  state.addresses = deriveAllAddressesFromHD();
-  state.selectedCrypto = 'btc';
-
-  // Legacy hosts receive public account metadata only. Purpose-scoped signing
-  // is available exclusively through the isolated wallet-origin controller.
-  if (_onLoginCallback && state.hdRoot) {
-    try {
-      const xpub = state.hdRoot.toXpub();
-      const signingPublicKey = new Uint8Array(state.wallet.ed25519?.publicKey ?? []);
-      _onLoginCallback(Object.freeze({
-        xpub,
-        peerId: deriveAccountPeerId(),
-        signingPublicKey,
-      }));
-    } catch (err) {
-      console.error('onLogin callback error:', err);
-    }
-  }
-
-  // Close login modal if open
-  $('login-modal')?.classList.remove('active');
-
-  // Update hero stats display
-  const heroWalletType = $('hero-wallet-type');
-  const heroAddress = $('hero-address');
-  const heroStats = $('hero-stats');
-  if (heroWalletType) heroWalletType.textContent = cryptoConfig[state.selectedCrypto].name;
-  if (heroAddress) heroAddress.textContent = truncateAddress(state.addresses[state.selectedCrypto]);
-  if (heroStats) heroStats.classList.remove('hidden');
-
-  // Show nav action buttons, hide login button
-  const navLogin = $('nav-login');
-  const navKeys = $('nav-keys');
-  const navLogout = $('nav-logout');
-  if (navLogin) navLogin.style.display = 'none';
-  if (navKeys) navKeys.style.display = 'flex';
-  if (navLogout) navLogout.style.display = 'flex';
-
-  // Update mobile menu buttons
-  const mobileLogin = $('mobile-login');
-  const mobileLogout = $('mobile-logout');
-  if (mobileLogin) mobileLogin.style.display = 'none';
-  if (mobileLogout) mobileLogout.style.display = 'block';
-
-  // Update HD wallet root keys display
-  if (state.hdRoot) {
-    const xpubEl = $('wallet-xpub');
-    const xprvEl = $('wallet-xprv');
-    const seedEl = $('wallet-seed-phrase');
-
-    if (xpubEl) {
-      setTruncatedValue(xpubEl, state.hdRoot.toXpub() || 'N/A');
-    }
-    populateAccountAddressDropdown();
-    if (xprvEl) {
-      xprvEl.textContent = 'Hidden (click reveal)';
-      xprvEl.dataset.revealed = 'false';
-    }
-    if (seedEl) {
-      seedEl.textContent = 'Not retained by the app';
-      seedEl.dataset.revealed = 'false';
-    }
-
-    // Load persisted wallets and active accounts
-    state.wallets = loadWallets();
-    state.activeAccounts = normalizeActiveAccounts(loadActiveAccounts());
-    const currentWallet = getCurrentWallet() || getActiveWallets()[0] || state.wallets[0];
-    state.activeWalletId = currentWallet ? currentWallet.id : 0;
-    ensureWalletAccounts();
-    state.activeAccounts = state.activeAccounts.filter(isSigningAccount);
-    saveActiveAccounts();
-    saveWallets();
-    renderAccountsList(sessionGeneration);
-    renderWalletSelector();
-    updateCustomPathDefault();
-
-    // Auto-scan for funded accounts in the background
-    scanActiveAccounts(sessionGeneration).catch((e) => {
-      if (isCurrentLegacySession(sessionGeneration)) console.warn('Auto-scan failed:', e);
-    });
-  }
-
-  // Derive PKI keys from HD wallet if available
-  if (state.hdRoot) {
-    void generatePKIKeyPairs(sessionGeneration);
-  } else if (state.pki.alice && state.pki.bob) {
-    const alicePub = $('alice-public-key');
-    const alicePriv = $('alice-private-key');
-    const bobPub = $('bob-public-key');
-    const bobPriv = $('bob-private-key');
-    if (alicePub) alicePub.textContent = toHexCompact(state.pki.alice.publicKey);
-    if (alicePriv) alicePriv.textContent = toHexCompact(state.pki.alice.privateKey);
-    if (bobPub) bobPub.textContent = toHexCompact(state.pki.bob.publicKey);
-    if (bobPriv) bobPriv.textContent = toHexCompact(state.pki.bob.privateKey);
-
-    const algorithmNames = {
-      x25519: 'X25519 (Curve25519)',
-      secp256k1: 'secp256k1 (Bitcoin)',
-      p256: 'P-256 (NIST)',
-      p384: 'P-384 (NIST)',
-    };
-    const algDisplay = $('pki-algorithm-display');
-    if (algDisplay) algDisplay.textContent = algorithmNames[state.pki.algorithm] || state.pki.algorithm;
-    const loginPrompt = $('pki-login-prompt');
-    if (loginPrompt) loginPrompt.style.display = 'none';
-    const pkiControls = $('pki-controls');
-    if (pkiControls) pkiControls.style.display = 'flex';
-    const pkiParties = $('pki-parties');
-    if (pkiParties) pkiParties.style.display = 'grid';
-    const pkiDemo = $('pki-demo');
-    if (pkiDemo) pkiDemo.style.display = 'block';
-    const pkiSecurity = $('pki-security');
-    if (pkiSecurity) pkiSecurity.style.display = 'block';
-    const pkiClearKeys = $('pki-clear-keys');
-    if (pkiClearKeys) pkiClearKeys.style.display = 'inline-flex';
-  } else {
-    // PKI persistence is encrypted and requires the session key (available only after login).
-    // Kick off an async load attempt; if it fails, generate fresh keys.
-    loadPKIKeys(sessionGeneration).then((ok) => {
-      if (!ok && isCurrentLegacySession(sessionGeneration)) {
-        return generatePKIKeyPairs(sessionGeneration);
-      }
-      return ok;
-    }).catch(() => {
-      if (isCurrentLegacySession(sessionGeneration)) {
-        void generatePKIKeyPairs(sessionGeneration);
-      }
-    });
-  }
-
-  // Update wallet addresses and balances
-  updateAdversarialSecurity(sessionGeneration);
-
-  // Open Account modal so user can see the wallet they just loaded
-  if (_openAccountAfterLogin) {
-    $('keys-modal')?.classList.add('active');
-  }
-
-  // Resolve names and update title
-  clearNameCache();
-  resolveNames(sessionGeneration).then((names) => {
-    if (names && isCurrentLegacySession(sessionGeneration)) {
-      updateAccountTitle(names, sessionGeneration);
-    }
-  });
-
-  // Start trust auto-scanning
-  if (state._startTrustScanning) state._startTrustScanning(sessionGeneration);
-}
-
-function clearCanvas(canvas) {
-  if (!canvas) return;
-  try {
-    const width = canvas.width;
-    canvas.width = width;
-  } catch {
-    try { canvas.getContext?.('2d')?.clearRect(0, 0, canvas.width || 0, canvas.height || 0); } catch { /* best effort */ }
-  }
-}
-
-function clearSignedVCardStateAndUI() {
-  state._exportedVCard = null;
-  try { state._vcardImportAbortController?.abort?.(); } catch { /* stale callback is session-bound */ }
-  state._vcardImportAbortController = null;
-  state._vcardEditSnapshot = null;
-  hideImportedVcardPreview();
-  const qrCanvas = $('qr-code');
-  const formView = $('vcard-form-view');
-  const editView = $('vcard-edit-view');
-  const resultView = $('vcard-result-view');
-  const sigBadge = $('vcard-sig-badge');
-  const rawView = $('vcard-raw-view');
-  const qrContainer = $q('#vcard-result-view .qr-container');
-  clearCanvas(qrCanvas);
-  if (formView) formView.style.display = '';
-  if (editView) editView.style.display = 'none';
-  if (resultView) resultView.style.display = 'none';
-  if (rawView) {
-    rawView.textContent = '';
-    rawView.style.display = 'none';
-  }
-  if (sigBadge) sigBadge.style.display = 'none';
-  for (const id of [
-    'vcard-prefix', 'vcard-firstname', 'vcard-middlename', 'vcard-lastname',
-    'vcard-suffix', 'vcard-nickname', 'vcard-email', 'vcard-phone', 'vcard-org',
-    'vcard-title', 'vcard-street', 'vcard-city', 'vcard-region', 'vcard-postal',
-    'vcard-country',
-  ]) {
-    const input = $(id);
-    if (input) input.value = '';
-  }
-  const summaryName = $('identity-card-name');
-  if (summaryName) summaryName.textContent = '--';
-  for (const id of [
-    'identity-card-title', 'identity-card-org', 'identity-card-email', 'identity-card-phone',
-  ]) {
-    const summary = $(id);
-    if (summary) summary.textContent = '';
-  }
-  const importInput = $('vcf-import-input');
-  if (importInput) importInput.value = '';
-  if (qrContainer) qrContainer.style.display = '';
-  $('vcard-toggle-qr')?.classList.add('active');
-  $('vcard-toggle-raw')?.classList.remove('active');
-  const copyButton = $('copy-vcard');
-  if (copyButton) copyButton.textContent = 'Copy';
-}
-
-function clearSensitiveWalletUI() {
-  closeWalletActionMenus();
-  hideWalletOverlays();
-  state.selectedWalletAssetIdx = null;
-
-  const accountsList = $('wallet-accounts-list');
-  accountsList?.querySelectorAll('.ph-token-row, .ph-wallet-header')
-    .forEach((element) => element.remove());
-  const accountsEmpty = $('wallet-accounts-empty');
-  if (accountsEmpty) accountsEmpty.style.display = 'flex';
-  const accountsEmptySub = accountsEmpty?.querySelector('.ph-token-empty-sub');
-  if (accountsEmptySub) accountsEmptySub.textContent = 'Log in and tap Scan to discover your accounts';
-  $('wallet-list')?.replaceChildren();
-  $('account-wallet-select')?.replaceChildren();
-  $('wallet-active-select')?.replaceChildren();
-  const walletBondValue = $('wallet-bond-value');
-  if (walletBondValue) walletBondValue.textContent = '$0.00';
-
-  const scanStatus = $('wallet-scan-status');
-  const scanBar = $('wallet-scan-bar');
-  const scanButton = $('wallet-scan-btn');
-  if (scanStatus) scanStatus.style.display = 'none';
-  if (scanBar) scanBar.style.width = '0%';
-  if (scanButton) scanButton.disabled = false;
-
-  const assetOverlay = $('wallet-asset-action-overlay');
-  const assetTitle = $('wallet-asset-action-title');
-  const assetPath = $('wallet-asset-action-path');
-  const assetAddress = $('wallet-asset-action-address');
-  const sendButton = $('wallet-asset-send');
-  const receiveButton = $('wallet-asset-receive');
-  if (assetOverlay) assetOverlay.style.display = 'none';
-  if (assetTitle) assetTitle.textContent = '';
-  if (assetPath) assetPath.textContent = '';
-  if (assetAddress) {
-    assetAddress.textContent = '';
-    assetAddress.title = '';
-  }
-  if (sendButton) sendButton.onclick = null;
-  if (receiveButton) receiveButton.onclick = null;
-
-  const receiveOverlay = $('wallet-receive-overlay');
-  clearCanvas(receiveOverlay?.querySelector('#wallet-receive-qr'));
-  const receiveAddress = receiveOverlay?.querySelector('#wallet-receive-address');
-  const receiveTitle = receiveOverlay?.querySelector('#wallet-receive-title');
-  if (receiveAddress) receiveAddress.textContent = '';
-  if (receiveTitle) receiveTitle.textContent = '';
-  $('wallet-receive-overlay')?.remove();
-
-  const sendFrom = $('send-from-account');
-  const sendTo = $('send-to-address');
-  const sendAmount = $('send-amount');
-  if (sendFrom) sendFrom.replaceChildren();
-  if (sendTo) sendTo.value = '';
-  if (sendAmount) sendAmount.value = '';
-  for (const id of [
-    'send-available-balance', 'send-currency-label', 'send-fiat-estimate',
-    'send-fee-estimate', 'send-review-to', 'send-review-amount',
-    'send-review-fee', 'send-review-total', 'send-status',
-  ]) {
-    const element = $(id);
-    if (element) element.textContent = '';
-  }
-  const sendCompose = $('send-compose-step');
-  const sendReview = $('send-review-step');
-  const sendFee = $('send-fee-section');
-  const sendStatus = $('send-status');
-  const sendReviewButton = $('send-review-btn');
-  const sendConfirmButton = $('send-confirm-btn');
-  if (sendCompose) sendCompose.style.display = 'block';
-  if (sendReview) sendReview.style.display = 'none';
-  if (sendFee) sendFee.style.display = 'none';
-  if (sendStatus) {
-    sendStatus.style.display = 'none';
-    sendStatus.className = 'send-status';
-  }
-  if (sendReviewButton) sendReviewButton.disabled = true;
-  if (sendConfirmButton) sendConfirmButton.disabled = false;
-
-  for (const id of [
-    'signing-path', 'encryption-path', 'signing-pubkey', 'encryption-pubkey',
-    'derived-crypto-name', 'derived-icon', 'derived-address',
-  ]) {
-    const element = $(id);
-    if (element) element.textContent = '';
-  }
-  const derivedResult = $('derived-result');
-  const derivedExplorer = $('derived-explorer-link');
-  const addressQr = $('address-qr');
-  if (derivedResult) derivedResult.style.display = 'none';
-  if (derivedExplorer) {
-    derivedExplorer.removeAttribute('href');
-    derivedExplorer.title = '';
-    derivedExplorer.style.display = 'none';
-  }
-  clearCanvas(addressQr);
-
-  for (const network of ['btc', 'eth', 'sol']) {
-    const walletAddress = $(`wallet-${network}-address`);
-    const walletExplorer = $(`wallet-${network}-explorer`);
-    const bondAddress = $(`bond-${network}-address`);
-    const bondExplorer = $(`bond-${network}-explorer`);
-    for (const address of [walletAddress, bondAddress]) {
-      if (!address) continue;
-      address.textContent = '';
-      address.title = '';
-    }
-    for (const explorer of [walletExplorer, bondExplorer]) {
-      if (!explorer) continue;
-      explorer.removeAttribute('href');
-      explorer.title = '';
-    }
-  }
-}
-
-function clearTrustStateAndUI() {
-  try { state._closeTrustModals?.(); } catch { /* modal teardown is best effort */ }
-  state._closeTrustModals = null;
-  try { state._trustImportAbortController?.abort?.(); } catch { /* stale callback is session-bound */ }
-  state._trustImportAbortController = null;
-  state.trustGraph = null;
-  state.trustTransactions = [];
-  state.trustRelationships = [];
-  const list = $('trust-list');
-  const status = $('trust-scan-status');
-  const label = $('trust-scan-label');
-  const count = $('trust-scan-count');
-  const importInput = $('trust-import-input');
-  list?.replaceChildren();
-  status?.classList.remove('active');
-  if (label) label.textContent = '';
-  if (count) count.textContent = '';
-  if (importInput) importInput.value = '';
-}
-
-function logout() {
-  legacySessionGuard.invalidate();
-  state.loggedIn = false;
-  state.scanInProgress = false;
-  state.scanGeneration = null;
-  clearSensitiveWalletUI();
-  clearSignedVCardStateAndUI();
-  clearTrustStateAndUI();
-  try { state._stopLegacyCamera?.(); } catch { /* media teardown is best effort */ }
-  try { state._resetLegacyMessaging?.(); } catch { /* messaging teardown is best effort */ }
-
-  // Stop trust auto-scanning
-  if (state._stopTrustScanning) state._stopTrustScanning();
-
-  clearNameCache();
-  const titleEl = $('account-title');
-  if (titleEl) titleEl.textContent = 'Account';
-
-  // Best-effort wipe of JS buffers (strings are not wipeable).
-  const wipe = (u8) => {
-    if (u8 instanceof Uint8Array) u8.fill(0);
-  };
-  try {
-    wipe(state.wallet?.x25519?.privateKey);
-    wipe(state.wallet?.ed25519?.privateKey);
-    wipe(state.wallet?.secp256k1?.privateKey);
-    wipe(state.wallet?.p256?.privateKey);
-    wipe(state.wallet.p384?.privateKey);
-    wipe(state.encryptionKey);
-    wipe(state.encryptionIV);
-    wipe(state.masterSeed);
-    wipe(state.pki?.alice?.privateKey);
-    wipe(state.pki?.bob?.privateKey);
-    state.hdRoot?.wipe?.();
-  } catch {
-    // ignore
-  }
-
-  state.wallet = {
-    x25519: null,
-    ed25519: null,
-    secp256k1: null,
-    p256: null,
-    p384: null,
-  };
-  state.encryptionKey = null;
-  state.encryptionIV = null;
-  state.masterSeed = null;
-  state.hdRoot = null;
-  state.mnemonic = null;
-  state.externalAccount = null;
-  state.addresses = { btc: null, eth: null, sol: null };
-  state.activeAccounts = [];
-  state.wallets = [{ id: 0, name: 'Wallet 1', accountIndex: 0 }];
-  state.activeWalletId = 0;
-  state.walletFiatTotals = {};
-  state.walletFiatCurrency = 'USD';
-  state.balanceCache = {};
-  state.balanceCacheLoaded = false;
-  state.balanceRateLimitUntil = {};
-  _balanceCacheDirty = false;
-  _scanLastRequestAt = 0;
-  state.pki = { alice: null, bob: null, algorithm: 'x25519' };
-  try { state.vcardPhotoBytes?.fill?.(0); } catch { /* best effort */ }
-  state.vcardPhotoBytes = null;
-  state.vcardPhotoUrl = null;
-  legacyPhotoUrls.logout();
-  try { state._resetLegacyPhotoUI?.(); } catch { /* photo UI teardown is best effort */ }
-
-  // Restore the custody controls an external session hid.
-  $q('.wallet-selector-row')?.style.removeProperty('display');
-  $('wallet-scan-btn')?.style.removeProperty('display');
-  $('wallet-send-action')?.style.removeProperty('display');
-  $('wallet-export-btn-main')?.style.removeProperty('display');
-  $('wallet-advanced-btn-main')?.style.removeProperty('display');
-  const extHeaderLabel = $q('.account-address-label');
-  if (extHeaderLabel) extHeaderLabel.textContent = 'xpub';
-  const extHeaderDisplay = $('account-address-display');
-  if (extHeaderDisplay) {
-    extHeaderDisplay.textContent = '';
-    extHeaderDisplay.title = '';
-  }
-
-  // Their logout resets state.pki in memory only; clear the persisted record
-  // so a logout is a real logout.
-  localStorage.removeItem(PKI_STORAGE_KEY);
-
-  // Update hero stats
-  const heroWalletType = $('hero-wallet-type');
-  const heroAddress = $('hero-address');
-  const heroStats = $('hero-stats');
-  if (heroWalletType) heroWalletType.textContent = '--';
-  if (heroAddress) heroAddress.textContent = '--';
-  if (heroStats) heroStats.classList.add('hidden');
-
-  // Show login button, hide other nav action buttons
-  const navLogin = $('nav-login');
-  const navKeys = $('nav-keys');
-  const navLogout = $('nav-logout');
-  if (navLogin) navLogin.style.display = 'flex';
-  if (navKeys) navKeys.style.display = 'none';
-  if (navLogout) navLogout.style.display = 'none';
-
-  // Update mobile menu buttons
-  const mobileLogin = $('mobile-login');
-  const mobileLogout = $('mobile-logout');
-  if (mobileLogin) mobileLogin.style.display = 'block';
-  if (mobileLogout) mobileLogout.style.display = 'none';
-
-  // Clear form inputs
-  const usernameEl = $('wallet-username');
-  const passwordEl = $('wallet-password');
-  const seedEl = $('seed-phrase');
-  if (usernameEl) usernameEl.value = '';
-  if (passwordEl) passwordEl.value = '';
-  if (seedEl) seedEl.value = '';
-  updatePasswordStrength('');
-
-  // Clear HD wallet UI
-  const derivedResult = $('derived-result');
-  if (derivedResult) derivedResult.style.display = 'none';
-  for (const id of [
-    'wallet-xpub', 'wallet-xprv', 'wallet-seed-phrase', 'identity-wallet-xpub',
-    'identity-wallet-peerid', 'alice-public-key', 'alice-private-key',
-    'bob-public-key', 'bob-private-key',
-  ]) {
-    const element = $(id);
-    if (element) {
-      element.textContent = '';
-      delete element.dataset.revealed;
-    }
-  }
-  $('wallet-accounts-list')?.querySelectorAll('.ph-token-row, .ph-wallet-header')
-    .forEach((element) => element.remove());
-
-  $('login-modal')?.classList.remove('active');
-  $('keys-modal')?.classList.remove('active');
-}
-
-// =============================================================================
-// Export Wallet
-// =============================================================================
-
-async function exportWallet(format) {
-  if (!state.loggedIn) {
-    alert('Please log in first to export wallet data.');
-    return;
-  }
-
-  let data, filename, mimeType;
-
-  switch (format) {
-    case 'mnemonic':
-      if (!state.mnemonic) {
-        alert('Seed phrase not available. For security, the app does not retain the mnemonic after login.');
-        return;
-      }
-      data = state.mnemonic;
-      filename = 'wallet-seed-phrase.txt';
-      mimeType = 'text/plain';
-      break;
-
-    case 'xpub':
-      if (!state.hdRoot?.toXpub) {
-        alert('Extended public key not available.');
-        return;
-      }
-      data = state.hdRoot.toXpub();
-      filename = 'wallet-xpub.txt';
-      mimeType = 'text/plain';
-      break;
-
-    case 'xprv':
-      if (!state.hdRoot?.toXprv) {
-        alert('Extended private key not available.');
-        return;
-      }
-      if (!confirm('Warning: You are about to export your master private key. Anyone with this key can access all your funds. Continue?')) {
-        return;
-      }
-      data = state.hdRoot.toXprv();
-      filename = 'wallet-xprv.txt';
-      mimeType = 'text/plain';
-      break;
-
-    case 'hex':
-      if (!state.masterSeed) {
-        alert('Master seed not available.');
-        return;
-      }
-      if (!confirm('Warning: You are about to export your raw master seed in hex format. This is extremely sensitive data. Continue?')) {
-        return;
-      }
-      data = toHexCompact(state.masterSeed);
-      filename = 'wallet-seed-hex.txt';
-      mimeType = 'text/plain';
-      break;
-
-    default:
-      alert('Unknown export format: ' + format);
-      return;
-  }
-
-  // Download the file
-  downloadData(data, filename, mimeType);
-}
-
-function downloadData(data, filename, mimeType) {
-  const blob = new Blob([data], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
-
-// =============================================================================
-// Wallet Address Population & Balance Fetching
-// =============================================================================
-
-function populateAccountAddressDropdown() {
-  renderWalletSelector();
-  updateIdentityWalletKeys();
-}
-
-function populateWalletAddresses() {
-  // External sessions have addresses (the connected account) without custody.
-  if (!state.wallet && !state.externalAccount) return;
-
-  const btcAddress = state.addresses?.btc || '--';
-  const ethAddress = state.addresses?.eth || '--';
-  const solAddress = state.addresses?.sol || '--';
-
-  // let suiAddress = '--';
-  // let monadAddress = ethAddress; // Monad uses same address as ETH (same coin type 60)
-  // let adaAddress = '--';
-
-  // // Derive SUI and ADA from HD root using their signing paths
-  // if (state.hdRoot) {
-  //   try {
-  //     // SUI: coin type 784, uses ed25519
-  //     const suiPath = buildSigningPath(784, 0, 0);
-  //     const suiDerived = state.hdRoot.derivePath(suiPath);
-  //     const suiPrivKey = suiDerived.privateKey();
-  //     const suiPubKey = ed25519.getPublicKey(suiPrivKey);
-  //     suiAddress = deriveSuiAddress(suiPubKey, 'ed25519');
-  //   } catch (e) {
-  //     console.error('Failed to derive SUI address:', e);
-  //   }
-
-  //   try {
-  //     // ADA: coin type 1815, uses ed25519
-  //     const adaPath = buildSigningPath(1815, 0, 0);
-  //     const adaDerived = state.hdRoot.derivePath(adaPath);
-  //     const adaPrivKey = adaDerived.privateKey();
-  //     const adaPubKey = ed25519.getPublicKey(adaPrivKey);
-  //     adaAddress = deriveCardanoAddress(adaPubKey);
-  //   } catch (e) {
-  //     console.error('Failed to derive ADA address:', e);
-  //   }
-  // }
-
-  const updateAddressCard = (network, address, explorerBase) => {
-    const addrEl = $(`wallet-${network}-address`);
-    const linkEl = $(`wallet-${network}-explorer`);
-
-    if (addrEl && address !== '--') {
-      addrEl.textContent = address.length > 20
-        ? address.slice(0, 10) + '...' + address.slice(-8)
-        : address;
-      addrEl.title = address;
-    }
-
-    if (linkEl && address !== '--') {
-      linkEl.href = explorerBase + address;
-    }
-  };
-
-  updateAddressCard('btc', btcAddress, 'https://blockstream.info/address/');
-  updateAddressCard('eth', ethAddress, 'https://etherscan.io/address/');
-  updateAddressCard('sol', solAddress, 'https://solscan.io/account/');
-  // updateAddressCard('sui', suiAddress, 'https://suiscan.xyz/mainnet/account/');
-  // updateAddressCard('monad', monadAddress, 'https://monadscan.com/address/');
-  // updateAddressCard('ada', adaAddress, 'https://cardanoscan.io/address/');
-
-  // const xrpAddress = state.addresses?.xrp || '--';
-
-  // Also populate bond tab addresses
-  const bondAddresses = {
-    btc: { addr: btcAddress, explorer: 'https://blockstream.info/address/' },
-    eth: { addr: ethAddress, explorer: 'https://etherscan.io/address/' },
-    sol: { addr: solAddress, explorer: 'https://solscan.io/account/' },
-    // sui: { addr: suiAddress, explorer: 'https://suiscan.xyz/mainnet/account/' },
-    // monad: { addr: monadAddress, explorer: 'https://monadscan.com/address/' },
-    // ada: { addr: adaAddress, explorer: 'https://cardanoscan.io/address/' },
-    // xrp: { addr: xrpAddress, explorer: 'https://xrpscan.com/account/' },
-  };
-
-  Object.entries(bondAddresses).forEach(([net, { addr, explorer }]) => {
-    const addrEl = $(`bond-${net}-address`);
-    const linkEl = $(`bond-${net}-explorer`);
-    if (addrEl && addr !== '--') {
-      addrEl.textContent = addr.length > 20
-        ? addr.slice(0, 10) + '...' + addr.slice(-8)
-        : addr;
-      addrEl.title = addr;
-    }
-    if (linkEl && addr !== '--') {
-      linkEl.href = explorer + addr;
-    }
-  });
-}
-
-// =============================================================================
-// Currency Conversion (Coinbase API)
+// Currency Conversion (Coinbase API, CoinGecko fallback)
 // =============================================================================
 
 const CURRENCY_SYMBOLS = {
-  USD: '$', EUR: '€', GBP: '£', JPY: '¥', CAD: 'C$', AUD: 'A$',
-  CHF: 'CHF', CNY: '¥', BTC: '₿',
+  USD: '$', EUR: '€', GBP: '£', JPY: '¥', CAD: 'C$', AUD: 'A$', CHF: 'CHF ',
 };
-
-const CURRENCY_OPTIONS = Object.keys(CURRENCY_SYMBOLS);
 
 const PRICE_CACHE_KEY = 'hd-wallet-price-cache-v1';
 const PRICE_CACHE_TTL_MS = 60 * 1000;
@@ -3660,11 +897,7 @@ function saveStoredPriceCache(entry) {
 }
 
 function getSelectedCurrency() {
-  return localStorage.getItem('bond-currency') || 'USD';
-}
-
-function setSelectedCurrency(currency) {
-  localStorage.setItem('bond-currency', currency);
+  return readCurrency();
 }
 
 async function fetchCryptoPrices(currency) {
@@ -3687,64 +920,39 @@ async function fetchCryptoPrices(currency) {
     prices[symbol] = value;
   };
 
-  if (currency === 'BTC') {
-    // For BTC denomination, fetch each crypto's price in BTC
-    prices.BTC = 1;
-    const others = ['ETH', 'SOL'];
-    const results = await Promise.allSettled(
-      others.map(async (crypto) => {
-        const url = apiUrl(`https://api.coinbase.com/v2/exchange-rates?currency=${crypto}`);
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`Coinbase HTTP ${res.status}`);
-        const json = await res.json();
-        return { crypto, rate: json.data?.rates?.BTC };
-      })
-    );
-    results.forEach(r => {
-      if (r.status === 'fulfilled') setPrice(r.value.crypto, r.value.rate);
-    });
-  } else {
-    // Fetch fiat spot prices for each supported chain coin.
-    const results = await Promise.allSettled(
-      cryptos.map(async (crypto) => {
-        const url = apiUrl(`https://api.coinbase.com/v2/prices/${crypto}-${currency}/spot`);
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`Coinbase HTTP ${res.status}`);
-        const json = await res.json();
-        return { crypto, price: json.data?.amount };
-      })
-    );
-    results.forEach(r => {
-      if (r.status === 'fulfilled') setPrice(r.value.crypto, r.value.price);
-    });
-  }
+  const results = await Promise.allSettled(
+    cryptos.map(async (crypto) => {
+      const url = apiUrl(`https://api.coinbase.com/v2/prices/${crypto}-${currency}/spot`);
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`Coinbase HTTP ${res.status}`);
+      const json = await res.json();
+      return { crypto, price: json.data?.amount };
+    })
+  );
+  results.forEach((r) => {
+    if (r.status === 'fulfilled') setPrice(r.value.crypto, r.value.price);
+  });
 
   // Secondary provider fallback when Coinbase is unavailable/rate-limited.
-  if (Object.keys(prices).length < cryptos.length) {
-    const missing = cryptos.filter(symbol => !Number.isFinite(prices[symbol]) || prices[symbol] <= 0);
-    if (missing.length > 0) {
-      try {
-        const vs = currency.toLowerCase();
-        const geckoUrl = apiUrl(`https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=${vs}`);
-        const geckoRes = await fetch(geckoUrl);
-        if (geckoRes.ok) {
-          const gecko = await geckoRes.json();
-          const idBySymbol = { BTC: 'bitcoin', ETH: 'ethereum', SOL: 'solana' };
-          missing.forEach((symbol) => {
-            const id = idBySymbol[symbol];
-            if (!id) return;
-            setPrice(symbol, gecko?.[id]?.[vs]);
-          });
-        }
-      } catch (e) {
-        console.warn('CoinGecko price fallback failed:', e);
+  const missing = cryptos.filter((symbol) => !Number.isFinite(prices[symbol]) || prices[symbol] <= 0);
+  if (missing.length > 0) {
+    try {
+      const vs = currency.toLowerCase();
+      const geckoUrl = apiUrl(`https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=${vs}`);
+      const geckoRes = await fetch(geckoUrl);
+      if (geckoRes.ok) {
+        const gecko = await geckoRes.json();
+        const idBySymbol = { BTC: 'bitcoin', ETH: 'ethereum', SOL: 'solana' };
+        missing.forEach((symbol) => setPrice(symbol, gecko?.[idBySymbol[symbol]]?.[vs]));
       }
+    } catch (e) {
+      console.warn('CoinGecko price fallback failed:', e);
     }
   }
 
-  const hasAnyPrice = cryptos.some(symbol => Number.isFinite(prices[symbol]) && prices[symbol] > 0);
+  const hasAnyPrice = cryptos.some((symbol) => Number.isFinite(prices[symbol]) && prices[symbol] > 0);
   if (!hasAnyPrice) {
-    const staleSources = [priceCache, stored].filter(entry =>
+    const staleSources = [priceCache, stored].filter((entry) =>
       entry?.data
       && entry.currency === currency
       && now - entry.timestamp < PRICE_CACHE_STALE_MS
@@ -3763,595 +971,784 @@ async function fetchCryptoPrices(currency) {
 }
 
 function formatCurrencyValue(value, currency) {
-  const symbol = CURRENCY_SYMBOLS[currency] || currency;
-  if (currency === 'BTC') {
-    return `${symbol}${value.toFixed(8)}`;
-  }
-  if (currency === 'JPY' || currency === 'CNY') {
-    return `${symbol}${Math.round(value).toLocaleString()}`;
-  }
+  const symbol = CURRENCY_SYMBOLS[currency] ?? `${currency} `;
+  if (currency === 'JPY') return `${symbol}${Math.round(value).toLocaleString()}`;
   return `${symbol}${value.toFixed(2)}`;
 }
 
-// =============================================================================
-// Name Resolution (ENS, BNS, Solana Names)
-// =============================================================================
-
-let nameCache = null;
-
-async function resolveENSName(ethAddress) {
-  if (!ethAddress) return null;
+async function setCurrency(currency) {
+  if (!writeCurrency(currency)) return;
+  priceCache = { data: null, currency: null, timestamp: 0 };
+  state.prices = null;
+  emitEvent('assets');
+  if (!state.loggedIn) return;
   try {
-    // ENS reverse resolution: call addr.reverse resolver
-    const addr = ethAddress.toLowerCase().slice(2);
-    // namehash of <addr>.addr.reverse
-    const node = await ensReverseNode(addr);
-    // Call the ENS universal resolver
-    const data = '0x691f3431' + node.slice(2); // name(bytes32)
-    const response = await fetch(apiUrl('https://cloudflare-eth.com'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0', id: 1,
-        method: 'eth_call',
-        params: [{ to: '0xa58E81fe9b61B5c3fE2AFD33CF304c454AbFc7Cb', data }, 'latest'],
-      }),
+    const prices = await fetchCryptoPrices(currency);
+    if (getSelectedCurrency() === currency) {
+      state.prices = prices;
+      emitEvent('assets');
+    }
+  } catch (e) {
+    console.warn('Price fetch failed:', e?.message || e);
+  }
+}
+
+// =============================================================================
+// Trust: scan, publish, revoke and drain watch (current account only)
+// =============================================================================
+
+let trustScanGeneration = null;
+let trustNextAllowedAt = 0;
+
+function readImportedTrust() {
+  const raw = state.storage?.read(state.account, 'trust-imported-txs', []);
+  return Array.isArray(raw) ? raw : [];
+}
+
+/**
+ * Scan the current account's addresses for trust records. Runs when People
+ * opens (at most once per two minutes) and on Refresh; never in the
+ * background.
+ */
+async function runTrustScan(sessionGeneration = currentLegacySession(), { force = false } = {}) {
+  if (!isCurrentLegacySession(sessionGeneration) || !state.addresses) return;
+  if (state.trustScanning && trustScanGeneration === sessionGeneration) return;
+  const now = Date.now();
+  if (now < trustNextAllowedAt) return;
+  if (!force && state.trustCheckedAt && now - state.trustCheckedAt < TRUST_SCAN_MIN_INTERVAL_MS) return;
+  state.trustScanning = true;
+  state.trustError = '';
+  trustScanGeneration = sessionGeneration;
+  const account = state.account;
+  const addressesSnapshot = Object.freeze({ ...state.addresses });
+  emitEvent('trust');
+
+  try {
+    const bt = await import('./blockchain-trust.js');
+    if (!isCurrentLegacySession(sessionGeneration)) return;
+    const onChainTxs = [];
+    if (addressesSnapshot.btc) onChainTxs.push(...await bt.scanBitcoinTrustTransactions(addressesSnapshot.btc));
+    if (!isCurrentLegacySession(sessionGeneration)) return;
+    if (addressesSnapshot.sol) onChainTxs.push(...await bt.scanSolanaTrustTransactions(addressesSnapshot.sol));
+    if (!isCurrentLegacySession(sessionGeneration)) return;
+    if (addressesSnapshot.eth) onChainTxs.push(...await bt.scanEthereumTrustTransactions(addressesSnapshot.eth));
+    if (!isCurrentLegacySession(sessionGeneration) || account !== state.account) return;
+
+    const seen = new Set();
+    const dedupedTxs = [...onChainTxs, ...readImportedTrust()].filter((tx) => {
+      if (!tx?.txHash || seen.has(tx.txHash)) return false;
+      seen.add(tx.txHash);
+      return true;
     });
-    const json = await response.json();
-    if (json.result && json.result !== '0x' && json.result.length > 130) {
-      const name = decodeENSName(json.result);
-      if (name && name.endsWith('.eth')) return name;
+    const relationships = bt.analyzeTrustRelationships(addressesSnapshot, dedupedTxs);
+
+    // Drain watch: monitor trusted counterparties' published addresses.
+    await monitorTrustDrains(relationships, sessionGeneration);
+    if (!isCurrentLegacySession(sessionGeneration) || account !== state.account) return;
+
+    state.trustTransactions = dedupedTxs;
+    state.trustRelationships = relationships;
+    state.trustCheckedAt = Date.now();
+    trustNextAllowedAt = 0;
+  } catch (err) {
+    if (!isCurrentLegacySession(sessionGeneration)) return;
+    console.warn('Trust scan failed:', err?.message || err);
+    trustNextAllowedAt = Date.now() + TRUST_SCAN_FAIL_COOLDOWN_MS;
+    state.trustError = 'The trust check is delayed (endpoint limited).';
+  } finally {
+    if (trustScanGeneration === sessionGeneration) {
+      state.trustScanning = false;
+      trustScanGeneration = null;
+      emitEvent('trust');
     }
-  } catch (e) { console.warn('ENS resolution failed:', e); }
+  }
+}
+
+function clearTrustState() {
+  trustScanGeneration = null;
+  trustNextAllowedAt = 0;
+  state.trustTransactions = [];
+  state.trustRelationships = [];
+  state.trustCheckedAt = 0;
+  state.trustScanning = false;
+  state.trustError = '';
+}
+
+const TX_HASH_HEX_RE = /^[0-9a-fA-F]{64}$/;
+const EVM_ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
+
+// BTC/ETH hashes are 32-byte hex; Solana signatures are base58 — reduce
+// any of them to the 64-hex/32-byte form the revocation record embeds.
+function normalizeTxHashHex(hash) {
+  const raw = String(hash ?? '').trim();
+  const hex = raw.startsWith('0x') || raw.startsWith('0X') ? raw.slice(2) : raw;
+  if (TX_HASH_HEX_RE.test(hex)) return hex.toLowerCase();
+  const bytes = decodeBase58(raw);
+  if (bytes && bytes.length === 32) return bytesToHexStr(bytes);
+  throw new Error('Revocation needs a 32-byte original transaction hash (BTC/ETH hex or Solana signature).');
+}
+
+// Scanner chain names ('bitcoin'/'ethereum'/'solana', external 'eth'/'sol')
+// -> publish-lane slug.
+function chainForTxRecord(record) {
+  const c = String(record?.chain || record?.network || '').toLowerCase();
+  if (c.startsWith('bitcoin') || c === 'btc') return 'btc';
+  if (c.startsWith('ethereum') || c === 'eth') return 'eth';
+  if (c.startsWith('solana') || c === 'sol') return 'sol';
   return null;
 }
 
-async function ensReverseNode(addrHex) {
-  // namehash for <addr>.addr.reverse
-  // Start with namehash('') = 0x0...0
-  let node = new Uint8Array(32);
-  node = keccak_256(new Uint8Array([...node, ...keccak_256(new TextEncoder().encode('reverse'))]));
-  node = keccak_256(new Uint8Array([...node, ...keccak_256(new TextEncoder().encode('addr'))]));
-  node = keccak_256(new Uint8Array([...node, ...keccak_256(new TextEncoder().encode(addrHex))]));
-  return '0x' + Array.from(node).map(b => b.toString(16).padStart(2, '0')).join('');
+// The outbound on-chain trust record we published toward `address` — the
+// revocation must bind its hash.
+function matchOutboundTrustTx(address) {
+  const target = String(address ?? '').toLowerCase();
+  const own = new Set(Object.values(state.addresses ?? {}).filter(Boolean).map((a) => a.toLowerCase()));
+  return (state.trustTransactions || []).find((tx) =>
+    tx.type === 'trust'
+    && own.has(String(tx.from ?? '').toLowerCase())
+    && String(tx.recipientPubkey ?? '').toLowerCase() === target
+    && chainForTxRecord(tx) !== null
+  ) || null;
 }
 
-function decodeENSName(hexResult) {
-  try {
-    // ABI-decode the string result
-    const bytes = hexResult.slice(2);
-    const offset = parseInt(bytes.slice(0, 64), 16) * 2;
-    const length = parseInt(bytes.slice(offset, offset + 64), 16);
-    const nameHex = bytes.slice(offset + 64, offset + 64 + length * 2);
-    let name = '';
-    for (let i = 0; i < nameHex.length; i += 2) {
-      name += String.fromCharCode(parseInt(nameHex.slice(i, i + 2), 16));
+function trustSupportsChain(chain) {
+  if (state.externalAccount && !state.hdRoot) return chain === 'eth' || chain === 'sol';
+  return ['btc', 'eth', 'sol'].includes(chain) && Boolean(state.addresses?.[chain]);
+}
+
+/**
+ * Build, sign and broadcast a trust or revocation record on btc/eth/sol with
+ * the CURRENT account's keys. External wallet: the connected provider signs
+ * and sends (eth_sendTransaction / solana:signAndSendTransaction).
+ *
+ * @returns {Promise<{txHash: string, chain: string}>}
+ */
+async function publishTrustRecord({
+  recordType,
+  network,
+  recipientAddress = null,
+  level = null,
+  originalTxHash = null,
+}) {
+  const bt = await import('./blockchain-trust.js');
+
+  const metadataBytes = recordType === 'revocation'
+    ? bt.encodeRevocationMetadata(normalizeTxHashHex(originalTxHash))
+    : bt.encodeTrustMetadata(level, recipientAddress);
+
+  const external = !!(state.externalAccount && !state.hdRoot);
+  const paths = chainPaths(state.account);
+
+  if (network === 'btc') {
+    if (external) {
+      throw new Error('Bitcoin trust publishing needs the built-in wallet (the external lane covers EVM and Solana).');
     }
-    return name;
-  } catch { return null; }
-}
+    const sender = state.addresses.btc;
+    const utxos = await bt.fetchBtcUtxos(sender);
+    if (!utxos.length) throw new Error('No confirmed UTXOs — keep a small BTC balance to cover the trust fee.');
+    const { rawHex } = scopedChainKey(paths.btc, (signPrivateKey) => bt.btcTrustTransaction({
+      utxos, metadataBytes, changeAddress: sender, signPrivateKey, feeSats: 5000,
+    }));
+    return { txHash: await bt.broadcastBtcRawTx(rawHex), chain: 'btc' };
+  }
 
-async function resolveBNSName(btcAddress) {
-  if (!btcAddress) return null;
-  try {
-    const response = await fetch(apiUrl(`https://api.hiro.so/v1/addresses/stacks/${btcAddress}`));
-    if (!response.ok) return null;
-    const json = await response.json();
-    const names = json.names || [];
-    if (names.length > 0) return names[0]; // Returns e.g. "alice.btc"
-  } catch (e) { console.warn('BNS resolution failed:', e); }
-  return null;
-}
-
-async function resolveSolanaName(solAddress) {
-  if (!solAddress) return null;
-  try {
-    // Use Solana Name Service reverse lookup via public API
-    const response = await fetch(`https://sns-sdk-proxy.bonfida.workers.dev/v2/domain/${solAddress}`);
-    if (!response.ok) return null;
-    const json = await response.json();
-    if (json.result && json.result.length > 0) {
-      return json.result[0] + '.sol';
+  if (network === 'eth') {
+    // The record is a zero-value transaction TO the trusted address: the
+    // address is parsed strictly (SEC-014) and the built transaction is
+    // decoded and compared before and after signing.
+    const to = parseEthRecipient(recipientAddress).lower;
+    if (external) {
+      const ethSend = state.externalAccount.transport?.ethSendTransaction;
+      if (!ethSend) throw new Error('The connected EVM wallet offers no eth_sendTransaction.');
+      return { txHash: await ethSend({ to, data: metadataBytes, value: '0x0' }), chain: 'eth' };
     }
-  } catch (e) { console.warn('Solana name resolution failed:', e); }
-  return null;
+    const module = state.hdWalletModule;
+    if (!module?.ethereum?.tx) throw new Error('Ethereum tx builder not available.');
+    const sender = state.addresses.eth;
+    const rpc = trustEthRpc(bt);
+    const [nonceHex, head, chainIdHex] = await Promise.all([
+      rpc('eth_getTransactionCount', [sender, 'pending']),
+      rpc('eth_getBlockByNumber', ['latest', false]),
+      rpc('eth_chainId', []),
+    ]);
+    // Trust records live on Ethereum mainnet; an RPC that answers for another
+    // chain is not used.
+    if (chainIdHex !== '0x1') throw new Error('The Ethereum RPC is not on mainnet.');
+    if (typeof nonceHex !== 'string' || !/^0x[0-9a-f]{1,16}$/u.test(nonceHex)) throw new Error('The Ethereum RPC returned a malformed nonce.');
+    if (typeof head?.baseFeePerGas !== 'string' || !/^0x[0-9a-f]{1,24}$/u.test(head.baseFeePerGas)) throw new Error('The Ethereum RPC returned a malformed base fee.');
+    const baseFee = BigInt(head.baseFeePerGas);
+    const maxPriorityFee = 2000000000n; // 2 gwei
+    const expected = {
+      chainId: ETH_MAINNET_CHAIN_ID,
+      nonce: BigInt(nonceHex),
+      maxFeePerGas: baseFee * 2n + maxPriorityFee,
+      maxPriorityFeePerGas: maxPriorityFee,
+      // 21000 base + 16/byte of data + margin; trust records are <= 80 bytes.
+      gasLimit: 21000n + BigInt(metadataBytes.length * 16) + 4000n,
+      to,
+      value: 0n,
+      data: metadataBytes,
+    };
+    const tx = buildEthTransaction(module, expected);
+    let signed;
+    try {
+      assertEthTransactionMatches(decodeEip1559(tx.serialize()), expected, { signed: false });
+      scopedChainKey(paths.eth, (signPrivateKey) => tx.sign(signPrivateKey));
+      signed = tx.serialize();
+    } finally {
+      try { tx.destroy?.(); } catch { /* released either way */ }
+    }
+    assertEthTransactionMatches(decodeEip1559(signed), expected, { signed: true });
+    const txHash = await rpc('eth_sendRawTransaction', ['0x' + bytesToHexStr(signed)]);
+    return { txHash, chain: 'eth' };
+  }
+
+  if (network === 'sol') {
+    const sender = state.addresses.sol;
+    const recentBlockhash = await bt.solanaGetLatestBlockhash();
+    if (external) {
+      const solSend = state.externalAccount.transport?.solanaSignAndSendTransaction;
+      if (!solSend) throw new Error('The connected Solana wallet offers no solana:signAndSendTransaction.');
+      const { raw } = bt.buildSolanaTrustTx({
+        feePayer: sender, recentBlockhash, metadataBytes, signPrivateKey: null,
+      });
+      const signature = await solSend(raw);
+      const txHash = typeof signature === 'string' ? signature : bt.base58EncodeBytes(signature);
+      return { txHash, chain: 'sol' };
+    }
+    const built = scopedChainKey(paths.sol, (signPrivateKey) => bt.buildSolanaTrustTx({
+      feePayer: sender, recentBlockhash, metadataBytes, signPrivateKey,
+    }));
+    const txHash = await bt.broadcastSolanaRawTx(built.rawBase64);
+    return { txHash, chain: 'sol' };
+  }
+
+  throw new Error(`Unsupported trust network: ${network}`);
 }
 
-async function resolveNames(sessionGeneration = currentLegacySession()) {
-  if (!isCurrentLegacySession(sessionGeneration)) return null;
-  if (nameCache) return nameCache;
-
-  const btcAddress = state.addresses?.btc;
-  const ethAddress = state.addresses?.eth;
-  const solAddress = state.addresses?.sol;
-
-  const [bns, ens, sol] = await Promise.allSettled([
-    resolveBNSName(btcAddress),
-    resolveENSName(ethAddress),
-    resolveSolanaName(solAddress),
-  ]);
-
-  if (!isCurrentLegacySession(sessionGeneration)) return null;
-  nameCache = {
-    bns: bns.status === 'fulfilled' ? bns.value : null,
-    ens: ens.status === 'fulfilled' ? ens.value : null,
-    sol: sol.status === 'fulfilled' ? sol.value : null,
+function trustEthRpc(bt) {
+  return async (method, params) => {
+    let lastError = 'ETH RPC unavailable';
+    for (const endpoint of bt.getEthereumTrustRpcEndpoints()) {
+      try {
+        const resp = await fetch(apiUrl(endpoint), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+        });
+        if (!resp.ok) { lastError = `HTTP ${resp.status}`; continue; }
+        const data = await resp.json();
+        if (data.error) { lastError = data.error.message || 'ETH RPC error'; continue; }
+        return data.result;
+      } catch (e) { lastError = e?.message || 'ETH RPC fetch failed'; }
+    }
+    throw new Error(`Cannot reach an Ethereum RPC (${lastError})`);
   };
-  return nameCache;
 }
 
-function clearNameCache() {
-  nameCache = null;
+async function trustFeeEstimate(network) {
+  if (network === 'btc') return '5,000 sats';
+  if (network === 'sol') return '0.000005 SOL';
+  const bt = await import('./blockchain-trust.js');
+  const head = await trustEthRpc(bt)('eth_getBlockByNumber', ['latest', false]);
+  const baseFee = BigInt(head?.baseFeePerGas || '0x0');
+  const maxFee = baseFee * 2n + 2000000000n;
+  return formatEth(maxFee * (21000n + 80n * 16n + 4000n));
 }
 
-function updateAccountTitle(names, sessionGeneration = currentLegacySession()) {
-  if (!names || !isCurrentLegacySession(sessionGeneration)) return;
-  const titleEl = $('account-title');
-  if (!titleEl) return;
+async function publishTrust({ network, level, recipientAddress }) {
+  const sessionGeneration = currentLegacySession();
+  if (!isCurrentLegacySession(sessionGeneration)) throw new Error('Wallet session ended');
+  const { txHash } = await publishTrustRecord({ recordType: 'trust', network, level, recipientAddress });
+  dispatchTrustEvent({ type: 'trust-published', network, level, recipientAddress, txHash });
+  if (isCurrentLegacySession(sessionGeneration)) void runTrustScan(sessionGeneration, { force: true });
+  return { txHash };
+}
 
-  const resolved = [];
-  if (names.bns) resolved.push({ name: names.bns, service: 'BNS' });
-  if (names.ens) resolved.push({ name: names.ens, service: 'ENS' });
-  if (names.sol) resolved.push({ name: names.sol, service: 'SOL' });
+async function revokeTrust(record) {
+  const sessionGeneration = currentLegacySession();
+  if (!isCurrentLegacySession(sessionGeneration)) throw new Error('Wallet session ended');
+  const network = chainForTxRecord(record);
+  const { txHash } = await publishTrustRecord({
+    recordType: 'revocation',
+    network,
+    recipientAddress: record.recipientPubkey,
+    originalTxHash: normalizeTxHashHex(record.txHash),
+  });
+  dispatchTrustEvent({ type: 'trust-revoked', network, recipientAddress: record.recipientPubkey, txHash });
+  if (isCurrentLegacySession(sessionGeneration)) void runTrustScan(sessionGeneration, { force: true });
+  return { txHash };
+}
 
-  if (resolved.length === 0) {
-    // Fallback to truncated xpub
-    const xpub = state.hdRoot?.toXpub?.() || '';
-    titleEl.textContent = xpub ? middleTruncate(xpub, 12, 8) : 'Account';
+// Drain watch: for every outbound/mutual relationship, monitor the trusted
+// counterparty's published address balance client-side. A drop past the
+// drain ratio from the last funded observation flags the relationship
+// ("Drained" in People) and fires a drain trust event.
+async function monitorTrustDrains(relationships, sessionGeneration) {
+  if (!relationships || !relationships.length) return;
+  const { evaluateTrustDrain, getTrustDrainDropRatio } = await import('./blockchain-trust.js');
+  const dropRatio = getTrustDrainDropRatio();
+
+  const detectChain = (address) => {
+    const a = String(address ?? '').trim();
+    if (EVM_ADDR_RE.test(a)) return 'eth';
+    if (/^(1|3)[a-km-zA-HJ-NP-Z1-9]{25,34}$/.test(a) || /^bc1[a-z0-9]{25,90}$/.test(a)) return 'btc';
+    if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a)) return 'sol';
+    return null;
+  };
+
+  const account = state.account;
+  const stored = state.storage?.read(account, 'trust-drain-baselines', {}) ?? {};
+  const baselines = stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
+  let changed = false;
+
+  const watched = relationships
+    .filter((rel) => rel.direction !== 'inbound' && detectChain(rel.address))
+    .map((rel) => ({ rel, chain: detectChain(rel.address) }));
+
+  await Promise.all(watched.map(async ({ rel, chain }) => {
+    const key = String(rel.address).toLowerCase();
+    const baseline = baselines[key];
+    const prev = baseline ? Number(baseline.balance) : NaN;
+    try {
+      const result = await CHAIN_FETCHERS[chain](rel.address);
+      if (!isCurrentLegacySession(sessionGeneration)) return;
+      const cur = Number(result?.balance);
+      if (!Number.isFinite(cur)) return; // '--' = fetch failure, not a drain
+
+      // Recovery: balance returned to at least half the drained level.
+      if (baseline?.drained && cur >= prev * 0.5) {
+        baseline.balance = cur;
+        baseline.at = Date.now();
+        baseline.drained = false;
+        rel.drained = false;
+        changed = true;
+        return;
+      }
+
+      const evalRes = evaluateTrustDrain({ previousBalance: prev, currentBalance: cur, dropRatio });
+      if (evalRes.drained || baseline?.drained) rel.drained = true;
+      if (evalRes.drained && !baseline?.drained) {
+        rel.previousBalance = prev;
+        rel.currentBalance = cur;
+        dispatchTrustEvent({
+          type: 'drain', network: chain, address: rel.address,
+          previousBalance: prev, currentBalance: cur,
+          dropRatioObserved: evalRes.dropRatioObserved, dropRatio,
+        });
+      }
+
+      // Baseline = the highest funded level observed (the expected bond);
+      // it stays put while the address is drained so the alert persists.
+      if (!baseline || cur > prev) {
+        baselines[key] = {
+          balance: cur,
+          at: Date.now(),
+          drained: !!(evalRes.drained || baseline?.drained),
+        };
+        changed = true;
+      }
+    } catch (err) {
+      console.warn(`Drain check failed for ${rel.address}:`, err?.message || err);
+    }
+  }));
+
+  if (changed && isCurrentLegacySession(sessionGeneration) && account === state.account) {
+    state.storage?.write(account, 'trust-drain-baselines', baselines);
+  }
+}
+
+// =============================================================================
+// Account view wiring
+// =============================================================================
+
+let _shell = null;
+let _panes = null;
+const _barPhoto = new PhotoUrlController();
+let _barPhotoKey = '';
+let _barPhotoUrl = '';
+
+function sessionView() {
+  const kind = !state.loggedIn ? null : (state.externalAccount && !state.hdRoot ? 'external' : (isHdSession() ? 'seed' : null));
+  return {
+    kind,
+    method: state.sessionKind,
+    readOnly: isLegacyPasswordSession(),
+    account: state.account,
+    identity: kind === 'seed' ? state.identity : null,
+    external: state.externalAccount
+      ? { address: state.externalAccount.address, chain: state.externalAccount.chain, walletName: state.externalAccount.walletName }
+      : null,
+    addresses: { ...state.addresses },
+  };
+}
+
+function statusText() {
+  if (state.externalAccount && !state.hdRoot) {
+    const name = state.externalAccount.walletName || (state.externalAccount.chain === 'eth' ? 'MetaMask' : 'Phantom');
+    return `${name} · ${shortAddress(state.externalAccount.address, 6, 4)}`;
+  }
+  if (!isHdSession()) return '';
+  const method = state.sessionKind === 'password-legacy'
+    ? 'Old password method · read-only'
+    : (state.sessionKind === 'password' ? 'Password' : 'Seed phrase');
+  return state.account !== 0 ? `${method} · Account ${state.account}` : method;
+}
+
+async function refreshIdentityBar() {
+  if (!_shell) return;
+  const session = sessionView();
+  const profile = session.kind === 'seed' ? readProfile() : normalizeProfile({});
+  const name = session.kind === 'external' ? (state.externalAccount?.walletName || '') : profile.name;
+  const avatar = { initials: initialsOf(name) };
+  const photoKey = profile.photo || '';
+  if (photoKey && photoKey === _barPhotoKey && _barPhotoUrl) {
+    avatar.url = _barPhotoUrl;
+  } else if (photoKey) {
+    const bytes = photoBytesFromDataUrl(photoKey);
+    try {
+      if (!bytes) throw new Error('photo');
+      _barPhotoUrl = await _barPhoto.replace(bytes);
+      _barPhotoKey = photoKey;
+      avatar.url = _barPhotoUrl;
+    } catch {
+      _barPhotoKey = '';
+      _barPhotoUrl = '';
+    }
+  } else {
+    _barPhoto.logout();
+    _barPhotoKey = '';
+    _barPhotoUrl = '';
+  }
+  if (!_shell) return;
+  _shell.setIdentity({
+    name,
+    avatar,
+    peerId: session.kind === 'seed' ? state.identity?.peerId ?? '' : '',
+    statusText: statusText(),
+    onAddName: session.kind === 'seed' ? () => _shell.showSection('profile', { focus: true, intent: { edit: true } }) : null,
+  });
+}
+
+/**
+ * Migration from the old password method: derive the NEW wallet (scrypt
+ * profile, account 0) from the new username and password, keep only its
+ * public addresses as the sweep destination, and wipe its seed. The user then
+ * signs in with the new password to use it.
+ */
+async function setUpMigrationDestination({ username, password }) {
+  if (!isLegacyPasswordSession()) throw new Error('Only a wallet opened with the old password method is migrated.');
+  const sessionGeneration = currentLegacySession();
+  const assessment = assessNewPassword({ username, password, estimator: _strengthEstimator });
+  if (!assessment.ok) throw new Error(assessment.message);
+  const wasm = hdWallet();
+  const seed = await derivePasswordSeed(wasm, { username, password });
+  let root = null;
+  let destination;
+  try {
+    root = wasm.hdkey.fromSeed(seed);
+    const addresses = deriveAccountAddresses(wasm, root, 0);
+    destination = Object.freeze({
+      username: canonicalizeUsername(username),
+      btc: addresses.btc.address,
+      eth: addresses.eth.address,
+      sol: addresses.sol.address,
+    });
+  } finally {
+    seed.fill(0);
+    try { root?.wipe?.(); } catch { /* released */ }
+  }
+  if (!isCurrentLegacySession(sessionGeneration) || !isLegacyPasswordSession()) throw new Error('Wallet session ended');
+  if (destination.btc === state.addresses.btc || destination.eth === state.addresses.eth) {
+    throw new Error('The new wallet must differ from the old one.');
+  }
+  state.migrationDestination = destination;
+  emitEvent('migration');
+  return { ...destination };
+}
+
+function accountContext() {
+  return Object.freeze({
+    document,
+    wasm: hdWallet,
+    session: sessionView,
+    isCurrent: () => state.loggedIn,
+    on: onEvent,
+    loadEnvelopes,
+    download: (bytes, name, mime) => downloadBytes(document, bytes, name, mime),
+    copy: safeCopyText,
+    showSection: (section, options = {}) => _shell?.showSection(section, { focus: true, ...options }),
+    profile: { get: readProfile, save: saveProfile },
+    contacts: { list: readContacts, importFile: importContactFile, remove: removeContact },
+    contactCard: { build: buildContactCard },
+    keys: {
+      withEdKey: scopedEdKey,
+      withXKey: scopedXKey,
+      accountXpub: () => (isHdSession() ? accountXpub(state.hdRoot, state.account) : ''),
+      accountXprv: () => (isHdSession() ? accountXprv(state.hdRoot, state.account) : ''),
+    },
+    trust: {
+      state: () => ({
+        relationships: state.trustRelationships,
+        transactions: state.trustTransactions,
+        checkedAt: state.trustCheckedAt,
+        scanning: state.trustScanning,
+        error: state.trustError,
+      }),
+      refresh: ({ force = false } = {}) => runTrustScan(currentLegacySession(), { force }),
+      publish: publishTrust,
+      revoke: revokeTrust,
+      outboundRecord: matchOutboundTrustTx,
+      canPublish: () => state.loggedIn && !isLegacyPasswordSession() && (isHdSession() || Boolean(state.externalAccount)),
+      supportsChain: trustSupportsChain,
+      feeEstimate: trustFeeEstimate,
+    },
+    assets: {
+      state: assetsState,
+      refresh: refreshBalances,
+      canSend: (chain) => isHdSession() && !isLegacyPasswordSession() && (chain === 'btc' || chain === 'eth'),
+      prepare: prepareSendFromAccount,
+      send: sendFromAccount,
+      feeLine: (chain) => (chain === 'eth' ? ethSendFeeLine() : Promise.resolve('Network fee: 10,000 sats')),
+    },
+    migration: {
+      active: () => isLegacyPasswordSession(),
+      username: () => state.legacyUsername ?? '',
+      loadEstimator: () => ensureStrengthEstimator(),
+      assess: ({ username, password }) => assessNewPassword({ username, password, estimator: _strengthEstimator }),
+      setUp: setUpMigrationDestination,
+      destination: () => (state.migrationDestination ? { ...state.migrationDestination } : null),
+      prepareSweep: (chain) => prepareSendFromAccount({ chain, to: state.migrationDestination?.[chain] ?? '', amount: '', sweep: true }),
+      send: sendFromAccount,
+    },
+    settings: {
+      currency: getSelectedCurrency,
+      setCurrency,
+      switchAccount,
+      signOut: () => logout(),
+      forget: forgetWallet,
+    },
+  });
+}
+
+function setupAccountView() {
+  const root = $('account-view');
+  if (!root || _shell) return;
+  const ctx = accountContext();
+  _panes = {
+    profile: createProfilePane(root.querySelector('#account-pane-profile'), ctx),
+    messages: createMessagesPane(root.querySelector('#account-pane-messages'), ctx),
+    people: createPeoplePane(root.querySelector('#account-pane-people'), ctx),
+    assets: createAssetsPane(root.querySelector('#account-pane-assets'), ctx),
+    settings: createSettingsPane(root.querySelector('#account-pane-settings'), ctx),
+  };
+  _shell = createAccountShell({
+    document,
+    window,
+    root,
+    panes: _panes,
+    canOpen: () => state.loggedIn,
+  });
+  onEvent('profile', () => { void refreshIdentityBar(); });
+}
+
+function openAccount(section) {
+  if (!state.loggedIn) {
+    openLogin();
+    return false;
+  }
+  setupAccountView();
+  void refreshIdentityBar();
+  return _shell?.open(section) ?? false;
+}
+
+function closeAccount() {
+  _shell?.close();
+}
+
+function openLogin() {
+  if (state.loggedIn) {
+    openAccount();
     return;
   }
+  $('login-modal')?.classList.add('active');
+}
 
-  titleEl.replaceChildren();
-  resolved.forEach(({ name, service }, index) => {
-    if (index > 0) titleEl.append(document.createTextNode(' · '));
-    titleEl.append(document.createTextNode(name));
-    titleEl.append(createNode('sub', 'name-service-label', service));
-  });
+async function switchAccount(account) {
+  if (!isHdSession()) throw new Error('Only a seed-phrase session has account numbers.');
+  const n = normalizeAccount(account);
+  if (String(n) !== String(account) && Number(account) !== n) throw new Error('Choose a whole number from 0 to 99.');
+  legacySessionGuard.begin();
+  deriveAccountSession(n);
+  state.storage?.writeAccount(n);
+  updateHero();
+  await refreshIdentityBar();
+  emitEvent('identity');
+  // Every pane re-renders for the new account (the open one at once, the
+  // others when shown, since a switch resets them).
+  if (_shell?.isOpen()) _shell.showSection(_shell.currentSection() ?? 'settings', { updateHash: false });
+  notifyLogin();
+  // Balances are looked up when Assets opens (it re-renders above if it is
+  // the open section), not on every switch (SEC-054).
+}
+
+function forgetWallet() {
+  state.storage?.forget();
+  logout();
 }
 
 // =============================================================================
-// Currency Selector UI
+// Login / Logout
 // =============================================================================
 
-function initCurrencySelector() {
-  const gearBtn = $('bond-currency-gear');
-  const popover = $('bond-currency-popover');
-  if (!gearBtn || !popover) return;
-
-  // Populate options
-  const current = getSelectedCurrency();
-  popover.replaceChildren();
-  CURRENCY_OPTIONS.forEach((currency) => {
-    const option = createNode(
-      'button',
-      'currency-option' + (currency === current ? ' active' : ''),
-      CURRENCY_SYMBOLS[currency] + ' ' + currency,
-    );
-    option.type = 'button';
-    option.dataset.currency = currency;
-    popover.append(option);
-  });
-
-  gearBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    popover.classList.toggle('visible');
-  });
-
-  popover.addEventListener('click', async (e) => {
-    const btn = e.target.closest('[data-currency]');
-    if (!btn) return;
-    const currency = btn.dataset.currency;
-    setSelectedCurrency(currency);
-    popover.querySelectorAll('.currency-option').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    popover.classList.remove('visible');
-    priceCache = { data: null, currency: null, timestamp: 0 }; // invalidate
-    await updateAdversarialSecurity();
-  });
-
-  // Close popover on outside click
-  document.addEventListener('click', () => popover.classList.remove('visible'));
+function setSignedInChrome(signedIn) {
+  const navLogin = $('nav-login');
+  const navKeys = $('nav-keys');
+  const navLogout = $('nav-logout');
+  if (navLogin) navLogin.style.display = signedIn ? 'none' : 'flex';
+  if (navKeys) navKeys.style.display = signedIn ? 'flex' : 'none';
+  if (navLogout) navLogout.style.display = signedIn ? 'flex' : 'none';
+  const mobileLogin = $('mobile-login');
+  const mobileLogout = $('mobile-logout');
+  if (mobileLogin) mobileLogin.style.display = signedIn ? 'none' : 'block';
+  if (mobileLogout) mobileLogout.style.display = signedIn ? 'block' : 'none';
 }
 
-// =============================================================================
-// Adversarial Security / Bond Balances
-// =============================================================================
-
-async function updateAdversarialSecurity(sessionGeneration = currentLegacySession()) {
-  if (!isCurrentLegacySession(sessionGeneration)) return;
-  const hasWallet = state.wallet && (state.wallet.secp256k1 || state.wallet.ed25519);
-  if (!hasWallet) return;
-
-  // Wallet tab bond total is now updated by scanActiveAccounts/updateWalletBondTotal
-  updateWalletBondTotal(sessionGeneration);
+function updateHero() {
+  const heroWalletType = $('hero-wallet-type');
+  const heroAddress = $('hero-address');
+  const heroStats = $('hero-stats');
+  if (!state.loggedIn) {
+    if (heroWalletType) heroWalletType.textContent = '--';
+    if (heroAddress) heroAddress.textContent = '--';
+    if (heroStats) heroStats.classList.add('hidden');
+    return;
+  }
+  const chain = state.selectedCrypto;
+  if (heroWalletType) heroWalletType.textContent = state.externalAccount?.walletName || cryptoConfig[chain]?.name || '--';
+  if (heroAddress) heroAddress.textContent = truncateAddress(state.addresses[chain] || '');
+  if (heroStats) heroStats.classList.remove('hidden');
 }
 
-// =============================================================================
-// vCard Generation
-// =============================================================================
+/**
+ * EXTERNAL-WALLET SESSION: a connected external wallet opens the account view
+ * driven by the connected ADDRESS. No custody is fabricated: state.hdRoot
+ * stays null, so Profile and Messages say a seed phrase is needed, People and
+ * Assets work from the address, and Settings offers Currency and Sign out.
+ */
+async function loginExternal(account) {
+  legacySessionGuard.begin();
+  wipeSession();
+  state.loggedIn = true;
+  state.sessionKind = 'external';
+  const chain = account.lane === 'evm' ? 'eth' : 'sol';
+  state.externalAccount = { ...account, chain, balance: null };
+  state.addresses = { ...emptyAddresses(), [chain]: account.address };
+  state.selectedCrypto = chain;
+  state.storage = null;
+  state.identity = null;
+  state.chainAccounts = null;
+  _memoryBalanceCache = {};
 
-function generateVCard(info, { skipPhoto: _skipPhoto = false } = {}) {
-  const person = { KEY: [] };
+  $('login-modal')?.classList.remove('active');
+  clearSeedPhrase();
+  setSignedInChrome(true);
+  updateHero();
 
-  if (info.firstName || info.lastName) {
-    if (info.lastName) person.FAMILY_NAME = info.lastName;
-    if (info.firstName) person.GIVEN_NAME = info.firstName;
-    if (info.middleName) person.ADDITIONAL_NAME = info.middleName;
-    if (info.prefix) person.HONORIFIC_PREFIX = info.prefix;
-    if (info.suffix) person.HONORIFIC_SUFFIX = info.suffix;
-  }
-
-  const contacts = [];
-  if (info.email) {
-    contacts.push({ EMAIL: info.email, CONTACT_TYPE: 'HOME' });
-  }
-  if (info.phone) {
-    contacts.push({ TELEPHONE: info.phone, CONTACT_TYPE: 'CELL' });
-  }
-  if (contacts.length) {
-    person.CONTACT_POINT = contacts;
-  }
-
-  if (info.org) {
-    person.AFFILIATION = { LEGAL_NAME: info.org };
-  }
-
-  if (info.title) {
-    person.HAS_OCCUPATION = { NAME: info.title };
-  }
-
-  if (info.includeKeys && state.wallet?.x25519) {
-    const identity = getCurrentWalletIdentity();
-    person.KEY = [
-      // Always include the selected wallet xPub.
-      ...(identity.xpub ? [{
-        XPUB: identity.xpub,
-        LABEL: '',
-      }] : []),
-      // X25519 encryption key
-      {
-        PUBLIC_KEY: toBase64(state.wallet.x25519.publicKey),
-        LABEL: 'X25519',
-      },
-      // Active accounts from wallet scan
-      ...getCurrentWalletSigningAccounts()
-        .flatMap(a => {
-          const entries = [];
-          const pathLabel = a.path || `m/44'/${a.coinType}'/${a.account}'/0/${a.index}`;
-          try {
-            const { publicKey } = deriveAddressForPath(a.coinType, a.account, a.index);
-            const curve = a.coinType === 501 ? 'Ed25519' : 'secp256k1';
-            entries.push({
-              PUBLIC_KEY: toBase64(publicKey),
-              LABEL: `${curve} ${pathLabel}`,
-            });
-          } catch {}
-          if (a.address) {
-            entries.push({
-              KEY_ADDRESS: a.address,
-              LABEL: pathLabel,
-            });
-          }
-          return entries;
-        }),
-    ];
-  } else if (info.xpubOnly) {
-    const identity = getCurrentWalletIdentity();
-    if (identity.xpub) person.KEY = [{ XPUB: identity.xpub, LABEL: '' }];
-  }
-
-  const note = info.includeKeys
-    ? 'Generated by Space Data Network'
-    : undefined;
-
-  let vcard = createV3(person, note);
-
-  // Add NICKNAME field (not supported by createV3)
-  if (info.nickname) {
-    vcard = vcard.replace('END:VCARD', `NICKNAME:${info.nickname}\nEND:VCARD`);
-  }
-
-
-  return vcard;
+  if (_openAccountAfterLogin) openAccount();
+  else void refreshIdentityBar();
+  // No balance lookups until Assets opens (SEC-054).
 }
 
-// =============================================================================
-// vCard Digital Signature (Ed25519)
-// =============================================================================
+function login(kind = 'seed') {
+  legacySessionGuard.begin();
+  state.loggedIn = true;
+  state.sessionKind = kind;
+  if (kind !== 'password-legacy') state.legacyUsername = null;
+  state.migrationDestination = null;
+  state.externalAccount = null;
+  state.balanceScanning = false;
+  state.balanceGeneration = null;
+  state.selectedCrypto = 'btc';
 
-function getSignableBody(vcardText) {
-  const lines = vcardText.split('\n');
-  const sigItems = new Set();
-  for (const line of lines) {
-    const m = line.match(/^item(\d+)\.X-ABLabel:Digital Signature/);
-    if (m) sigItems.add(m[1]);
-  }
-  return lines.filter(line => {
-    if (line.trim() === 'END:VCARD') return false;
-    for (const n of sigItems) {
-      if (line.startsWith(`item${n}.`)) return false;
-    }
-    return true;
-  }).join('\n') + '\n';
+  const wasm = hdWallet();
+  const fp = namespaceFingerprint(wasm, state.hdRoot.toXpub());
+  state.storage = createAccountStorage({ fp, storage: browserStorage() });
+  migrateLegacyStorage(state.storage, browserStorage());
+  deriveAccountSession(state.storage.readAccount());
+
+  // Close login modal if open (and drop any phrase left in its word slots)
+  $('login-modal')?.classList.remove('active');
+  clearSeedPhrase();
+  setSignedInChrome(true);
+  updateHero();
+
+  // Legacy hosts receive public account metadata only: the SDN identity of
+  // the current account (Ed25519 peer ID, signing and encryption keys).
+  notifyLogin();
+
+  if (_openAccountAfterLogin) openAccount();
+  else void refreshIdentityBar();
+
+  // SEC-054: no balance or price lookups at sign-in. Each one sends this
+  // account's addresses, with the user's IP, to a third-party API; they run
+  // when Assets opens (assets-ui show()) or on Refresh balances.
 }
 
-function signVCard(vcardText) {
-  const body = getSignableBody(vcardText);
-  const messageBytes = new TextEncoder().encode(body);
-  const signed = withSelectedWalletSigningKey(
-    {
-      hdRoot: state.hdRoot,
-      wallet: getCurrentWallet(),
-      buildSigningPath,
-      deriveHDKey,
-    },
-    (signatureKey) => ({
-      signature: hdWallet().curves.ed25519.sign(messageBytes, signatureKey.privateKey),
-      accountIndex: signatureKey.accountIndex,
-      index: signatureKey.index,
-    }),
-  );
-  if (!signed) return vcardText;
-
-  const sigB64 = toBase64(signed.signature);
-
-  // Encode signature + selected wallet derivation path.
-  const sigValue = `${sigB64}:501:${signed.accountIndex}:${signed.index}`;
-
-  // Find highest itemN and key index
-  let maxItem = 0;
-  let maxKeyIdx = 0;
-  const itemRe = /item(\d+)\./g;
-  const keyIdxRe = /#(\d+)/g;
-  let match;
-  while ((match = itemRe.exec(vcardText)) !== null) {
-    maxItem = Math.max(maxItem, parseInt(match[1], 10));
-  }
-  while ((match = keyIdxRe.exec(vcardText)) !== null) {
-    maxKeyIdx = Math.max(maxKeyIdx, parseInt(match[1], 10));
-  }
-
-  const sigLines =
-    `item${maxItem + 1}.X-ABLabel:Digital Signature #${maxKeyIdx + 1}\n` +
-    `item${maxItem + 1}.X-ABRELATEDNAMES:${sigValue}\n`;
-
-  return body + sigLines + 'END:VCARD';
+/** Zero and drop every secret the session holds. */
+function wipeSession() {
+  try { state.masterSeed?.fill?.(0); } catch { /* best effort */ }
+  try { state.hdRoot?.wipe?.(); } catch { /* best effort */ }
+  state.masterSeed = null;
+  state.hdRoot = null;
+  state.identity = null;
+  state.chainAccounts = null;
+  state.migrationDestination = null;
 }
 
-function verifyVCardSignature(vcardText) {
-  // Parse all itemN label/value pairs
-  const lines = vcardText.split('\n');
-  const items = {};
-  for (const line of lines) {
-    const labelMatch = line.match(/^item(\d+)\.X-ABLabel:(.+)/);
-    if (labelMatch) {
-      items[labelMatch[1]] = items[labelMatch[1]] || {};
-      items[labelMatch[1]].label = labelMatch[2].trim();
-    }
-    const valueMatch = line.match(/^item(\d+)\.X-ABRELATEDNAMES:(.+)/);
-    if (valueMatch) {
-      items[valueMatch[1]] = items[valueMatch[1]] || {};
-      items[valueMatch[1]].value = valueMatch[2].trim();
-    }
+function logout() {
+  legacySessionGuard.invalidate();
+  _shell?.close();
+  for (const pane of Object.values(_panes ?? {})) {
+    try { pane.reset(); } catch { /* best effort */ }
   }
+  state.loggedIn = false;
+  wipeSession();
+  // A copied xprv does not outlive the session on the clipboard (SEC-081).
+  void clearSecretClipboard();
+  clearTrustState();
+  state.sessionKind = null;
+  state.legacyUsername = null;
+  state.storage = null;
+  state.account = 0;
+  state.externalAccount = null;
+  state.addresses = { btc: null, eth: null, sol: null };
+  state.balances = {};
+  state.balanceUpdatedAt = 0;
+  state.balanceError = '';
+  state.balanceScanning = false;
+  state.balanceGeneration = null;
+  state.prices = null;
+  _memoryBalanceCache = {};
+  balanceScanner.reset();
+  _barPhoto.logout();
+  _barPhotoKey = '';
+  _barPhotoUrl = '';
+  _shell?.setIdentity({});
 
-  // Find Digital Signature entry
-  let sigValue = null;
-  for (const item of Object.values(items)) {
-    if (item.label?.startsWith('Digital Signature') && item.value) {
-      sigValue = item.value;
-    }
-  }
+  setSignedInChrome(false);
+  updateHero();
 
-  if (!sigValue) {
-    return { verified: false, path: null, publicKey: null, error: 'unsigned' };
-  }
+  // Clear form inputs
+  const usernameEl = $('wallet-username');
+  const passwordEl = $('wallet-password');
+  if (usernameEl) usernameEl.value = '';
+  if (passwordEl) passwordEl.value = '';
+  clearSeedPhrase();
+  updateSeedLoginButton();
+  updatePasswordStrength('');
 
-  // Parse signature value: base64sig:coinType:account:index
-  const parts = sigValue.split(':');
-  if (parts.length < 4) {
-    return { verified: false, path: null, publicKey: null, error: 'Malformed signature' };
-  }
-  const sigB64 = parts[0];
-  const coinType = parts[1];
-  const account = parts[2];
-  const index = parts[3];
-  const path = `m/44'/${coinType}'/${account}'/0/${index}`;
-
-  // Find Ed25519 public key — look for "Public Key" entries with 32-byte (44-char base64) values
-  let ed25519PubB64 = null;
-  for (const item of Object.values(items)) {
-    if (item.label?.startsWith('Public Key') && item.value) {
-      try {
-        const decoded = Uint8Array.from(atob(item.value), c => c.charCodeAt(0));
-        if (decoded.length === 32) {
-          ed25519PubB64 = item.value;
-          break;
-        }
-      } catch { /* not base64 */ }
-    }
-  }
-
-  if (!ed25519PubB64) {
-    return { verified: false, path, publicKey: null, error: 'No Ed25519 public key found' };
-  }
-
-  // Reconstruct signable body and verify
-  const body = getSignableBody(vcardText);
-  const messageBytes = new TextEncoder().encode(body);
-  const sigBytes = Uint8Array.from(atob(sigB64), c => c.charCodeAt(0));
-  const pubKeyBytes = Uint8Array.from(atob(ed25519PubB64), c => c.charCodeAt(0));
-
-  try {
-    const valid = hdWallet().curves.ed25519.verify(messageBytes, sigBytes, pubKeyBytes);
-    return { verified: valid, path, publicKey: ed25519PubB64, error: valid ? null : 'Signature invalid' };
-  } catch (e) {
-    return { verified: false, path, publicKey: ed25519PubB64, error: e.message };
-  }
-}
-
-function hideImportedVcardPreview() {
-  state.importedVcardPreview = null;
-  const resultEl = $('vcf-import-result');
-  const fieldsEl = $('vcf-import-fields');
-  const sigStatus = $('vcf-import-sig-status');
-  if (fieldsEl) fieldsEl.replaceChildren();
-  if (sigStatus) {
-    sigStatus.replaceChildren();
-    sigStatus.style.display = 'none';
-  }
-  if (resultEl) resultEl.style.display = 'none';
-}
-
-function applyImportedVcardPreview() {
-  const imported = state.importedVcardPreview;
-  if (!imported) return;
-
-  for (const id of vcardFieldIds) {
-    const el = $(id);
-    if (el) el.value = imported.formValues[id] || '';
-  }
-
-  try { state.vcardPhotoBytes?.fill?.(0); } catch { /* best effort */ }
-  state.vcardPhotoBytes = null;
-  state.vcardPhotoUrl = null;
-  legacyPhotoUrls.logout();
-  resetPhotoPreview();
-
-  saveVcardIdentity();
-  updateIdentityCardSummary();
-  setPhotoActionsVisible(false);
-  $('vcard-edit-view').style.display = 'none';
-  $('vcard-form-view').style.display = '';
-  hideImportedVcardPreview();
-}
-
-function parseAndDisplayVCF(vcfText) {
-  const lines = vcfText.replace(/\r?\n /g, '').split(/\r?\n/);
-  const fields = {};
-  const keys = [];
-  const formValues = Object.fromEntries(vcardFieldIds.map(id => [id, '']));
-
-  for (const line of lines) {
-    const colonIdx = line.indexOf(':');
-    if (colonIdx === -1) continue;
-    const prop = line.substring(0, colonIdx).toUpperCase();
-    const value = line.substring(colonIdx + 1);
-
-    if (prop === 'FN') {
-      fields.name = value;
-    } else if (prop === 'N') {
-      const parts = value.split(';');
-      formValues['vcard-lastname'] = parts[0] || '';
-      formValues['vcard-firstname'] = parts[1] || '';
-      formValues['vcard-middlename'] = parts[2] || '';
-      formValues['vcard-prefix'] = parts[3] || '';
-      formValues['vcard-suffix'] = parts[4] || '';
-      if (!fields.name) {
-        fields.name = [parts[3], parts[1], parts[2], parts[0], parts[4]].filter(Boolean).join(' ');
-      }
-    } else if (prop === 'NICKNAME') {
-      formValues['vcard-nickname'] = value;
-    } else if (prop.startsWith('EMAIL')) {
-      formValues['vcard-email'] ||= value;
-      fields.email = value;
-    } else if (prop.startsWith('ORG')) {
-      const normalized = value.replace(/;/g, ', ');
-      formValues['vcard-org'] ||= normalized;
-      fields.org = normalized;
-    } else if (prop.startsWith('TITLE')) {
-      formValues['vcard-title'] ||= value;
-      fields.title = value;
-    } else if (prop.startsWith('TEL')) {
-      formValues['vcard-phone'] ||= value;
-      fields.tel = value;
-    } else if (prop.startsWith('ADR')) {
-      const parts = value.split(';');
-      formValues['vcard-street'] ||= [parts[1], parts[2]].filter(Boolean).join(' ');
-      formValues['vcard-city'] ||= parts[3] || '';
-      formValues['vcard-region'] ||= parts[4] || '';
-      formValues['vcard-postal'] ||= parts[5] || '';
-      formValues['vcard-country'] ||= parts[6] || '';
-    } else if (prop.startsWith('PHOTO')) {
-      // Imported URI/data markup is not an image-byte capability. The local
-      // upload path below performs magic, size, and decoded-dimension checks.
-      continue;
-    } else if (prop.startsWith('KEY')) {
-      const typeMatch = prop.match(/TYPE=(\w+)/i);
-      keys.push({ type: typeMatch ? typeMatch[1] : 'Unknown', value });
-    } else if (prop.startsWith('X-CRYPTO-KEY') || prop.startsWith('X-KEY')) {
-      keys.push({ type: prop.split(';')[0], value });
-    }
-  }
-
-  if (!formValues['vcard-firstname'] && !formValues['vcard-lastname'] && fields.name) {
-    formValues['vcard-firstname'] = fields.name;
-  }
-
-  const resultEl = $('vcf-import-result');
-  const photoEl = $('vcf-import-photo');
-  const fieldsEl = $('vcf-import-fields');
-  if (!resultEl || !fieldsEl) return;
-
-  if (photoEl) {
-    photoEl.replaceChildren(createNode('span', 'photo-placeholder-icon', 'Person'));
-  }
-
-  fieldsEl.replaceChildren();
-  const fieldMap = [
-    ['Name', fields.name],
-    ['Email', fields.email],
-    ['Org', fields.org],
-    ['Title', fields.title],
-    ['Phone', fields.tel],
-  ];
-  for (const [label, val] of fieldMap) {
-    if (val) {
-      const field = createNode('div', 'vcf-import-field');
-      field.append(
-        createNode('span', 'vcf-import-field-label', label),
-        createNode('span', 'vcf-import-field-value', val),
-      );
-      fieldsEl.append(field);
-    }
-  }
-
-  if (keys.length > 0) {
-    const keyContainer = createNode('div', 'vcf-import-keys');
-    for (const k of keys) {
-      const key = createNode('div', 'vcf-import-key');
-      key.append(
-        createNode('strong', null, k.type + ':'),
-        document.createTextNode(' '),
-        createNode('code', null, k.value),
-      );
-      keyContainer.append(key);
-    }
-    fieldsEl.append(keyContainer);
-  }
-
-  // Verify digital signature
-  const sigStatus = $('vcf-import-sig-status');
-  if (sigStatus) {
-    const result = verifyVCardSignature(vcfText);
-    if (result.error === 'unsigned') {
-      sigStatus.className = 'vcard-sig-badge sig-unsigned';
-      sigStatus.textContent = 'No signature';
-    } else if (result.verified) {
-      sigStatus.className = 'vcard-sig-badge sig-verified';
-      sigStatus.textContent = 'Verified (' + result.path + ')';
-    } else {
-      sigStatus.className = 'vcard-sig-badge sig-invalid';
-      sigStatus.textContent = 'Invalid signature';
-    }
-    sigStatus.style.display = 'flex';
-  }
-
-  state.importedVcardPreview = {
-    formValues,
-  };
-
-  resultEl.style.display = 'block';
+  $('login-modal')?.classList.remove('active');
 }
 
 // =============================================================================
@@ -4396,18 +1793,17 @@ function initGridAnimation() {
         value,
         opacity,
       };
-    } else {
-      const columnCount = Math.max(1, Math.floor(canvas.width / gridSize));
-      const col = (sequence % columnCount) * gridSize;
-      return {
-        x: col,
-        y: direction > 0 ? -20 : canvas.height + 20,
-        dx: 0,
-        dy: direction * speed,
-        value,
-        opacity,
-      };
     }
+    const columnCount = Math.max(1, Math.floor(canvas.width / gridSize));
+    const col = (sequence % columnCount) * gridSize;
+    return {
+      x: col,
+      y: direction > 0 ? -20 : canvas.height + 20,
+      dx: 0,
+      dy: direction * speed,
+      value,
+      opacity,
+    };
   }
 
   for (let i = 0; i < maxTravelers; i++) {
@@ -4438,7 +1834,7 @@ function initGridAnimation() {
         continue;
       }
 
-      ctx.fillStyle = `rgba(100, 200, 255, ${t.opacity})`;
+      ctx.fillStyle = `rgba(245, 165, 36, ${t.opacity * 0.6})`;
       ctx.fillText(t.value, t.x - 6, t.y + 3);
     }
 
@@ -4451,15 +1847,6 @@ function initGridAnimation() {
 // =============================================================================
 // Login Handler Setup
 // =============================================================================
-
-function browserWalletStorage() {
-  try {
-    const storage = window.localStorage;
-    return storage && typeof storage.getItem === 'function' ? storage : null;
-  } catch {
-    return null;
-  }
-}
 
 function quarantinedWalletEntries(storage) {
   if (!storage) return [];
@@ -4488,7 +1875,7 @@ function renderLegacyWalletQuarantine() {
   const section = $('legacy-wallet-quarantine');
   const list = $('legacy-wallet-quarantine-list');
   if (!section || !list) return;
-  const storage = browserWalletStorage();
+  const storage = browserStorage();
   const entries = quarantinedWalletEntries(storage);
   list.replaceChildren();
   setLegacyWalletQuarantineStatus('');
@@ -4502,9 +1889,11 @@ function renderLegacyWalletQuarantine() {
       if (event.isTrusted !== true) return;
       try {
         const raw = exportQuarantinedWalletRecord(storage, entry.key);
-        const copied = raw !== null && await safeCopyText(raw);
+        // A stored wallet record is key material: it leaves the clipboard
+        // after 30 seconds, like a copied xprv (SEC-081).
+        const copied = raw !== null && await copySecretText(raw);
         setLegacyWalletQuarantineStatus(copied
-          ? `Exported ${entry.key} to the clipboard.`
+          ? `Exported ${entry.key} to the clipboard. It is cleared from the clipboard in 30 seconds.`
           : 'Quarantined record export failed.');
       } catch {
         setLegacyWalletQuarantineStatus('Quarantined record export failed.');
@@ -4534,37 +1923,35 @@ function renderLegacyWalletQuarantine() {
 function setupLoginHandlers() {
   // External wallet — the FIRST sign-in method. The panel is the shared
   // hd-wallet-ui/external component; it discovers injected wallets
-  // (EIP-6963 / Wallet Standard) and connects. A successful connect opens
-  // the SAME account interface an HD login does (bond, balances, trust),
-  // driven by the connected address — never touching HD custody state
-  // (state.hdRoot stays null; nav logout ends the session).
-  const externalMount = $("external-wallet-mount");
+  // (EIP-6963 / Wallet Standard) and connects.
+  const externalMount = $('external-wallet-mount');
   if (externalMount && !externalMount.childElementCount) {
     const panelController = createExternalWalletPanel({
       mount: externalMount,
       onConnected: (account) => {
-        loginExternal(account).catch((e) => console.warn("External sign-in failed:", e));
+        loginExternal(account).catch((e) => console.warn('External sign-in failed:', e));
       },
     });
-    // Host-facing event surface: subscribeTrustEvents / notifyTrustEvent on
-    // the controller fan out trust lifecycle + drain alerts.
     _externalPanelController = panelController;
   }
 
-  // The stored-wallet (PIN/passkey/remembered) flow now lives in the isolated
-  // wallet-origin controller (origin-app/); the legacy storage-v3 helper API it
-  // relied on no longer exists in wallet-storage.js, which exports only the
-  // quarantine/remembered surface.
   renderLegacyWalletQuarantine();
 
-  // Method tab switching
-  $qa('.method-tab').forEach(tab => {
+  // Method tab switching. Leaving the Seed Phrase tab drops any phrase left
+  // in its word slots.
+  $qa('.method-tab').forEach((tab) => {
     tab.addEventListener('click', () => {
-      $qa('.method-tab').forEach(t => t.classList.remove('active'));
-      $qa('.method-content').forEach(c => c.classList.remove('active'));
+      const leavingSeed = $('seed-method')?.classList.contains('active') && tab.dataset.method !== 'seed';
+      $qa('.method-tab').forEach((t) => t.classList.remove('active'));
+      $qa('.method-content').forEach((c) => c.classList.remove('active'));
       tab.classList.add('active');
       const methodEl = $(`${tab.dataset.method}-method`);
       if (methodEl) methodEl.classList.add('active');
+      if (tab.dataset.method === 'password') void ensureStrengthEstimator().catch(() => {});
+      if (leavingSeed) {
+        clearSeedPhrase();
+        updateSeedLoginButton();
+      }
     });
   });
 
@@ -4580,9 +1967,10 @@ function setupLoginHandlers() {
     if (!pw || !btn) return;
     const showing = pw.type === 'text';
     pw.type = showing ? 'password' : 'text';
-    btn.querySelector('.eye-open').style.display = showing ? '' : 'none';
-    btn.querySelector('.eye-closed').style.display = showing ? 'none' : '';
+    btn.querySelector('.eye-open').style.display = showing ? 'inline' : 'none';
+    btn.querySelector('.eye-closed').style.display = showing ? 'none' : 'inline';
     btn.title = showing ? 'Show password' : 'Hide password';
+    btn.setAttribute('aria-label', btn.title);
     pw.focus();
   });
 
@@ -4591,100 +1979,156 @@ function setupLoginHandlers() {
     if (pw) updatePasswordStrength(pw.value);
   });
 
-  // Derive from password button
-  $('derive-from-password')?.addEventListener('click', async () => {
-    const username = $('wallet-username')?.value;
-    const password = $('wallet-password')?.value;
+  // The password form never submits (no inline handler: the page's CSP
+  // forbids them); Enter does nothing until a button is pressed.
+  $('password-method')?.addEventListener('submit', (event) => event.preventDefault());
 
-    if (!username || !password || password.length < 24) {
+  // Sign in (scrypt profile). The estimate is checked again here: the
+  // button state alone is not trusted.
+  $('derive-from-password')?.addEventListener('click', async () => {
+    const username = $('wallet-username')?.value ?? '';
+    const password = $('wallet-password')?.value ?? '';
+    const assessment = assessNewPassword({ username, password, estimator: _strengthEstimator });
+    if (!assessment.ok) {
+      setPasswordFeedback(assessment.message, { error: true });
       return;
     }
-
     const btn = $('derive-from-password');
-    btn.disabled = true;
-    btn.textContent = 'Logging in...';
-
+    setBusy(btn, true, 'Signing in…');
+    let failure = null;
     try {
-      const keys = await deriveKeysFromPassword(username, password);
-
-      // Best-effort: don't keep the password in the input field after login.
+      await deriveKeysFromPassword(username, password);
       const pwEl = $('wallet-password');
       if (pwEl) pwEl.value = '';
-
-      login(keys);
+      login('password');
     } catch (err) {
-      console.error('Login error:', err);
-      alert('Error: ' + err.message);
+      failure = err;
     } finally {
-      btn.disabled = false;
-      btn.textContent = 'Login';
+      setBusy(btn, false);
     }
+    updatePasswordStrength($('wallet-password')?.value ?? '');
+    if (failure) setPasswordFeedback(failure?.message || 'Sign-in failed.', { error: true });
   });
+
+  // Sign in with the old (fast, pre-3.0) password method: read-only, so the
+  // wallet's funds stay reachable and can be swept to a new wallet.
+  $('derive-from-legacy-password')?.addEventListener('click', async () => {
+    const username = $('wallet-username')?.value ?? '';
+    const password = $('wallet-password')?.value ?? '';
+    if (!username || !password) return;
+    const btn = $('derive-from-legacy-password');
+    setBusy(btn, true, 'Opening…');
+    let failure = null;
+    try {
+      await deriveKeysFromLegacyPassword(username, password);
+      const pwEl = $('wallet-password');
+      if (pwEl) pwEl.value = '';
+      state.legacyUsername = username;
+      login('password-legacy');
+    } catch (err) {
+      failure = err;
+    } finally {
+      setBusy(btn, false);
+    }
+    updatePasswordStrength($('wallet-password')?.value ?? '');
+    if (failure) setPasswordFeedback(failure?.message || 'Sign-in failed.', { error: true });
+  });
+
+  // Seed phrase word slots: typing, pasting (fills every slot) and Generate
+  // all land here; Login follows the phrase's validity. A paste of more than
+  // 24 words is an error and keeps Login disabled.
+  const seedMount = $('seed-phrase');
+  if (seedMount) {
+    _seedSlots = createSeedSlots(seedMount, {
+      document,
+      onChange: updateSeedLoginButton,
+      onOverflow: () => {
+        flashResult($('validate-seed'), { ok: false });
+        updateSeedLoginButton();
+      },
+    });
+  }
+
+  // The words are masked until "Show words" (SEC-081). Generate shows them:
+  // a new phrase has to be written down.
+  const seedToggle = $('toggle-seed-vis');
+  const syncSeedToggle = () => {
+    if (!seedToggle || !_seedSlots) return;
+    const shown = !_seedSlots.masked;
+    seedToggle.textContent = shown ? 'Hide words' : 'Show words';
+    seedToggle.setAttribute('aria-pressed', shown ? 'true' : 'false');
+  };
+  seedToggle?.addEventListener('click', () => {
+    _seedSlots?.setMasked(!_seedSlots.masked);
+    syncSeedToggle();
+  });
+  _seedSlotsMaskChanged = syncSeedToggle;
 
   // Generate seed phrase button
   $('generate-seed')?.addEventListener('click', () => {
-    const seedEl = $('seed-phrase');
-    if (seedEl) seedEl.value = generateSeedPhrase();
+    _seedSlots?.setWords(generateSeedPhrase());
+    _seedSlots?.setMasked(false);
+    syncSeedToggle();
     const deriveBtn = $('derive-from-seed');
     if (deriveBtn) deriveBtn.disabled = false;
   });
 
-  // Validate seed phrase button
+  // Validate seed phrase button: the button itself reports the result
+  // ("Validated" / "Error") and fades back.
   $('validate-seed')?.addEventListener('click', () => {
-    const seedEl = $('seed-phrase');
-    const valid = validateSeedPhrase(seedEl?.value || '');
+    const phrase = readSeedPhrase();
+    const valid = seedPhraseIsValid(phrase);
     if (valid) {
-      alert('Valid BIP39 seed phrase!');
-      const deriveBtn = $('derive-from-seed');
-      if (deriveBtn) deriveBtn.disabled = false;
-    } else {
-      alert('Invalid seed phrase');
-      const deriveBtn = $('derive-from-seed');
-      if (deriveBtn) deriveBtn.disabled = true;
+      _seedSlots?.clearMarks();
+    } else if (!_seedSlots?.overflow) {
+      _seedSlots?.markInvalid(seedWordIsUnknown);
     }
-  });
-
-  // Seed phrase input validation
-  $('seed-phrase')?.addEventListener('input', () => {
-    const phrase = $('seed-phrase')?.value.trim();
+    flashResult($('validate-seed'), { ok: valid });
     const deriveBtn = $('derive-from-seed');
-    if (phrase && phrase.split(/\s+/).length >= 12) {
-      if (deriveBtn) deriveBtn.disabled = !validateSeedPhrase(phrase);
-    } else {
-      if (deriveBtn) deriveBtn.disabled = true;
-    }
+    if (deriveBtn) deriveBtn.disabled = !valid;
   });
 
   // Derive from seed button
   $('derive-from-seed')?.addEventListener('click', async () => {
-    const phrase = $('seed-phrase')?.value;
-    if (!phrase || !validateSeedPhrase(phrase)) return;
+    const phrase = readSeedPhrase();
+    if (!phrase || !seedPhraseIsValid(phrase)) return;
 
     const btn = $('derive-from-seed');
     btn.disabled = true;
     btn.textContent = 'Logging in...';
 
     try {
-      const keys = await deriveKeysFromSeed(phrase);
+      await deriveKeysFromSeed(phrase);
 
-      // Best-effort: don't keep the mnemonic in the textarea after login.
-      const seedEl = $('seed-phrase');
-      if (seedEl) seedEl.value = '';
+      // Best-effort: don't keep the mnemonic in the word slots after login.
+      clearSeedPhrase();
 
-      login(keys);
+      login('seed');
     } catch (err) {
       alert('Error: ' + err.message);
     } finally {
-      btn.disabled = false;
       btn.textContent = 'Login';
+      // Enabled again only while the slots still hold a valid phrase (after a
+      // successful login they are empty).
+      updateSeedLoginButton();
     }
   });
-
 }
 
 // =============================================================================
 // Main App UI Handlers
 // =============================================================================
+
+/**
+ * Close a dialog. The login window drops any phrase left in its word slots.
+ */
+function closeModal(modal) {
+  modal.classList.remove('active');
+  if (modal.id === 'login-modal') {
+    clearSeedPhrase();
+    updateSeedLoginButton();
+  }
+}
 
 function setupMainAppHandlers() {
   // Nav actions
@@ -4695,609 +2139,30 @@ function setupMainAppHandlers() {
     $('login-modal')?.classList.add('active');
   });
   $('nav-logout')?.addEventListener('click', logout);
-  $('nav-keys')?.addEventListener('click', async () => {
-    $('keys-modal')?.classList.add('active');
-    if (state.loggedIn) {
-      const sessionGeneration = currentLegacySession();
-      const names = await resolveNames(sessionGeneration);
-      updateAccountTitle(names, sessionGeneration);
-    }
+  $('nav-keys')?.addEventListener('click', () => {
+    openAccount();
   });
 
-  // Modal close handlers
-  $qa('.modal').forEach(modal => {
+  // Modal close handlers. Only a deliberate close counts: a click whose
+  // mousedown and mouseup were both on the backdrop, the ✕ button, or Escape.
+  // (A text selection dragged out of the window does not close it.)
+  $qa('.modal').forEach((modal) => {
+    let pressedOnBackdrop = false;
+    modal.addEventListener('mousedown', (e) => {
+      pressedOnBackdrop = e.target === modal;
+    });
     modal.addEventListener('click', (e) => {
-      if (e.target === modal || e.target.closest?.('.modal-close')) {
-        modal.classList.remove('active');
-      }
+      const backdrop = e.target === modal && pressedOnBackdrop;
+      pressedOnBackdrop = false;
+      if (backdrop || e.target.closest?.('.modal-close')) closeModal(modal);
     });
   });
 
-  // Account modal tab switching
-  $qa('.modal-tab[data-modal-tab]').forEach(tab => {
-    tab.addEventListener('click', () => {
-      $qa('.modal-tab').forEach(t => t.classList.remove('active'));
-      $qa('.modal-tab-content').forEach(c => c.classList.remove('active'));
-      tab.classList.add('active');
-      const target = $(tab.dataset.modalTab);
-      if (target) target.classList.add('active');
-    });
-  });
-
-  // Messaging sub-tab switching
-  $qa('.messaging-sub-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      $qa('.messaging-sub-tab').forEach(t => t.classList.remove('active'));
-      $qa('.messaging-sub-content').forEach(c => c.classList.remove('active'));
-      tab.classList.add('active');
-      const target = $(tab.dataset.messagingSub);
-      if (target) target.classList.add('active');
-    });
-  });
-
-  // Identity card summary — updates the read-only card display from form fields
-  function updateIdentityCardSummary() {
-    const prefix = $('vcard-prefix')?.value || '';
-    const first = $('vcard-firstname')?.value || '';
-    const middle = $('vcard-middlename')?.value || '';
-    const last = $('vcard-lastname')?.value || '';
-    const suffix = $('vcard-suffix')?.value || '';
-    const nick = $('vcard-nickname')?.value || '';
-    const parts = [prefix, first, middle, last, suffix].filter(Boolean);
-    const nameEl = $('identity-card-name');
-    if (nameEl) {
-      const namePart = parts.length > 0 ? parts.join(' ') : '--';
-      if (nick) {
-        nameEl.replaceChildren(
-          document.createTextNode(namePart + ' '),
-          createNode('span', 'nickname', '(' + nick + ')'),
-        );
-      } else {
-        nameEl.textContent = namePart;
-      }
+  // Escape key closes dialogs (the account view handles its own Escape).
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      $qa('.modal.active').forEach((m) => closeModal(m));
     }
-
-    const titleEl = $('identity-card-title');
-    if (titleEl) titleEl.textContent = $('vcard-title')?.value || '';
-
-    const orgEl = $('identity-card-org');
-    if (orgEl) orgEl.textContent = $('vcard-org')?.value || '';
-
-    const emailEl = $('identity-card-email');
-    if (emailEl) emailEl.textContent = $('vcard-email')?.value || '';
-
-    const phoneEl = $('identity-card-phone');
-    if (phoneEl) phoneEl.textContent = $('vcard-phone')?.value || '';
-  }
-
-
-  // vCard identity auto-save
-  const VCARD_STORAGE_KEY = 'hd-wallet-vcard-identity';
-  const vcardFieldIds = [
-    'vcard-prefix', 'vcard-firstname', 'vcard-middlename', 'vcard-lastname',
-    'vcard-suffix', 'vcard-nickname', 'vcard-email', 'vcard-phone', 'vcard-org', 'vcard-title',
-    'vcard-street', 'vcard-city', 'vcard-region', 'vcard-postal', 'vcard-country'
-  ];
-
-  function saveVcardIdentity() {
-    const data = {};
-    for (const id of vcardFieldIds) {
-      const el = $(id);
-      if (el) data[id] = el.value;
-    }
-    try { localStorage.setItem(VCARD_STORAGE_KEY, JSON.stringify(data)); } catch (e) { /* ignore */ }
-  }
-
-  function restoreVcardIdentity() {
-    try {
-      const raw = localStorage.getItem(VCARD_STORAGE_KEY);
-      if (!raw) return;
-      const data = JSON.parse(raw);
-      for (const id of vcardFieldIds) {
-        const el = $(id);
-        if (el && data[id]) el.value = data[id];
-      }
-    } catch (e) { /* ignore */ }
-  }
-
-  restoreVcardIdentity();
-  updateIdentityCardSummary();
-
-  // Snapshot of field values before editing (for Back/cancel)
-  function snapshotVcardFields() {
-    state._vcardEditSnapshot = {};
-    for (const id of vcardFieldIds) {
-      const el = $(id);
-      if (el) state._vcardEditSnapshot[id] = el.value;
-    }
-  }
-
-  function restoreVcardSnapshot() {
-    const snapshot = state._vcardEditSnapshot;
-    if (!snapshot || typeof snapshot !== 'object') return;
-    for (const id of vcardFieldIds) {
-      const el = $(id);
-      if (el && snapshot[id] !== undefined) el.value = snapshot[id];
-    }
-  }
-
-  // Edit button — switch to edit view
-  $('identity-edit-btn')?.addEventListener('click', () => {
-    setPhotoActionsVisible(false);
-    stopCamera();
-    snapshotVcardFields();
-    $('vcard-form-view').style.display = 'none';
-    $('vcard-edit-view').style.display = 'flex';
-  });
-
-  // Save button — persist and return to card view
-  $('identity-save-btn')?.addEventListener('click', () => {
-    saveVcardIdentity();
-    updateIdentityCardSummary();
-    setPhotoActionsVisible(false);
-    $('vcard-edit-view').style.display = 'none';
-    $('vcard-form-view').style.display = '';
-  });
-
-  // Back button — discard changes and return to card view
-  $('identity-back-btn')?.addEventListener('click', () => {
-    restoreVcardSnapshot();
-    setPhotoActionsVisible(false);
-    stopCamera();
-    $('vcard-edit-view').style.display = 'none';
-    $('vcard-form-view').style.display = '';
-  });
-
-  const photoActions = $('vcard-photo-actions');
-  const photoEditBtn = $('vcard-photo-edit-btn');
-  function setPhotoActionsVisible(visible) {
-    if (photoActions) photoActions.classList.toggle('visible', visible);
-    if (photoEditBtn) {
-      photoEditBtn.classList.toggle('is-open', visible);
-      photoEditBtn.title = visible ? 'Close Photo Menu' : 'Edit Photo';
-    }
-  }
-  function arePhotoActionsVisible() {
-    return !!photoActions?.classList.contains('visible');
-  }
-  setPhotoActionsVisible(false);
-
-  function encodeVcardPhoto(
-    source,
-    sourceWidth,
-    sourceHeight,
-    sessionGeneration = currentLegacySession(),
-  ) {
-    if (!source || !sourceWidth || !sourceHeight
-        || !isCurrentLegacySession(sessionGeneration)) return null;
-    const maxDimension = 1024;
-    const quality = 0.9;
-    const scale = Math.min(1, maxDimension / Math.max(sourceWidth, sourceHeight));
-    const outputWidth = Math.max(1, Math.round(sourceWidth * scale));
-    const outputHeight = Math.max(1, Math.round(sourceHeight * scale));
-    const canvas = document.createElement('canvas');
-    canvas.width = outputWidth;
-    canvas.height = outputHeight;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return null;
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(source, 0, 0, sourceWidth, sourceHeight, 0, 0, outputWidth, outputHeight);
-    return new Promise((resolve) => {
-      canvas.toBlob(async (blob) => {
-        if (!blob || !isCurrentLegacySession(sessionGeneration)) {
-          resolve(null);
-          return;
-        }
-        try {
-          resolve(await readFileBytesForSession(blob, {
-            isCurrent: isCurrentLegacySession,
-            sessionGeneration,
-          }));
-        } catch {
-          resolve(null);
-        }
-      }, 'image/jpeg', quality);
-    });
-  }
-
-  function wipeVcardPhotoBytes() {
-    try { state.vcardPhotoBytes?.fill?.(0); } catch { /* best effort */ }
-    state.vcardPhotoBytes = null;
-  }
-
-  async function installVcardPhoto(bytes, sessionGeneration = currentLegacySession()) {
-    if (!isCurrentLegacySession(sessionGeneration)) return false;
-    const ownedBytes = new Uint8Array(bytes);
-    let installed = false;
-    try {
-      const blobUrl = await legacyPhotoUrls.replace(ownedBytes);
-      if (!isCurrentLegacySession(sessionGeneration)) {
-        legacyPhotoUrls.imageError(blobUrl);
-        return false;
-      }
-      wipeVcardPhotoBytes();
-      state.vcardPhotoBytes = ownedBytes;
-      state.vcardPhotoUrl = blobUrl;
-      installed = true;
-      showPhotoPreview(blobUrl);
-      return true;
-    } finally {
-      if (!installed) wipeSessionBytes(ownedBytes);
-    }
-  }
-
-  photoEditBtn?.addEventListener('click', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (arePhotoActionsVisible()) {
-      setPhotoActionsVisible(false);
-      stopCamera();
-      return;
-    }
-    setPhotoActionsVisible(true);
-  });
-
-  // Photo upload handler
-  $('vcard-photo-input')?.addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const sessionGeneration = currentLegacySession();
-    let bytes = null;
-    try {
-      bytes = await readFileBytesForSession(file, {
-        isCurrent: isCurrentLegacySession,
-        sessionGeneration,
-      });
-      if (!bytes || !isCurrentLegacySession(sessionGeneration)) return;
-      if (!await installVcardPhoto(bytes, sessionGeneration)) return;
-      if (!isCurrentLegacySession(sessionGeneration)) return;
-      stopCamera();
-      setPhotoActionsVisible(false);
-      saveVcardIdentity();
-    } catch {
-      if (isCurrentLegacySession(sessionGeneration)) {
-        alert('Please choose a valid PNG, JPEG, WebP, or GIF image no larger than 2 MiB and 2048 pixels per side.');
-      }
-    } finally {
-      wipeSessionBytes(bytes);
-      try { e.target.value = ''; } catch { /* the input may already be detached */ }
-    }
-  });
-
-  // Photo remove handler with confirmation modal
-  $('vcard-photo-remove')?.addEventListener('click', () => {
-    const modal = $('photo-remove-confirm-modal');
-    if (modal) modal.classList.add('active');
-  });
-
-  $('photo-remove-yes')?.addEventListener('click', () => {
-    wipeVcardPhotoBytes();
-    state.vcardPhotoUrl = null;
-    legacyPhotoUrls.logout();
-    resetPhotoPreview();
-    saveVcardIdentity();
-    const removeBtn = $('vcard-photo-remove');
-    if (removeBtn) removeBtn.style.display = 'none';
-    const input = $('vcard-photo-input');
-    if (input) input.value = '';
-    // Show upload/camera buttons again
-    const uploadLabel = document.querySelector('label[for="vcard-photo-input"]');
-    if (uploadLabel) uploadLabel.style.display = '';
-    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-      const cameraBtn = $('vcard-camera-btn');
-      if (cameraBtn) cameraBtn.style.display = '';
-    }
-    setPhotoActionsVisible(false);
-    const modal = $('photo-remove-confirm-modal');
-    if (modal) modal.classList.remove('active');
-  });
-
-  $('photo-remove-no')?.addEventListener('click', () => {
-    const modal = $('photo-remove-confirm-modal');
-    if (modal) modal.classList.remove('active');
-  });
-
-  function resetPhotoPreview() {
-    const preview = $('vcard-photo-preview');
-    if (!preview) return;
-    preview.querySelectorAll('img').forEach((el) => {
-      el.onerror = null;
-      try { el.removeAttribute('src'); } catch { /* URL ownership is revoked separately */ }
-      el.remove();
-    });
-    const placeholder = preview.querySelector('.photo-placeholder-icon');
-    if (placeholder) placeholder.style.display = '';
-    const video = $('vcard-camera-video');
-    if (video) video.style.display = 'none';
-    const removeBtn = $('vcard-photo-remove');
-    if (removeBtn) removeBtn.style.display = 'none';
-    const uploadLabel = document.querySelector('label[for="vcard-photo-input"]');
-    if (uploadLabel) uploadLabel.style.display = '';
-    const cameraBtn = $('vcard-camera-btn');
-    if (cameraBtn && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-      cameraBtn.style.display = '';
-    }
-  }
-
-  function resetLegacyPhotoUI() {
-    resetPhotoPreview();
-    setPhotoActionsVisible(false);
-    const input = $('vcard-photo-input');
-    const modal = $('photo-remove-confirm-modal');
-    if (input) input.value = '';
-    modal?.classList.remove('active');
-  }
-
-  function showPhotoPreview(blobUrl) {
-    const preview = $('vcard-photo-preview');
-    if (!preview || blobUrl !== state.vcardPhotoUrl || !blobUrl.startsWith('blob:')) return;
-    const placeholder = preview.querySelector('.photo-placeholder-icon');
-    if (placeholder) placeholder.style.display = 'none';
-    const video = $('vcard-camera-video');
-    if (video) video.style.display = 'none';
-    preview.querySelectorAll('img').forEach(el => el.remove());
-    const img = document.createElement('img');
-    img.src = blobUrl;
-    img.alt = 'Photo';
-    img.onerror = () => {
-      legacyPhotoUrls.imageError(blobUrl);
-      if (state.vcardPhotoUrl === blobUrl) {
-        wipeVcardPhotoBytes();
-        state.vcardPhotoUrl = null;
-      }
-      img.remove();
-      resetPhotoPreview();
-    };
-    preview.appendChild(img);
-    const removeBtn = $('vcard-photo-remove');
-    if (removeBtn) removeBtn.style.display = '';
-    const uploadLabel = document.querySelector('label[for="vcard-photo-input"]');
-    if (uploadLabel) uploadLabel.style.display = '';
-    const cameraBtn = $('vcard-camera-btn');
-    if (cameraBtn && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-      cameraBtn.style.display = '';
-    }
-  }
-
-  // Camera support
-  let cameraStream = null;
-  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-    const cameraBtn = $('vcard-camera-btn');
-    if (cameraBtn) cameraBtn.style.display = '';
-
-    cameraBtn?.addEventListener('click', async () => {
-      const sessionGeneration = currentLegacySession();
-      let acquiredStream = null;
-      try {
-        acquiredStream = await acquireMediaStreamForSession(navigator.mediaDevices, {
-          video: {
-            facingMode: 'user',
-            width: { ideal: 1280, max: 1920 },
-            height: { ideal: 720, max: 1080 },
-          }
-        }, {
-          isCurrent: isCurrentLegacySession,
-          sessionGeneration,
-        });
-        if (!acquiredStream || !isCurrentLegacySession(sessionGeneration)) return;
-        if (cameraStream && cameraStream !== acquiredStream) stopMediaStream(cameraStream);
-        cameraStream = acquiredStream;
-        const video = $('vcard-camera-video');
-        if (video) {
-          video.srcObject = cameraStream;
-          video.style.display = '';
-          await video.play();
-          if (!isCurrentLegacySession(sessionGeneration)) {
-            if (cameraStream === acquiredStream) cameraStream = null;
-            stopMediaStream(acquiredStream);
-            video.srcObject = null;
-            video.style.display = 'none';
-            return;
-          }
-        }
-        if (!isCurrentLegacySession(sessionGeneration)) return;
-        const preview = $('vcard-photo-preview');
-        if (preview) {
-          const placeholder = preview.querySelector('.photo-placeholder-icon');
-          if (placeholder) placeholder.style.display = 'none';
-          preview.querySelectorAll('img').forEach(el => el.style.display = 'none');
-        }
-        cameraBtn.style.display = 'none';
-        const uploadLabel = document.querySelector('label[for="vcard-photo-input"]');
-        if (uploadLabel) uploadLabel.style.display = 'none';
-        const removeBtn = $('vcard-photo-remove');
-        if (removeBtn) removeBtn.style.display = 'none';
-        const captureBtn = $('vcard-camera-capture');
-        const cancelBtn = $('vcard-camera-cancel');
-        if (captureBtn) captureBtn.style.display = '';
-        if (cancelBtn) cancelBtn.style.display = '';
-      } catch (err) {
-        if (cameraStream === acquiredStream) cameraStream = null;
-        stopMediaStream(acquiredStream);
-        if (!isCurrentLegacySession(sessionGeneration)) return;
-        console.error('Camera access denied:', err);
-        alert('Could not access camera. Please check your browser permissions.');
-      }
-    });
-
-    $('vcard-camera-capture')?.addEventListener('click', async () => {
-      const sessionGeneration = currentLegacySession();
-      if (!isCurrentLegacySession(sessionGeneration)) return;
-      const video = $('vcard-camera-video');
-      if (!video) return;
-      const vw = video.videoWidth;
-      const vh = video.videoHeight;
-      const bytes = await encodeVcardPhoto(video, vw, vh, sessionGeneration);
-      if (!bytes) return;
-      try {
-        if (!isCurrentLegacySession(sessionGeneration)) return;
-        if (!await installVcardPhoto(bytes, sessionGeneration)) return;
-        if (!isCurrentLegacySession(sessionGeneration)) return;
-        stopCamera();
-        setPhotoActionsVisible(false);
-        saveVcardIdentity();
-      } finally {
-        wipeSessionBytes(bytes);
-      }
-    });
-
-    $('vcard-camera-cancel')?.addEventListener('click', () => {
-      stopCamera();
-      if (state.vcardPhotoUrl) {
-        showPhotoPreview(state.vcardPhotoUrl);
-      } else {
-        resetPhotoPreview();
-      }
-    });
-  }
-
-  function stopCamera() {
-    if (cameraStream) {
-      stopMediaStream(cameraStream);
-      cameraStream = null;
-    }
-    const video = $('vcard-camera-video');
-    if (video) {
-      video.srcObject = null;
-      video.style.display = 'none';
-    }
-    const cameraBtn = $('vcard-camera-btn');
-    const uploadLabel = document.querySelector('label[for="vcard-photo-input"]');
-    const removeBtn = $('vcard-photo-remove');
-    const captureBtn = $('vcard-camera-capture');
-    const cancelBtn = $('vcard-camera-cancel');
-    if (uploadLabel) uploadLabel.style.display = '';
-    if (removeBtn) removeBtn.style.display = state.vcardPhotoUrl ? '' : 'none';
-    if (cameraBtn && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) cameraBtn.style.display = '';
-    if (captureBtn) captureBtn.style.display = 'none';
-    if (cancelBtn) cancelBtn.style.display = 'none';
-  }
-
-  state._stopLegacyCamera = stopCamera;
-  state._resetLegacyPhotoUI = resetLegacyPhotoUI;
-
-  // VCF import handler
-  $('vcf-import-input')?.addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const sessionGeneration = currentLegacySession();
-    if (!isCurrentLegacySession(sessionGeneration)) return;
-    try { state._vcardImportAbortController?.abort?.(); } catch { /* stale callback is guarded */ }
-    const importController = new AbortController();
-    state._vcardImportAbortController = importController;
-    try {
-      const vcfText = await readTextFileForSession(file, {
-        isCurrent: isCurrentLegacySession,
-        maximumBytes: MAX_VCARD_FILE_BYTES,
-        sessionGeneration,
-        signal: importController.signal,
-      });
-      if (!isCurrentLegacySession(sessionGeneration)
-          || state._vcardImportAbortController !== importController) return;
-      parseAndDisplayVCF(vcfText);
-    } catch (error) {
-      if (isCurrentLegacySession(sessionGeneration)
-          && state._vcardImportAbortController === importController
-          && error?.code !== 'STALE_SESSION') {
-        alert('Please choose a valid vCard no larger than 256 KiB.');
-      }
-    } finally {
-      if (state._vcardImportAbortController === importController) {
-        state._vcardImportAbortController = null;
-      }
-      try { e.target.value = ''; } catch { /* input may have been detached */ }
-    }
-  });
-
-  $('vcf-import-apply')?.addEventListener('click', () => {
-    applyImportedVcardPreview();
-  });
-
-  $('vcf-import-close')?.addEventListener('click', () => {
-    hideImportedVcardPreview();
-  });
-
-  // Reveal sensitive key buttons
-  $qa('.reveal-key-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const targetId = btn.dataset.target;
-      const targetEl = $(targetId);
-      if (targetEl) {
-        const isRevealed = targetEl.dataset.revealed === 'true';
-        const nextRevealed = !isRevealed;
-        targetEl.dataset.revealed = nextRevealed ? 'true' : 'false';
-
-        if (nextRevealed) {
-          if (targetId === 'wallet-xprv') {
-            targetEl.textContent = state.hdRoot?.toXprv?.() || 'N/A';
-          } else if (targetId === 'wallet-seed-phrase') {
-            targetEl.textContent = state.mnemonic || 'Not retained by the app';
-          }
-        } else {
-          if (targetId === 'wallet-xprv') {
-            targetEl.textContent = 'Hidden (click reveal)';
-          } else if (targetId === 'wallet-seed-phrase') {
-            targetEl.textContent = 'Not retained by the app';
-          }
-        }
-
-        setStaticSymbol(btn, isRevealed ? 'Show' : 'Hide', isRevealed ? 'Show key' : 'Hide key');
-      }
-    });
-  });
-
-  // Copy key buttons
-  $qa('.copy-key-btn').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const targetId = btn.dataset.copy;
-      const targetEl = $(targetId);
-      if (targetEl) {
-        try {
-          let value = '';
-          if (targetId === 'wallet-xpub') {
-            value = state.hdRoot?.toXpub?.() || '';
-          } else if (targetId === 'identity-wallet-xpub') {
-            value = getCurrentWalletIdentity().xpub || '';
-          } else if (targetId === 'identity-wallet-peerid') {
-            value = getCurrentWalletIdentity().peerId || '';
-          } else if (targetId === 'wallet-xprv') {
-            if (targetEl.dataset.revealed !== 'true') {
-              alert('Reveal the xprv first to copy it.');
-              return;
-            }
-            if (!confirm('Warning: copying your master private key (xprv) is extremely sensitive. Continue?')) {
-              return;
-            }
-            value = state.hdRoot?.toXprv?.() || '';
-          } else if (targetId === 'wallet-seed-phrase') {
-            alert('Seed phrase not available. For security, the app does not retain the mnemonic after login.');
-            return;
-          } else {
-            value = targetEl.textContent || '';
-          }
-          if (!value) {
-            throw new Error('Nothing to copy');
-          }
-          if (await safeCopyText(value)) {
-            btn.classList.add('copied');
-            setTimeout(() => btn.classList.remove('copied'), 1500);
-          } else {
-            throw new Error('Clipboard unavailable');
-          }
-        } catch (err) {
-          console.error('Copy failed:', err);
-        }
-      }
-    });
-  });
-
-  // Export wallet options
-  $qa('.export-option').forEach(option => {
-    option.addEventListener('click', async () => {
-      const format = option.dataset.format;
-      await exportWallet(format);
-    });
   });
 
   // Mobile menu toggle
@@ -5332,10 +2197,10 @@ function setupMainAppHandlers() {
   }
 
   // Navigation links - scroll to sections
-  $qa('.nav-link[data-tab]').forEach(link => {
+  $qa('.nav-link[data-tab]').forEach((link) => {
     link.addEventListener('click', (e) => {
       e.preventDefault();
-      $qa('.nav-link[data-tab]').forEach(l => l.classList.remove('active'));
+      $qa('.nav-link[data-tab]').forEach((l) => l.classList.remove('active'));
       link.classList.add('active');
       const tabEl = $(`${link.dataset.tab}-tab`);
       if (tabEl) {
@@ -5350,1483 +2215,7 @@ function setupMainAppHandlers() {
     });
   });
 
-  // Wallet tab controls
-  const handleWalletSelectChange = (e) => {
-    const walletId = Number.parseInt(e.target.value, 10);
-    if (Number.isNaN(walletId)) return;
-    state.activeWalletId = walletId;
-    closeWalletActionMenus();
-    closeAssetActionOverlay();
-    renderWalletSelector();
-    updateWalletBondDisplay();
-    renderAccountsList();
-    updateCustomPathDefault();
-  };
-  $('account-wallet-select')?.addEventListener('change', handleWalletSelectChange);
-  $('wallet-active-select')?.addEventListener('change', handleWalletSelectChange);
-  $('wallet-manage-tab')?.addEventListener('click', () => {
-    closeWalletActionMenus();
-    closeAssetActionOverlay();
-    $qa('.modal-tab').forEach(t => t.classList.remove('active'));
-    $qa('.modal-tab-content').forEach(c => c.classList.remove('active'));
-    $('wallet-manage-tab')?.classList.add('active');
-    $('wallet-tab-content')?.classList.add('active');
-    showWalletsView();
-  });
-  $('wallet-manage-btn')?.addEventListener('click', () => {
-    closeWalletActionMenus();
-    closeAssetActionOverlay();
-    showWalletsView();
-  });
-  $('wallet-scan-btn')?.addEventListener('click', () => {
-    scanActiveAccounts();
-  });
-  const sendAction = $('wallet-send-action');
-  const receiveAction = $('wallet-receive-action');
-  $('wallet-send-btn')?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    updateWalletActionMenus();
-    const sendMenu = $('wallet-send-menu');
-    const receiveMenu = $('wallet-receive-menu');
-    if (!sendMenu || !receiveMenu) return;
-    const nextVisible = !sendMenu.classList.contains('visible');
-    receiveMenu.classList.remove('visible');
-    sendMenu.classList.toggle('visible', nextVisible);
-  });
-  $('wallet-receive-btn-main')?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    // External session: one account, one address — straight to its QR.
-    if (state.externalAccount && !state.hdRoot) {
-      showReceiveModal({
-        name: state.externalAccount.chain.toUpperCase(),
-        address: state.externalAccount.address,
-      });
-      return;
-    }
-    updateWalletActionMenus();
-    const sendMenu = $('wallet-send-menu');
-    const receiveMenu = $('wallet-receive-menu');
-    if (!sendMenu || !receiveMenu) return;
-    const nextVisible = !receiveMenu.classList.contains('visible');
-    sendMenu.classList.remove('visible');
-    receiveMenu.classList.toggle('visible', nextVisible);
-  });
-  $qa('#wallet-send-menu .ph-action-menu-item').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const chain = btn.dataset.chain;
-      const acct = getWalletAccountForChain(chain);
-      closeWalletActionMenus();
-      if (!acct) return;
-      showSendView(state.activeAccounts.indexOf(acct));
-    });
-  });
-  $qa('#wallet-receive-menu .ph-action-menu-item').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const chain = btn.dataset.chain;
-      const acct = getWalletAccountForChain(chain);
-      closeWalletActionMenus();
-      if (!acct) return;
-      showReceiveModal(acct);
-    });
-  });
-  _root.addEventListener('click', (e) => {
-    if (sendAction?.contains(e.target) || receiveAction?.contains(e.target)) return;
-    closeWalletActionMenus();
-  });
-  $('wallet-asset-action-close')?.addEventListener('click', closeAssetActionOverlay);
-  $('wallet-export-btn-main')?.addEventListener('click', () => {
-    closeWalletActionMenus();
-    closeAssetActionOverlay();
-    showExportView();
-  });
-  $('wallet-advanced-btn-main')?.addEventListener('click', () => {
-    closeWalletActionMenus();
-    closeAssetActionOverlay();
-    showAdvancedView();
-  });
-  $('wallet-wallets-back')?.addEventListener('click', () => {
-    showWalletMainView();
-  });
-  $('wallet-manage-tab-active')?.addEventListener('click', () => {
-    setWalletManageTab('active');
-  });
-  $('wallet-manage-tab-inactive')?.addEventListener('click', () => {
-    setWalletManageTab('inactive');
-  });
-  $('wallet-export-back')?.addEventListener('click', () => {
-    showWalletMainView();
-  });
-  $('wallet-advanced-back')?.addEventListener('click', () => {
-    showWalletMainView();
-  });
-  // New Wallet in wallets view
-  $('wallet-new-btn')?.addEventListener('click', () => {
-    createNewWallet();
-  });
-  // Custom derivation path
-  $('custom-path-add')?.addEventListener('click', () => {
-    addCustomPathAccount();
-  });
-  $('custom-path-chain')?.addEventListener('change', () => {
-    updateCustomPathDefault();
-  });
-  $('custom-path-input')?.addEventListener('input', (e) => {
-    e.target.dataset.autogenerated = 'false';
-  });
-  // Send flow
-  $('wallet-send-back')?.addEventListener('click', () => {
-    hideSendView();
-  });
-  $('send-from-account')?.addEventListener('change', () => {
-    updateSendFromSelection();
-  });
-  $('send-to-address')?.addEventListener('input', () => {
-    validateSendForm();
-  });
-  $('send-amount')?.addEventListener('input', () => {
-    validateSendForm();
-    updateSendFiatEstimate();
-  });
-  $('send-max-btn')?.addEventListener('click', () => {
-    const select = $('send-from-account');
-    const amountInput = $('send-amount');
-    if (!select || !amountInput) return;
-    const idx = parseInt(select.value);
-    const acct = state.activeAccounts[idx];
-    if (!acct) return;
-    const bal = parseFloat(acct.balance);
-    if (!isNaN(bal) && bal > 0) {
-      amountInput.value = bal;
-      validateSendForm();
-      updateSendFiatEstimate();
-    }
-  });
-  $('send-review-btn')?.addEventListener('click', () => {
-    showSendReview();
-  });
-  $('send-confirm-btn')?.addEventListener('click', () => {
-    executeSend();
-  });
-  $('send-edit-btn')?.addEventListener('click', () => {
-    const compose = $('send-compose-step');
-    const review = $('send-review-step');
-    if (compose) compose.style.display = 'block';
-    if (review) review.style.display = 'none';
-  });
-
-  // PKI clear keys
-  $('pki-clear-keys')?.addEventListener('click', clearPKIKeys);
-
-  // PKI algorithm change
-  $('pki-algorithm')?.addEventListener('change', async () => {
-    const sessionGeneration = currentLegacySession();
-    await generatePKIKeyPairs(sessionGeneration);
-  });
-
-  // vCard generation
-  $('generate-vcard')?.addEventListener('click', async () => {
-    const sessionGeneration = currentLegacySession();
-    if (!isCurrentLegacySession(sessionGeneration)) return;
-    const info = {
-      prefix: $('vcard-prefix')?.value || '',
-      firstName: $('vcard-firstname')?.value || '',
-      middleName: $('vcard-middlename')?.value || '',
-      lastName: $('vcard-lastname')?.value || '',
-      suffix: $('vcard-suffix')?.value || '',
-      nickname: $('vcard-nickname')?.value || '',
-      email: $('vcard-email')?.value || '',
-      phone: $('vcard-phone')?.value || '',
-      org: $('vcard-org')?.value || '',
-      title: $('vcard-title')?.value || '',
-      includeKeys: true,
-    };
-
-    if (!info.firstName && !info.lastName) {
-      alert('Please enter at least a first or last name');
-      return;
-    }
-
-    try {
-      const { vcard, vcardForQR } = createSignedVCardArtifacts(info, { generateVCard, signVCard });
-      const qrCanvas = $('qr-code');
-      if (!isCurrentLegacySession(sessionGeneration)) return;
-      if (qrCanvas) {
-        await QRCode.toCanvas(qrCanvas, vcardForQR, {
-          width: 256,
-          margin: 2,
-          color: { dark: '#1e293b', light: '#ffffff' },
-        });
-      }
-      if (!isCurrentLegacySession(sessionGeneration)) {
-        clearCanvas(qrCanvas);
-        return;
-      }
-      state._exportedVCard = vcard;
-      const formView = $('vcard-form-view');
-      const resultView = $('vcard-result-view');
-      if (formView) formView.style.display = 'none';
-      if (resultView) resultView.style.display = '';
-
-      // Show/hide signature badge
-      const sigBadge = $('vcard-sig-badge');
-      updateVCardSignatureBadge(sigBadge, vcard);
-
-      // Populate raw view (strip PHOTO base64 data)
-      const rawView = $('vcard-raw-view');
-      if (rawView) {
-        const rawText = vcard.replace(/PHOTO;ENCODING=b;TYPE=\w+:[\s\S]*?(?=\n[A-Z])/m, 'PHOTO:[image data omitted]');
-        rawView.textContent = rawText;
-      }
-
-      // Reset toggle to QR
-      $('vcard-toggle-qr')?.classList.add('active');
-      $('vcard-toggle-raw')?.classList.remove('active');
-      document.querySelector('.qr-container')?.style.setProperty('display', '');
-      if (rawView) rawView.style.display = 'none';
-    } catch (err) {
-      if (!isCurrentLegacySession(sessionGeneration)) return;
-      alert('Error generating vCard: ' + err.message);
-    }
-  });
-
-  // Toggle QR / Raw
-  $('vcard-toggle-qr')?.addEventListener('click', () => {
-    $('vcard-toggle-qr')?.classList.add('active');
-    $('vcard-toggle-raw')?.classList.remove('active');
-    const qr = document.querySelector('#vcard-result-view .qr-container');
-    const raw = $('vcard-raw-view');
-    if (qr) qr.style.display = '';
-    if (raw) raw.style.display = 'none';
-  });
-
-  $('vcard-toggle-raw')?.addEventListener('click', () => {
-    $('vcard-toggle-raw')?.classList.add('active');
-    $('vcard-toggle-qr')?.classList.remove('active');
-    const qr = document.querySelector('#vcard-result-view .qr-container');
-    const raw = $('vcard-raw-view');
-    if (qr) qr.style.display = 'none';
-    if (raw) raw.style.display = '';
-  });
-
-  // Back to editor from result view
-  $('vcard-back-btn')?.addEventListener('click', () => {
-    const resultView = $('vcard-result-view');
-    const formView = $('vcard-form-view');
-    if (resultView) resultView.style.display = 'none';
-    if (formView) formView.style.display = '';
-  });
-
-  // Download vCard
-  $('download-vcard')?.addEventListener('click', () => {
-    if (!state.loggedIn) return;
-    const vcard = state._exportedVCard || '';
-    if (!vcard) return;
-    const blob = new Blob([vcard], { type: 'text/vcard' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'contact.vcf';
-    a.click();
-    URL.revokeObjectURL(url);
-  });
-
-  // Copy vCard
-  $('copy-vcard')?.addEventListener('click', async () => {
-    const sessionGeneration = currentLegacySession();
-    if (!isCurrentLegacySession(sessionGeneration)) return;
-    const vcard = state._exportedVCard || '';
-    if (!vcard) return;
-    try {
-      if (!await safeCopyText(vcard)) {
-        throw new Error('Clipboard unavailable');
-      }
-      if (!isCurrentLegacySession(sessionGeneration)) return;
-      const btn = $('copy-vcard');
-      if (btn) {
-        btn.textContent = 'Copied!';
-        setTimeout(() => {
-          if (isCurrentLegacySession(sessionGeneration)) btn.textContent = 'Copy vCard';
-        }, 2000);
-      }
-    } catch (err) {
-      if (!isCurrentLegacySession(sessionGeneration)) return;
-      alert('Failed to copy: ' + err.message);
-    }
-  });
-
-  // Refresh balances button
-  $('refresh-balances')?.addEventListener('click', () => {
-    updateAdversarialSecurity();
-  });
-
-  // Escape key closes modals
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      $qa('.modal.active').forEach(m => m.classList.remove('active'));
-    }
-  });
-
-  // Trust system handlers
-  setupTrustHandlers();
-}
-
-// =============================================================================
-// Trust System Handlers
-// =============================================================================
-
-function setupTrustHandlers() {
-  let trustScanInterval = null;
-  let trustScanRunning = false;
-  let trustScanGeneration = null;
-  let trustNextAllowedAt = 0;
-  const TRUST_SCAN_INTERVAL_MS = 3 * 60 * 1000; // 3 minutes
-  const TRUST_SCAN_FAIL_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes on failure
-  const TRUST_RULES_KEY = 'trust-rules';
-  const TRUST_IMPORTED_KEY = 'trust-imported-txs';
-  const TRUST_DRAIN_BASELINES_KEY = 'trust-drain-baselines';
-
-  // Auto-scan trust transactions
-  async function runTrustScan(sessionGeneration = currentLegacySession()) {
-    if (!isCurrentLegacySession(sessionGeneration) || !state.addresses) return;
-    if (trustScanRunning && trustScanGeneration === sessionGeneration) return;
-    if (Date.now() < trustNextAllowedAt) return;
-    trustScanRunning = true;
-    trustScanGeneration = sessionGeneration;
-    const addressesSnapshot = Object.freeze({ ...state.addresses });
-
-    const statusEl = $('trust-scan-status');
-    const labelEl = $('trust-scan-label');
-    const countEl = $('trust-scan-count');
-    if (statusEl) statusEl.classList.add('active');
-    if (labelEl) labelEl.textContent = 'Scanning...';
-
-    try {
-      const { scanAllTrustTransactions, renderTrustList } = await import('./trust-ui.js');
-      if (!isCurrentLegacySession(sessionGeneration)) return;
-      const { buildTrustGraph, analyzeTrustRelationships } = await import('./blockchain-trust.js');
-      if (!isCurrentLegacySession(sessionGeneration)) return;
-
-      // Scan on-chain transactions
-      const onChainTxs = await scanAllTrustTransactions(addressesSnapshot);
-      if (!isCurrentLegacySession(sessionGeneration)) return;
-
-      // Merge with imported transactions
-      let importedTxs = [];
-      try {
-        const raw = localStorage.getItem(TRUST_IMPORTED_KEY);
-        if (raw) importedTxs = JSON.parse(raw);
-      } catch (e) { /* ignore */ }
-
-      const allTxs = [...onChainTxs, ...importedTxs];
-
-      // Deduplicate by txHash
-      const seen = new Set();
-      const dedupedTxs = allTxs.filter(tx => {
-        if (seen.has(tx.txHash)) return false;
-        seen.add(tx.txHash);
-        return true;
-      });
-
-      // Build graph and analyze relationships
-      const graph = buildTrustGraph(dedupedTxs);
-      const relationships = analyzeTrustRelationships(addressesSnapshot, dedupedTxs);
-
-      // Apply trust rules
-      const rules = loadTrustRules();
-      if (rules.length > 0) {
-        applyTrustRules(relationships, rules);
-      }
-
-      // Drain watch: monitor trusted keys' published bond addresses
-      // client-side and raise the drain alert in the Trust Map.
-      await monitorTrustDrains(relationships);
-
-      // Store in state
-      if (!isCurrentLegacySession(sessionGeneration)) return;
-      state.trustGraph = graph;
-      state.trustTransactions = dedupedTxs;
-      state.trustRelationships = relationships;
-
-      // Update UI
-      const listEl = $('trust-list');
-      if (listEl) {
-        if (!isCurrentLegacySession(sessionGeneration)) return;
-        renderTrustList(listEl, relationships, addressesSnapshot);
-      }
-
-      if (!isCurrentLegacySession(sessionGeneration)) return;
-      if (labelEl) labelEl.textContent = 'Last scan: just now';
-      if (countEl) countEl.textContent = `${relationships.length} relationships`;
-
-      console.log(`Trust scan: ${dedupedTxs.length} txs, ${relationships.length} relationships`);
-      trustNextAllowedAt = 0;
-    } catch (err) {
-      if (!isCurrentLegacySession(sessionGeneration)) return;
-      console.error('Trust scan failed:', err);
-      trustNextAllowedAt = Date.now() + TRUST_SCAN_FAIL_COOLDOWN_MS;
-      if (labelEl) labelEl.textContent = 'Scan delayed (endpoint limited)';
-    } finally {
-      if (trustScanGeneration === sessionGeneration) {
-        trustScanRunning = false;
-        trustScanGeneration = null;
-      }
-    }
-  }
-
-  // Start auto-scanning
-  function startTrustScanning(sessionGeneration = currentLegacySession()) {
-    if (!isCurrentLegacySession(sessionGeneration)) return;
-    if (trustScanInterval) {
-      clearInterval(trustScanInterval);
-      trustScanInterval = null;
-    }
-    runTrustScan(sessionGeneration);
-    trustScanInterval = setInterval(() => {
-      if (isCurrentLegacySession(sessionGeneration)) runTrustScan(sessionGeneration);
-    }, TRUST_SCAN_INTERVAL_MS);
-  }
-
-  // Stop auto-scanning
-  function stopTrustScanning() {
-    if (trustScanInterval) {
-      clearInterval(trustScanInterval);
-      trustScanInterval = null;
-    }
-    trustScanRunning = false;
-    trustScanGeneration = null;
-    trustNextAllowedAt = 0;
-    const statusEl = $('trust-scan-status');
-    if (statusEl) statusEl.classList.remove('active');
-  }
-
-  // Load trust rules from localStorage
-  function loadTrustRules() {
-    try {
-      const raw = localStorage.getItem(TRUST_RULES_KEY);
-      return raw ? JSON.parse(raw) : [];
-    } catch (e) { return []; }
-  }
-
-  // Apply trust rules to relationships
-  function applyTrustRules(relationships, rules) {
-    for (const rel of relationships) {
-      for (const rule of rules) {
-        switch (rule.type) {
-          case 'mutual_tx_count':
-            if (rel.direction === 'mutual' && rel.txCount >= rule.params.threshold) {
-              rel.ruleLevel = Math.max(rel.ruleLevel || 0, rule.resultLevel);
-            }
-            break;
-          case 'last_interaction_days': {
-            const daysSince = (Date.now() - rel.lastSeen) / (1000 * 60 * 60 * 24);
-            if (daysSince <= rule.params.threshold) {
-              rel.ruleLevel = Math.max(rel.ruleLevel || 0, rule.resultLevel);
-            }
-            break;
-          }
-          case 'bidirectional_trust':
-            if (rel.direction === 'mutual') {
-              rel.ruleLevel = Math.min((rel.level || 2) + 1, 5);
-            }
-            break;
-          case 'address_blocklist':
-            // Handled by NEVER trust level on-chain
-            break;
-        }
-      }
-    }
-  }
-
-  // --- Trust publish / revoke lanes (owner 2026-08-21) -----------------------
-
-  const TX_HASH_HEX_RE = /^[0-9a-fA-F]{64}$/;
-  const EVM_ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
-
-  const bytesToHexStr = (bytes) =>
-    Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
-
-  // BTC/ETH hashes are 32-byte hex; Solana signatures are base58 — reduce
-  // any of them to the 64-hex/32-byte form the revocation record embeds.
-  function normalizeTxHashHex(hash) {
-    const raw = String(hash ?? '').trim();
-    const hex = raw.startsWith('0x') || raw.startsWith('0X') ? raw.slice(2) : raw;
-    if (TX_HASH_HEX_RE.test(hex)) return hex.toLowerCase();
-    const bytes = decodeBase58(raw);
-    if (bytes && bytes.length === 32) return bytesToHexStr(bytes);
-    throw new Error('Revocation needs a 32-byte original transaction hash (BTC/ETH hex or Solana signature).');
-  }
-
-  // HD signing keys derive the SAME identity account the published address
-  // belongs to (account 0 / index 0, matching deriveAllAddressesFromHD).
-  function deriveTrustSigningKey(coinType) {
-    if (!state.hdRoot) return null;
-    const derived = state.hdRoot.derivePath(buildSigningPath(coinType, 0, 0));
-    return derived.privateKey();
-  }
-
-  // Scanner chain names ('bitcoin'/'ethereum'/'solana', external 'eth'/'sol')
-  // -> publish-lane slug.
-  function chainForTxRecord(record) {
-    const c = String(record?.chain || record?.network || '').toLowerCase();
-    if (c.startsWith('bitcoin') || c === 'btc') return 'btc';
-    if (c.startsWith('ethereum') || c === 'eth') return 'eth';
-    if (c.startsWith('solana') || c === 'sol') return 'sol';
-    return null;
-  }
-
-  // The outbound on-chain trust record we published toward `address` — the
-  // revocation must bind its hash.
-  function matchOutboundTrustTx(address) {
-    const target = String(address ?? '').toLowerCase();
-    return (state.trustTransactions || []).find(tx =>
-      tx.type === 'trust' &&
-      String(tx.recipientPubkey ?? '').toLowerCase() === target &&
-      chainForTxRecord(tx) !== null
-    ) || null;
-  }
-
-  /**
-   * Build, sign and broadcast a trust or revocation record on btc/eth/sol.
-   * Built-in wallet: derived HD keys + free-RPC broadcast. External wallet:
-   * the connected provider signs and sends (eth_sendTransaction /
-   * solana:signAndSendTransaction through the panel transport).
-   *
-   * @returns {Promise<{txHash: string, chain: string}>}
-   */
-  async function publishTrustRecord({
-    recordType,
-    network,
-    recipientAddress = null,
-    level = null,
-    originalTxHash = null,
-  }) {
-    const bt = await import('./blockchain-trust.js');
-
-    const metadataBytes = recordType === 'revocation'
-      ? bt.encodeRevocationMetadata(normalizeTxHashHex(originalTxHash))
-      : bt.encodeTrustMetadata(level, recipientAddress);
-
-    const external = !!(state.externalAccount && !state.hdRoot);
-
-    if (network === 'btc') {
-      if (external) {
-        throw new Error('Bitcoin trust publishing needs the built-in wallet (the external lane covers EVM and Solana).');
-      }
-      const sender = state.addresses.btc;
-      const utxos = await bt.fetchBtcUtxos(sender);
-      if (!utxos.length) throw new Error('No confirmed UTXOs — keep a small BTC balance to cover the trust fee.');
-      const signPrivateKey = deriveTrustSigningKey(0);
-      if (!signPrivateKey) throw new Error('No built-in Bitcoin signing key.');
-      const { rawHex } = bt.btcTrustTransaction({
-        utxos, metadataBytes, changeAddress: sender, signPrivateKey, feeSats: 5000,
-      });
-      return { txHash: await bt.broadcastBtcRawTx(rawHex), chain: 'btc' };
-    }
-
-    if (network === 'eth') {
-      const to = recipientAddress;
-      if (external) {
-        const ethSend = state.externalAccount.transport?.ethSendTransaction;
-        if (!ethSend) throw new Error('The connected EVM wallet offers no eth_sendTransaction.');
-        return { txHash: await ethSend({ to, data: metadataBytes, value: '0x0' }), chain: 'eth' };
-      }
-      const module = state.hdWalletModule;
-      if (!module?.ethereum?.tx) throw new Error('Ethereum tx builder not available.');
-      const sender = state.addresses.eth;
-      const rpc = async (method, params) => {
-        let lastError = 'ETH RPC unavailable';
-        for (const endpoint of bt.getEthereumTrustRpcEndpoints()) {
-          try {
-            const resp = await fetch(apiUrl(endpoint), {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-            });
-            if (!resp.ok) { lastError = `HTTP ${resp.status}`; continue; }
-            const data = await resp.json();
-            if (data.error) { lastError = data.error.message || 'ETH RPC error'; continue; }
-            return data.result;
-          } catch (e) { lastError = e?.message || 'ETH RPC fetch failed'; }
-        }
-        throw new Error(`Cannot reach an Ethereum RPC (${lastError})`);
-      };
-
-      const [nonceHex, head, chainIdHex] = await Promise.all([
-        rpc('eth_getTransactionCount', [sender, 'latest']),
-        rpc('eth_getBlockByNumber', ['latest', false]),
-        rpc('eth_chainId', []),
-      ]);
-      const nonce = Number.parseInt(nonceHex, 16);
-      const baseFee = BigInt(head?.baseFeePerGas || '0x0');
-      const maxPriorityFee = 2000000000n; // 2 gwei
-      const maxFee = baseFee * 2n + maxPriorityFee;
-      // 21000 base + 16/byte of data + margin; trust records are <= 80 bytes.
-      const gasLimit = 21000n + BigInt(metadataBytes.length * 16) + 4000n;
-      const tx = module.ethereum.tx.createEIP1559({
-        nonce,
-        maxFeePerGas: maxFee,
-        maxPriorityFeePerGas: maxPriorityFee,
-        gasLimit,
-        to,
-        value: 0n,
-        data: metadataBytes,
-        chainId: Number.parseInt(chainIdHex, 16),
-      });
-      const signPrivateKey = deriveTrustSigningKey(60);
-      if (!signPrivateKey) throw new Error('No built-in Ethereum signing key.');
-      tx.sign(signPrivateKey);
-      const txHash = await rpc('eth_sendRawTransaction', ['0x' + bytesToHexStr(tx.serialize())]);
-      return { txHash, chain: 'eth' };
-    }
-
-    if (network === 'sol') {
-      const sender = state.addresses.sol;
-      const recentBlockhash = await bt.solanaGetLatestBlockhash();
-      if (external) {
-        const solSend = state.externalAccount.transport?.solanaSignAndSendTransaction;
-        if (!solSend) throw new Error('The connected Solana wallet offers no solana:signAndSendTransaction.');
-        const { raw } = bt.buildSolanaTrustTx({
-          feePayer: sender, recentBlockhash, metadataBytes, signPrivateKey: null,
-        });
-        const signature = await solSend(raw);
-        const txHash = typeof signature === 'string'
-          ? signature
-          : bt.base58EncodeBytes(signature);
-        return { txHash, chain: 'sol' };
-      }
-      const signPrivateKey = deriveTrustSigningKey(501);
-      if (!signPrivateKey) throw new Error('No built-in Solana signing key.');
-      const built = bt.buildSolanaTrustTx({
-        feePayer: sender, recentBlockhash, metadataBytes, signPrivateKey,
-      });
-      const txHash = await bt.broadcastSolanaRawTx(built.rawBase64);
-      return { txHash, chain: 'sol' };
-    }
-
-    throw new Error(`Unsupported trust network: ${network}`);
-  }
-
-  // Establish trust button — builds, signs and BROADCASTS the record on the
-  // chosen chain (built-in wallet keys, or the connected external wallet's
-  // provider for eth/sol).
-  $('establish-trust-btn')?.addEventListener('click', async () => {
-    if (!state.loggedIn) { alert('Please login first'); return; }
-    // Their session-guard + modal-closing skeleton carrying our real publish
-    // path (their side shipped a non-publishing TODO placeholder here).
-    const sessionGeneration = currentLegacySession();
-    const { closeActiveTrustModals, showEstablishTrustModal } = await import('./trust-ui.js');
-    if (!isCurrentLegacySession(sessionGeneration)) return;
-    closeActiveTrustModals();
-    state._closeTrustModals = closeActiveTrustModals;
-    showEstablishTrustModal(async ({ level, network, recipientAddress }) => {
-      if (!isCurrentLegacySession(sessionGeneration)) return;
-      try {
-        const { txHash } = await publishTrustRecord({
-          recordType: 'trust', network, level, recipientAddress,
-        });
-        dispatchTrustEvent({ type: 'trust-published', network, level, recipientAddress, txHash });
-        runTrustScan();
-        alert(`Trust record published on ${network.toUpperCase()}.\nTransaction: ${txHash}`);
-      } catch (err) {
-        console.error('Trust publish failed:', err);
-        alert('Publish failed: ' + (err.message || 'Unknown error'));
-      }
-    }, { isCurrent: () => isCurrentLegacySession(sessionGeneration) });
-  });
-
-  // Revoke delegation — the revoke button lives in trust-ui's rendered rows.
-  $('trust-list')?.addEventListener('click', async (e) => {
-    const revokeBtn = e.target.closest('.trust-revoke-btn');
-    if (!revokeBtn) return;
-    const address = revokeBtn.dataset?.address;
-    const record = matchOutboundTrustTx(address);
-    if (!record) {
-      alert('No outbound on-chain trust record found for this address.');
-      return;
-    }
-    const network = chainForTxRecord(record);
-    const { showRevokeTrustModal } = await import('./trust-ui.js');
-    showRevokeTrustModal(record.txHash, async ({ originalTxHash }) => {
-      try {
-        const { txHash, chain } = await publishTrustRecord({
-          recordType: 'revocation',
-          network,
-          recipientAddress: record.recipientPubkey,
-          originalTxHash: normalizeTxHashHex(originalTxHash),
-        });
-        dispatchTrustEvent({ type: 'trust-revoked', network, recipientAddress: record.recipientPubkey, txHash });
-        runTrustScan();
-        alert(`Revocation published on ${network.toUpperCase()}.\nTransaction: ${txHash}`);
-      } catch (err) {
-        console.error('Trust revocation failed:', err);
-        alert('Revocation failed: ' + (err.message || 'Unknown error'));
-      }
-    });
-  });
-
-  // Drain watch: for every outbound/mutual relationship, monitor the trusted
-  // counterparty's published address balance client-side. A drop past the
-  // drain ratio from the last funded observation flags the relationship,
-  // raises the alert in the Trust Map, and fires a drain trust event.
-  async function monitorTrustDrains(relationships) {
-    if (!relationships || !relationships.length) return;
-    const { evaluateTrustDrain, getTrustDrainDropRatio } = await import('./blockchain-trust.js');
-    const dropRatio = getTrustDrainDropRatio();
-
-    const detectChain = (address) => {
-      const a = String(address ?? '').trim();
-      if (EVM_ADDR_RE.test(a)) return 'eth';
-      if (/^(1|3)[a-km-zA-HJ-NP-Z1-9]{25,34}$/.test(a) || /^bc1[a-z0-9]{25,90}$/.test(a)) return 'btc';
-      if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a)) return 'sol';
-      return null;
-    };
-    const fetchers = { btc: fetchBtcBalance, eth: fetchEthBalance, sol: fetchSolBalance };
-
-    let baselines = {};
-    try {
-      baselines = JSON.parse(localStorage.getItem(TRUST_DRAIN_BASELINES_KEY) || '{}');
-    } catch (e) { /* fresh baselines */ }
-    let changed = false;
-
-    const watched = relationships
-      .filter(rel => rel.direction !== 'inbound' && detectChain(rel.address))
-      .map(rel => ({ rel, chain: detectChain(rel.address) }));
-
-    await Promise.all(watched.map(async ({ rel, chain }) => {
-      const key = String(rel.address).toLowerCase();
-      const baseline = baselines[key];
-      const prev = baseline ? Number(baseline.balance) : NaN;
-      try {
-        const result = await fetchers[chain](rel.address);
-        const cur = Number(result?.balance);
-        if (!Number.isFinite(cur)) return; // '--' = fetch failure, not a drain
-
-        // Recovery: balance returned to at least half the drained level —
-        // re-arm the watch at the recovered balance.
-        if (baseline?.drained && cur >= prev * 0.5) {
-          baseline.balance = cur;
-          baseline.at = Date.now();
-          baseline.drained = false;
-          rel.drained = false;
-          changed = true;
-          return;
-        }
-
-        const evalRes = evaluateTrustDrain({ previousBalance: prev, currentBalance: cur, dropRatio });
-        if (evalRes.drained && !baseline?.drained) {
-          rel.drained = true;
-          rel.previousBalance = prev;
-          rel.currentBalance = cur;
-          rel.dropRatioObserved = evalRes.dropRatioObserved;
-          rel.dropRatio = dropRatio;
-          dispatchTrustEvent({
-            type: 'drain', network: chain, address: rel.address,
-            previousBalance: prev, currentBalance: cur,
-            dropRatioObserved: evalRes.dropRatioObserved, dropRatio,
-          });
-        }
-
-        // Baseline = the highest funded level observed (the expected bond);
-        // it stays put while the address is drained so the alert persists.
-        if (!baseline || cur > prev) {
-          baselines[key] = {
-            balance: cur,
-            at: Date.now(),
-            drained: !!(evalRes.drained || baseline?.drained),
-          };
-          changed = true;
-        }
-      } catch (err) {
-        console.warn(`Drain check failed for ${rel.address}:`, err?.message || err);
-      }
-    }));
-
-    if (changed) {
-      try {
-        localStorage.setItem(TRUST_DRAIN_BASELINES_KEY, JSON.stringify(baselines));
-      } catch (e) { /* storage quota — monitor still works for this session */ }
-    }
-  }
-
-  // Rules button
-  $('trust-rules-btn')?.addEventListener('click', async () => {
-    const sessionGeneration = currentLegacySession();
-    if (!isCurrentLegacySession(sessionGeneration)) return;
-    const { closeActiveTrustModals, showRulesModal } = await import('./trust-ui.js');
-    if (!isCurrentLegacySession(sessionGeneration)) return;
-    closeActiveTrustModals();
-    state._closeTrustModals = closeActiveTrustModals;
-    const currentRules = loadTrustRules();
-    showRulesModal(currentRules, (updatedRules) => {
-      if (!isCurrentLegacySession(sessionGeneration)) return;
-      localStorage.setItem(TRUST_RULES_KEY, JSON.stringify(updatedRules));
-      // Re-apply rules
-      if (state.trustRelationships) {
-        applyTrustRules(state.trustRelationships, updatedRules);
-        runTrustScan(sessionGeneration);
-      }
-    }, { isCurrent: () => isCurrentLegacySession(sessionGeneration) });
-  });
-
-  // Export trust data
-  $('trust-export-btn')?.addEventListener('click', async () => {
-    if (!state.trustTransactions || state.trustTransactions.length === 0) {
-      alert('No trust data to export. Wait for a scan to complete.');
-      return;
-    }
-    const sessionGeneration = currentLegacySession();
-    const { exportTrustData } = await import('./trust-ui.js');
-    if (!isCurrentLegacySession(sessionGeneration)) return;
-    const xpub = state.hdRoot ? state.hdRoot.toXpub() : '';
-    exportTrustData(state.trustTransactions, xpub);
-  });
-
-  // Import trust data
-  $('trust-import-input')?.addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const sessionGeneration = currentLegacySession();
-    if (!isCurrentLegacySession(sessionGeneration)) return;
-    try { state._trustImportAbortController?.abort?.(); } catch { /* stale callback is guarded */ }
-    const importController = new AbortController();
-    state._trustImportAbortController = importController;
-    try {
-      const { importTrustData } = await import('./trust-ui.js');
-      if (!isCurrentLegacySession(sessionGeneration)
-          || state._trustImportAbortController !== importController) return;
-      const importedTxs = await importTrustData(file, {
-        isCurrent: () => isCurrentLegacySession(sessionGeneration),
-        signal: importController.signal,
-      });
-      if (!isCurrentLegacySession(sessionGeneration)
-          || state._trustImportAbortController !== importController) return;
-
-      // Merge with existing imported txs
-      let existing = [];
-      try {
-        const raw = localStorage.getItem(TRUST_IMPORTED_KEY);
-        if (raw) existing = JSON.parse(raw);
-      } catch (err) { /* ignore */ }
-
-      const merged = [...existing, ...importedTxs];
-      const seen = new Set();
-      const deduped = merged.filter(tx => {
-        if (seen.has(tx.txHash)) return false;
-        seen.add(tx.txHash);
-        return true;
-      });
-
-      localStorage.setItem(TRUST_IMPORTED_KEY, JSON.stringify(deduped));
-      alert(`Imported ${importedTxs.length} trust transactions.`);
-
-      // Re-scan to incorporate
-      runTrustScan(sessionGeneration);
-    } catch (err) {
-      if (!isCurrentLegacySession(sessionGeneration)
-          || state._trustImportAbortController !== importController
-          || err?.code === 'STALE_SESSION') return;
-      console.error('Trust import failed:', err);
-      alert('Failed to import trust data: ' + err.message);
-    } finally {
-      if (state._trustImportAbortController === importController) {
-        state._trustImportAbortController = null;
-      }
-      try { e.target.value = ''; } catch { /* input may have been detached */ }
-    }
-  });
-
-  // Expose start/stop for login/logout
-  state._startTrustScanning = startTrustScanning;
-  state._stopTrustScanning = stopTrustScanning;
-
-  // =========================================================================
-  // Encryption Tab Handlers (ECIES: ECDH + HKDF + AES-256-GCM)
-  // =========================================================================
-
-  const MESSAGING_KEY_CONFIG_KEY = 'hd-wallet-messaging-key-config-v1';
-  const messagingKeyDefaults = Object.freeze({
-    btc: { path: "m/44'/0'/0'/1/0", algorithm: 'secp256k1', publicKeyFormat: 'compressed' },
-    eth: { path: "m/44'/60'/0'/1/0", algorithm: 'secp256k1', publicKeyFormat: 'uncompressed' },
-    sol: { path: "m/44'/501'/0'/1/0", algorithm: 'x25519', publicKeyFormat: 'raw' },
-  });
-
-  const wipeBytes = (u8) => {
-    if (u8 instanceof Uint8Array) u8.fill(0);
-  };
-
-  function getMessagingKeyType() {
-    const v = $('messaging-key-type')?.value;
-    return v === 'eth' || v === 'sol' ? v : 'btc';
-  }
-
-  function getMessagingDefaultPath(keyType = getMessagingKeyType()) {
-    return messagingKeyDefaults[keyType]?.path || messagingKeyDefaults.btc.path;
-  }
-
-  function getMessagingHDPath(keyType = getMessagingKeyType()) {
-    const el = $('messaging-hd-path');
-    const raw = el?.value || '';
-    const path = raw.trim();
-    return path || getMessagingDefaultPath(keyType);
-  }
-
-  function setMessagingRecipientPlaceholder(keyType = getMessagingKeyType()) {
-    const input = $('encrypt-recipient-pubkey');
-    if (!input) return;
-    if (keyType === 'sol') {
-      input.placeholder = "Paste recipient's X25519 public key (hex, 32 bytes)";
-      return;
-    }
-    if (keyType === 'eth') {
-      input.placeholder = "Paste recipient's secp256k1 public key (hex, 65 bytes preferred)";
-      return;
-    }
-    input.placeholder = "Paste recipient's secp256k1 public key (hex, 33 bytes preferred)";
-  }
-
-  function loadMessagingKeyConfig() {
-    try {
-      const raw = localStorage.getItem(MESSAGING_KEY_CONFIG_KEY);
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object') return null;
-      return {
-        keyType: parsed.keyType,
-        path: parsed.path,
-      };
-    } catch {
-      return null;
-    }
-  }
-
-  function saveMessagingKeyConfig(keyType, path) {
-    try {
-      localStorage.setItem(MESSAGING_KEY_CONFIG_KEY, JSON.stringify({ keyType, path }));
-    } catch {
-      // ignore
-    }
-  }
-
-  function initMessagingKeyControls() {
-    const keyTypeEl = $('messaging-key-type');
-    const pathEl = $('messaging-hd-path');
-    const resetBtn = $('messaging-hd-path-default');
-    if (!keyTypeEl || !pathEl) return;
-
-    const saved = loadMessagingKeyConfig();
-    const hasSaved = !!saved;
-    if (saved?.keyType === 'btc' || saved?.keyType === 'eth' || saved?.keyType === 'sol') {
-      keyTypeEl.value = saved.keyType;
-    } else {
-      keyTypeEl.value = 'btc';
-    }
-
-    if (typeof saved?.path === 'string' && saved.path.trim()) {
-      pathEl.value = saved.path.trim();
-    } else if (hasSaved || !pathEl.value?.trim()) {
-      pathEl.value = getMessagingDefaultPath(keyTypeEl.value);
-    }
-
-    setMessagingRecipientPlaceholder(keyTypeEl.value);
-
-    const onChange = () => {
-      const keyType = getMessagingKeyType();
-      const path = getMessagingHDPath(keyType);
-      saveMessagingKeyConfig(keyType, path);
-      setMessagingRecipientPlaceholder(keyType);
-      if (state.hdRoot) updateEncryptionTab();
-    };
-
-    keyTypeEl.addEventListener('change', () => {
-      const prev = pathEl.value?.trim();
-      const prevDefaults = Object.values(messagingKeyDefaults).map(v => v.path);
-      const nextKeyType = getMessagingKeyType();
-      const nextDefault = getMessagingDefaultPath(nextKeyType);
-      // If user hasn't customized, keep the path in sync with key type.
-      if (!prev || prevDefaults.includes(prev)) {
-        pathEl.value = nextDefault;
-      }
-      onChange();
-    });
-    pathEl.addEventListener('input', onChange);
-    resetBtn?.addEventListener('click', () => {
-      const keyType = getMessagingKeyType();
-      pathEl.value = getMessagingDefaultPath(keyType);
-      onChange();
-    });
-  }
-
-  function hexToBytesStrict(hex, expectedLen = null) {
-    if (typeof hex !== 'string') throw new Error('Expected hex string');
-    const cleaned = hex.trim().toLowerCase().replace(/^0x/, '');
-    if (!cleaned) throw new Error('Empty hex string');
-    if (cleaned.length % 2 !== 0) throw new Error('Invalid hex length');
-    if (!/^[0-9a-f]+$/.test(cleaned)) throw new Error('Invalid hex string');
-    const bytes = new Uint8Array(cleaned.length / 2);
-    for (let i = 0; i < cleaned.length; i += 2) {
-      bytes[i / 2] = parseInt(cleaned.slice(i, i + 2), 16);
-    }
-    if (expectedLen !== null && bytes.length !== expectedLen) {
-      throw new Error(`Expected ${expectedLen} bytes, got ${bytes.length}`);
-    }
-    return bytes;
-  }
-
-  function deriveKeyMaterialForMessaging(w, keyType, path) {
-    if (!state.hdRoot || !w) throw new Error('HD wallet not initialized');
-    const derived = deriveHDKey(path);
-    try {
-      if (keyType === 'sol') {
-        const priv = derived.privateKey();
-        const pub = w.curves.x25519.publicKey(priv);
-        return { algorithm: 'x25519', privateKey: priv, publicKey: pub, path };
-      }
-
-      const priv = derived.privateKey();
-      const pubCompressed = derived.publicKey();
-      if (keyType === 'eth') {
-        const pub = derived.publicKeyUncompressed();
-        return { algorithm: 'secp256k1', privateKey: priv, publicKey: pub, path };
-      }
-      return { algorithm: 'secp256k1', privateKey: priv, publicKey: pubCompressed, path };
-    } finally {
-      derived.wipe();
-    }
-  }
-
-  function deriveMessagingPublicKey(w, keyType, path) {
-    if (!state.hdRoot || !w) throw new Error('HD wallet not initialized');
-    const derived = deriveHDKey(path);
-    try {
-      if (keyType === 'sol') {
-        const priv = derived.privateKey();
-        try {
-          return w.curves.x25519.publicKey(priv);
-        } finally {
-          wipeBytes(priv);
-        }
-      }
-      if (keyType === 'eth') {
-        return derived.publicKeyUncompressed();
-      }
-      return derived.publicKey();
-    } finally {
-      derived.wipe();
-    }
-  }
-
-  function normalizeSecp256k1PublicKeyBytes(publicKey) {
-    if (!(publicKey instanceof Uint8Array)) throw new Error('Invalid public key');
-    // Ethereum public keys are sometimes provided as raw 64-byte x||y without the 0x04 prefix.
-    if (publicKey.length === 64) {
-      const out = new Uint8Array(65);
-      out[0] = 0x04;
-      out.set(publicKey, 1);
-      return out;
-    }
-    if (publicKey.length !== 33 && publicKey.length !== 65) {
-      throw new Error('secp256k1 public key must be 33 (compressed) or 65 (uncompressed) bytes');
-    }
-    return publicKey;
-  }
-
-  function normalizeRecipientPublicKeyForAlgorithm(algorithm, publicKey) {
-    if (algorithm === 'x25519') {
-      if (!(publicKey instanceof Uint8Array) || publicKey.length !== 32) {
-        throw new Error('X25519 public key must be 32 bytes');
-      }
-      return publicKey;
-    }
-    return normalizeSecp256k1PublicKeyBytes(publicKey);
-  }
-
-  function eciesInfoForAlgorithm(algorithm) {
-    const infoStr = algorithm === 'x25519'
-      ? 'ecies-x25519-aes256gcm'
-      : 'ecies-secp256k1-aes256gcm';
-    return new TextEncoder().encode(infoStr);
-  }
-
-  function envelopeAlgorithmParameters(keyType, algorithm) {
-    if (algorithm === 'x25519') return 'x25519';
-    // secp256k1 modes
-    return keyType === 'eth' ? 'secp256k1-uncompressed' : 'secp256k1-compressed';
-  }
-
-  function updateEncryptionTab() {
-    const w = state.hdWalletModule;
-    if (!state.hdRoot || !w) return;
-
-    const keyType = getMessagingKeyType();
-    const path = getMessagingHDPath(keyType);
-
-    const senderPubEl = $('encrypt-sender-pubkey');
-    const senderPathEl = $('encrypt-sender-path');
-    const senderAlgoEl = $('encrypt-sender-algo');
-    const encryptBtn = $('encrypt-btn');
-
-    if (senderPathEl) senderPathEl.textContent = path;
-    const baseAlgo = messagingKeyDefaults[keyType]?.algorithm || '--';
-    if (senderAlgoEl) {
-      senderAlgoEl.textContent = baseAlgo === '--'
-        ? '--'
-        : envelopeAlgorithmParameters(keyType, baseAlgo);
-    }
-    if (encryptBtn) encryptBtn.disabled = true;
-
-    try {
-      const publicKey = deriveMessagingPublicKey(w, keyType, path);
-      if (senderPubEl) senderPubEl.textContent = toHexCompact(publicKey);
-      if (encryptBtn) encryptBtn.disabled = false;
-    } catch (e) {
-      if (senderPubEl) senderPubEl.textContent = '--';
-      if (senderAlgoEl) senderAlgoEl.textContent = 'invalid path';
-    }
-  }
-
-  initMessagingKeyControls();
-
-  // Update encryption tab when it becomes active
-  $qa('.modal-tab[data-modal-tab="messaging-tab-content"]').forEach(tab => {
-    tab.addEventListener('click', () => {
-      if (state.hdRoot) updateEncryptionTab();
-    });
-  });
-
-  // "Self" button - fill recipient with own public key for testing
-  $('encrypt-use-self')?.addEventListener('click', () => {
-    const senderPub = $('encrypt-sender-pubkey')?.textContent;
-    if (senderPub && senderPub !== '--') {
-      $('encrypt-recipient-pubkey').value = senderPub;
-    }
-  });
-
-  // ---- EME state for current encryption result ----
-  let currentEME = null;   // EMET instance
-  let currentFormat = 'json';
-
-  function resetMessagingStateAndUI() {
-    try {
-      if (currentEME?.ENCRYPTED_BLOB instanceof Uint8Array) {
-        currentEME.ENCRYPTED_BLOB.fill(0);
-      } else if (Array.isArray(currentEME?.ENCRYPTED_BLOB)) {
-        currentEME.ENCRYPTED_BLOB.fill(0);
-      }
-    } catch { /* EME cleanup is best effort */ }
-    currentEME = null;
-    currentFormat = 'json';
-
-    for (const id of ['encrypt-sender-pubkey', 'encrypt-sender-path', 'encrypt-sender-algo']) {
-      const element = $(id);
-      if (element) element.textContent = '--';
-    }
-    for (const id of ['messaging-hd-path', 'encrypt-recipient-pubkey', 'encrypt-plaintext']) {
-      const element = $(id);
-      if (element) element.value = '';
-    }
-    for (const id of [
-      'encrypt-out-ciphertext', 'encrypt-out-tag', 'encrypt-out-iv',
-      'encrypt-out-salt', 'encrypt-out-sender-pub', 'decrypt-result-value',
-    ]) {
-      const element = $(id);
-      if (element) element.textContent = '';
-    }
-    for (const id of ['encrypt-bundle', 'decrypt-payload']) {
-      const element = $(id);
-      if (element) element.value = '';
-    }
-    const encryptCompose = $('encrypt-step-compose');
-    const encryptResult = $('encrypt-step-result');
-    const decryptInput = $('decrypt-step-input');
-    const decryptResult = $('decrypt-step-result');
-    if (encryptCompose) encryptCompose.style.display = 'block';
-    if (encryptResult) encryptResult.style.display = 'none';
-    if (decryptInput) decryptInput.style.display = 'block';
-    if (decryptResult) decryptResult.style.display = 'none';
-    const encryptButton = $('encrypt-btn');
-    const decryptButton = $('decrypt-btn');
-    if (encryptButton) encryptButton.disabled = true;
-    if (decryptButton) decryptButton.disabled = true;
-    $qa('.encrypt-fmt-btn').forEach((button) => {
-      button.classList.toggle('active', button.dataset.format === 'json');
-    });
-  }
-
-  state._resetLegacyMessaging = resetMessagingStateAndUI;
-
-  function emeToJSON(eme) {
-    return JSON.stringify({
-      ENCRYPTED_BLOB: eme.ENCRYPTED_BLOB,
-      EPHEMERAL_PUBLIC_KEY: eme.EPHEMERAL_PUBLIC_KEY,
-      MAC: eme.MAC,
-      NONCE: eme.NONCE,
-      TAG: eme.TAG,
-      IV: eme.IV,
-      SALT: eme.SALT,
-      PUBLIC_KEY_IDENTIFIER: eme.PUBLIC_KEY_IDENTIFIER,
-      CIPHER_SUITE: eme.CIPHER_SUITE,
-      KDF_PARAMETERS: eme.KDF_PARAMETERS,
-      ENCRYPTION_ALGORITHM_PARAMETERS: eme.ENCRYPTION_ALGORITHM_PARAMETERS,
-    }, null, 2);
-  }
-
-  function emeToFlatBuffer(eme) {
-    const builder = new flatbuffers.Builder(1);
-    const packed = eme.pack(builder);
-    builder.finishSizePrefixed(packed, '$EME');
-    return builder.asUint8Array();
-  }
-
-  function emeToFlatBufferBase64(eme) {
-    return Buffer.from(emeToFlatBuffer(eme)).toString('base64');
-  }
-
-  function updateBundleDisplay() {
-    if (!currentEME) return;
-    const textarea = $('encrypt-bundle');
-    if (!textarea) return;
-    if (currentFormat === 'json') {
-      textarea.value = emeToJSON(currentEME);
-    } else {
-      textarea.value = emeToFlatBufferBase64(currentEME);
-    }
-  }
-
-  // Format toggle buttons
-  $qa('.encrypt-fmt-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      $qa('.encrypt-fmt-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      currentFormat = btn.dataset.format;
-      const label = $('encrypt-format-label');
-      if (label) label.textContent = currentFormat === 'json'
-        ? 'EME (Encrypted Message Envelope) — SpaceDataStandards.org'
-        : 'EME FlatBuffer binary (base64-encoded)';
-      updateBundleDisplay();
-    });
-  });
-
-  // Encrypt button
-  $('encrypt-btn')?.addEventListener('click', () => {
-    const w = state.hdWalletModule;
-    if (!w || !state.hdRoot) {
-      alert('Please login first.');
-      return;
-    }
-
-    const recipientHex = $('encrypt-recipient-pubkey')?.value?.trim();
-    const plainStr = $('encrypt-plaintext')?.value;
-    if (!recipientHex || !plainStr) {
-      alert('Please enter both a recipient public key and a message.');
-      return;
-    }
-
-    try {
-      const keyType = getMessagingKeyType();
-      const path = getMessagingHDPath(keyType);
-      const { algorithm, privateKey: senderPriv, publicKey: senderPub } = deriveKeyMaterialForMessaging(w, keyType, path);
-
-      let shared = null;
-      let aesKey = null;
-      try {
-        // Parse recipient public key from hex
-        const recipientPubRaw = hexToBytesStrict(recipientHex);
-        const recipientPub = normalizeRecipientPublicKeyForAlgorithm(algorithm, recipientPubRaw);
-
-        // 1. ECDH shared secret
-        shared = algorithm === 'x25519'
-          ? w.curves.x25519.ecdh(senderPriv, recipientPub)
-          : w.curves.secp256k1.ecdh(senderPriv, recipientPub);
-
-        // 2. HKDF: derive 32-byte AES key from shared secret
-        const salt = w.utils.getRandomBytes(32);
-        const info = eciesInfoForAlgorithm(algorithm);
-        aesKey = w.utils.hkdf(shared, salt, info, 32);
-
-        // 3. AES-256-GCM encrypt
-        const iv = w.utils.generateIv();
-        const plaintext = new TextEncoder().encode(plainStr);
-        const { ciphertext, tag } = w.utils.aesGcm.encrypt(aesKey, plaintext, iv);
-
-        // Display field-level results
-        $('encrypt-out-ciphertext').textContent = toHexCompact(ciphertext);
-        $('encrypt-out-tag').textContent = toHexCompact(tag);
-        $('encrypt-out-iv').textContent = toHexCompact(iv);
-        $('encrypt-out-salt').textContent = toHexCompact(salt);
-        $('encrypt-out-sender-pub').textContent = toHexCompact(senderPub);
-
-        // Build EME (Encrypted Message Envelope) standard object
-        currentEME = new EMET(
-          Array.from(ciphertext),                    // ENCRYPTED_BLOB
-          toHexCompact(senderPub),                   // EPHEMERAL_PUBLIC_KEY
-          null,                                      // MAC (not used, tag covers it)
-          null,                                      // NONCE (we use IV field instead)
-          toHexCompact(tag),                         // TAG
-          toHexCompact(iv),                          // IV
-          toHexCompact(salt),                        // SALT
-          null,                                      // PUBLIC_KEY_IDENTIFIER
-          'aes-256-gcm',                             // CIPHER_SUITE
-          'hkdf-sha256',                             // KDF_PARAMETERS
-          envelopeAlgorithmParameters(keyType, algorithm), // ENCRYPTION_ALGORITHM_PARAMETERS
-        );
-
-        updateBundleDisplay();
-
-        // Switch to result step
-        $('encrypt-step-compose').style.display = 'none';
-        $('encrypt-step-result').style.display = 'block';
-      } finally {
-        wipeBytes(senderPriv);
-        wipeBytes(shared);
-        wipeBytes(aesKey);
-      }
-    } catch (err) {
-      console.error('Encryption failed:', err);
-      alert('Encryption failed: ' + err.message);
-    }
-  });
-
-  // Copy bundle
-  $('encrypt-copy-bundle')?.addEventListener('click', () => {
-    const bundle = $('encrypt-bundle')?.value;
-    if (bundle) {
-      void safeCopyText(bundle);
-    }
-  });
-
-  // Download bundle
-  $('encrypt-download-bundle')?.addEventListener('click', () => {
-    if (!currentEME) return;
-    let blob, filename;
-    if (currentFormat === 'json') {
-      blob = new Blob([emeToJSON(currentEME)], { type: 'application/json' });
-      filename = 'message.eme.json';
-    } else {
-      const buf = emeToFlatBuffer(currentEME);
-      blob = new Blob([buf], { type: 'application/octet-stream' });
-      filename = 'message.eme.fbs';
-    }
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
-  });
-
-  // Parse EME from input (JSON or base64 FlatBuffer)
-  function parseEMEPayload(input) {
-    const trimmed = input.trim();
-    // Try JSON first
-    if (trimmed.startsWith('{')) {
-      return JSON.parse(trimmed);
-    }
-    // Try base64 FlatBuffer (size-prefixed)
-    const buf = new Uint8Array(Buffer.from(trimmed, 'base64'));
-    const bb = new flatbuffers.ByteBuffer(buf);
-    const root = EME.getSizePrefixedRootAsEME(bb);
-    const eme = root.unpack();
-    return eme;
-  }
-
-  // Decrypt button
-  $('decrypt-btn')?.addEventListener('click', () => {
-    const w = state.hdWalletModule;
-    if (!w || !state.hdRoot) {
-      alert('Please login first.');
-      return;
-    }
-
-    const payloadStr = $('decrypt-payload')?.value?.trim();
-    if (!payloadStr) {
-      alert('Paste an EME payload to decrypt.');
-      return;
-    }
-
-    try {
-      const payload = parseEMEPayload(payloadStr);
-      const senderPubRaw = hexToBytesStrict(payload.EPHEMERAL_PUBLIC_KEY, null);
-      const tag = hexToBytesStrict(payload.TAG, 16);
-      const iv = hexToBytesStrict(payload.IV, 12);
-      const salt = hexToBytesStrict(payload.SALT, 32);
-
-      // ENCRYPTED_BLOB can be a number array (from EMET) or hex string
-      let ciphertext;
-      if (Array.isArray(payload.ENCRYPTED_BLOB)) {
-        ciphertext = new Uint8Array(payload.ENCRYPTED_BLOB);
-      } else {
-        ciphertext = hexToBytesStrict(payload.ENCRYPTED_BLOB, null);
-      }
-
-      const keyType = getMessagingKeyType();
-      const path = getMessagingHDPath(keyType);
-
-      // Prefer payload algorithm; fall back to current UI selection.
-      const algoParams = typeof payload.ENCRYPTION_ALGORITHM_PARAMETERS === 'string'
-        ? payload.ENCRYPTION_ALGORITHM_PARAMETERS.toLowerCase()
-        : '';
-      const algorithm = algoParams.includes('x25519')
-        ? 'x25519'
-        : (messagingKeyDefaults[keyType]?.algorithm || 'secp256k1');
-
-      const senderPub = normalizeRecipientPublicKeyForAlgorithm(algorithm, senderPubRaw);
-
-      // Derive recipient private key from configured path.
-      const derived = deriveHDKey(path);
-      const recipientPriv = derived.privateKey();
-      derived.wipe();
-
-      let shared = null;
-      let aesKey = null;
-      try {
-        // 1. ECDH shared secret (using sender's public key)
-        shared = algorithm === 'x25519'
-          ? w.curves.x25519.ecdh(recipientPriv, senderPub)
-          : w.curves.secp256k1.ecdh(recipientPriv, senderPub);
-
-        // 2. HKDF: derive same AES key
-        const info = eciesInfoForAlgorithm(algorithm);
-        aesKey = w.utils.hkdf(shared, salt, info, 32);
-
-        // 3. AES-256-GCM decrypt
-        const decrypted = w.utils.aesGcm.decrypt(aesKey, ciphertext, tag, iv);
-        const decStr = new TextDecoder().decode(decrypted);
-
-        $('decrypt-result-value').textContent = decStr;
-
-        // Switch to result step
-        $('decrypt-step-input').style.display = 'none';
-        $('decrypt-step-result').style.display = 'block';
-      } finally {
-        wipeBytes(recipientPriv);
-        wipeBytes(shared);
-        wipeBytes(aesKey);
-      }
-    } catch (err) {
-      console.error('Decryption failed:', err);
-      alert('Decryption failed: ' + err.message);
-    }
-  });
-
-  // Enable decrypt button when payload is pasted
-  $('decrypt-payload')?.addEventListener('input', () => {
-    const btn = $('decrypt-btn');
-    if (btn) btn.disabled = !$('decrypt-payload')?.value?.trim();
-  });
-
-  // Back button: encrypt result -> compose
-  $('encrypt-back-btn')?.addEventListener('click', () => {
-    $('encrypt-step-result').style.display = 'none';
-    $('encrypt-step-compose').style.display = 'block';
-  });
-
-  // Back button: decrypt result -> input
-  $('decrypt-back-btn')?.addEventListener('click', () => {
-    $('decrypt-step-result').style.display = 'none';
-    $('decrypt-step-input').style.display = 'block';
-  });
+  setupAccountView();
 }
 
 // =============================================================================
@@ -6844,7 +2233,7 @@ function setupHomepageHandlers() {
   }
 
   // Code copy buttons
-  document.querySelectorAll('.code-copy-btn').forEach(btn => {
+  document.querySelectorAll('.code-copy-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       const code = btn.closest('.code-block')?.querySelector('code');
       if (code) {
@@ -6880,13 +2269,24 @@ export function normalizeCreateWalletUIArguments(rootElementOrOptions, options =
   return { element, options: objectOptions };
 }
 
+/**
+ * Boot the in-page demo: inject the login window and the account view, load
+ * WASM and wire everything. Resolves to the host controls
+ * `{ openAccount, closeAccount, openLogin, logout, destroy }`.
+ *
+ * @param {Node|object} [rootElementOrOptions]
+ * @param {object} [options]
+ * @param {Function} [options.onLogin] - Called after login and after every
+ *   account switch with `{ xpub, peerId, signingPublicKey, encryptionPublicKey, account }`:
+ *   the SDN Ed25519 identity peer ID and public keys of the current account
+ *   (m/44'/0'/N'/0'/0' and m/44'/0'/N'/1'/0'). No private key is passed.
+ * @param {Function} [options.onTrustEvent] - Trust lifecycle + drain events.
+ * @param {boolean} [options.openAccountAfterLogin=true]
+ */
 export async function init(rootElementOrOptions, options = {}) {
   const normalized = normalizeCreateWalletUIArguments(rootElementOrOptions, options);
   const rootElement = normalized.element;
-  // autoOpenWallet + onTrustEvent restored: the wiring below consumes both,
-  // and onTrustEvent is the externally-consumed trust event surface.
   const {
-    autoOpenWallet = false,
     onLogin = null,
     onTrustEvent = null,
     openAccountAfterLogin = true,
@@ -6896,8 +2296,8 @@ export async function init(rootElementOrOptions, options = {}) {
   if (typeof onTrustEvent === 'function') _onTrustEventCallback = onTrustEvent;
   _openAccountAfterLogin = openAccountAfterLogin;
 
-  // Inject modal HTML if not already present in the DOM
-  if (!document.getElementById('keys-modal')) {
+  // Inject the template if not already present in the DOM
+  if (!document.getElementById('account-view')) {
     const container = document.createElement('div');
     container.id = 'hd-wallet-ui-container';
     appendTrustedStaticTemplate(container, getModalHTML());
@@ -6907,31 +2307,21 @@ export async function init(rootElementOrOptions, options = {}) {
   const status = $('status');
   const loadingOverlay = $('loading-overlay');
 
-  // Initialize grid animation
   initGridAnimation();
-
-  // Initialize wallet info box state
   initWalletInfoBox();
   bindInfoHandlers();
+  dropLegacySecrets(browserStorage());
 
   try {
-    // Load HD wallet WASM
     if (status) status.textContent = 'Loading HD wallet module...';
     state.hdWalletModule = await initHDWallet();
-
-    // Load saved PKI keys if available.
-    // (If not logged in yet, this will return false since encrypted keys require the session key.)
-    const hasSavedKeys = await loadPKIKeys();
-
     state.initialized = true;
 
-    // Update nav status
     const navStatus = $('nav-status');
     if (navStatus) {
       navStatus.className = 'nav-status ready';
     }
 
-    // Hide loading overlay with fade
     if (loadingOverlay) {
       loadingOverlay.classList.add('hidden');
       setTimeout(() => {
@@ -6941,8 +2331,12 @@ export async function init(rootElementOrOptions, options = {}) {
 
     setupLoginHandlers();
     setupMainAppHandlers();
-    initCurrencySelector();
     setupHomepageHandlers();
+
+    // An #account/<section> link without a session has nothing to show.
+    if (isAccountHash(window.location.hash) && parseAccountHash(window.location.hash) !== null && !state.loggedIn) {
+      try { history.replaceState(history.state ?? null, '', `${location.pathname}${location.search}`); } catch { /* ignore */ }
+    }
 
     // Handle initial hash navigation
     const initialHash = window.location.hash.slice(1);
@@ -6952,7 +2346,7 @@ export async function init(rootElementOrOptions, options = {}) {
       if (tabEl) {
         setTimeout(() => {
           tabEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          $qa('.nav-link[data-tab]').forEach(link => {
+          $qa('.nav-link[data-tab]').forEach((link) => {
             link.classList.remove('active');
             if (link.dataset.tab === normalizedTab) {
               link.classList.add('active');
@@ -6961,25 +2355,6 @@ export async function init(rootElementOrOptions, options = {}) {
         }, 100);
       }
     }
-
-    // Auto-login with saved PKI keys. Remembered wallet records are handled
-    // exclusively by the isolated wallet-origin controller.
-    if (hasSavedKeys) {
-      const tempEd25519Seed = hdWallet().utils.getRandomBytes(32);
-      const tempKeys = {
-        x25519: generateKeyPair(Curve.X25519),
-        ed25519: {
-          privateKey: tempEd25519Seed,
-          publicKey: hdWallet().curves.ed25519.publicKeyFromSeed(tempEd25519Seed),
-        },
-        secp256k1: generateKeyPair(Curve.SECP256K1),
-        p256: await p256GenerateKeyPairAsync(),
-        p384: await p384GenerateKeyPairAsync(),
-      };
-
-      login(tempKeys);
-    }
-
   } catch (err) {
     console.error('Initialization failed:', err);
     if (status) status.textContent = `Error: ${err.message}`;
@@ -6987,6 +2362,23 @@ export async function init(rootElementOrOptions, options = {}) {
     state.initialized = false;
     throw err;
   }
+
+  return Object.freeze({
+    openAccount: (section) => { openAccount(section); },
+    closeAccount: () => { closeAccount(); },
+    openLogin: () => { openLogin(); },
+    logout: () => { logout(); },
+    destroy: () => {
+      logout();
+      _shell?.destroy();
+      for (const pane of Object.values(_panes ?? {})) {
+        try { pane.destroy?.(); } catch { /* best effort */ }
+      }
+      _shell = null;
+      _panes = null;
+      document.getElementById('hd-wallet-ui-container')?.remove();
+    },
+  });
 }
 
 /**
@@ -6998,16 +2390,7 @@ export async function init(rootElementOrOptions, options = {}) {
  *
  * @param {Node}   [rootElement]  - Optional root element for DOM queries
  * @param {Object} [options]      - Wallet-origin dependencies and UI options
- * @param {Function} [options.onLogin] - Callback fired after successful login with
- *   `{ xpub, signingPublicKey, sign(message) }` for SDN identity (BIP-44 coin type 0)
- * @param {Function} [options.onTrustEvent] - Callback receiving trust lifecycle
- *   + drain alert events `{ type: 'trust-published'|'trust-revoked'|'drain', at, ... }`
- *   (component event surface — the external panel controller's
- *   subscribeTrustEvents/notifyTrustEvent carry the same stream).
- * @param {boolean}  [options.openAccountAfterLogin=true] - When false, the Account
- *   modal will NOT auto-open after login. Useful for integrations that handle
- *   post-login UX themselves (e.g. challenge-response auth flows).
- * @returns {Promise<{openLogin: Function, openAccount: Function, destroy: Function}>}
+ * @returns {Promise<{openLogin: Function, openAccount: Function, logout: Function, destroy: Function}>}
  */
 export async function createWalletUI(rootElementOrOptions, options = {}) {
   const normalized = normalizeCreateWalletUIArguments(rootElementOrOptions, options);

@@ -4,8 +4,8 @@ import {
   coinTypeToConfig,
   buildSigningPath,
   buildEncryptionPath,
-  PKI_STORAGE_KEY,
 } from '../src/constants.js';
+import * as constants from '../src/constants.js';
 
 describe('cryptoConfig', () => {
   it('has all expected networks', () => {
@@ -83,8 +83,7 @@ describe('buildEncryptionPath', () => {
 });
 
 describe('Storage constants', () => {
-  it('PKI_STORAGE_KEY is a string', () => {
-    expect(typeof PKI_STORAGE_KEY).toBe('string');
-    expect(PKI_STORAGE_KEY.length).toBeGreaterThan(0);
+  it('the 2.x PKI demo key name is gone', () => {
+    expect(constants).not.toHaveProperty('PKI_STORAGE_KEY');
   });
 });

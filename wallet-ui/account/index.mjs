@@ -1,27 +1,20 @@
-// The standalone ACCOUNT VIEW.
+// The standalone ACCOUNT VIEW (hd-wallet-ui 3.0).
 //
 // # Why this file exists
 //
-// hd-wallet-ui has always had the account screen the rest of the world wants —
-// a bond value in the header, a tab strip, and a vCard identity editor with
-// upload-or-camera photo capture (src/template.js). It was simply not
-// REACHABLE: the markup lives inside the wallet app, and the only mount the
-// package exported (mountWalletOriginApp) calls start(), which demands a
-// /transaction/<64 hex> path. A consumer who wanted the account screen had to
-// call minified internals — which is forking the package, not using it.
-//
-// So this is the export: the same grammar, none of the app.
+// The wallet app's account screen is a page panel: an identity bar (avatar,
+// name, short SDN peer ID with Copy, a quiet status word, Close), a row of
+// section tabs and one visible section pane. Consumers who want that screen
+// without the wallet app mount it from here: the same grammar, none of the app.
 //
 // # What it is and is not
 //
 // It is DOM, not a framework, and it is deliberately UNSTYLED beyond class
 // names. Every element carries the class names the wallet app's own stylesheet
-// already targets (`modal-tabs`, `modal-tab`, `modal-tab-content`,
-// `account-modal-header`, `ph-portfolio-value`, `identity-card`, `photo-*`),
-// so a consumer who loads the package stylesheet gets the wallet look, and a
-// consumer with their own theme scopes those same names and gets theirs. That
-// is what "mountable by consumers with their own styles" has to mean: one
-// grammar, two skins, no fork.
+// (styles/account.css) targets — `account-identity-bar`, `account-tab`,
+// `account-pane`, `btn`, `link-btn` — so a consumer who loads the package
+// stylesheet gets the wallet look, and a consumer with their own theme scopes
+// those same names and gets theirs.
 //
 // It holds NO key material, performs NO derivation, and talks to NO network.
 // The caller owns all of that and passes values in / receives edits out. That
@@ -32,13 +25,13 @@
 // are banned in this file by policy (test/dom-security.test.mjs) — an account
 // screen renders names, organizations and notes that other people typed.
 
-/** The tab set the wallet app itself ships, in its own order and casing. */
+/** The section set the wallet app itself ships, in its own order and casing. */
 export const DEFAULT_ACCOUNT_TABS = Object.freeze([
-  Object.freeze({ id: 'identity', label: 'Identity' }),
-  Object.freeze({ id: 'trust', label: 'Trust Map' }),
-  Object.freeze({ id: 'messaging', label: 'Messaging' }),
-  Object.freeze({ id: 'wallet', label: 'Wallet' }),
-  Object.freeze({ id: 'manage', label: 'Manage' }),
+  Object.freeze({ id: 'profile', label: 'Profile' }),
+  Object.freeze({ id: 'messages', label: 'Messages' }),
+  Object.freeze({ id: 'people', label: 'People' }),
+  Object.freeze({ id: 'assets', label: 'Assets' }),
+  Object.freeze({ id: 'settings', label: 'Settings' }),
 ]);
 
 /** Formats a browser can both capture and render. */
@@ -68,28 +61,40 @@ function callerDocument(options) {
   throw new Error('createAccountView requires a document');
 }
 
+/** `12D3KooW…x7Qp`: the first 8 characters, an ellipsis, the last 4. */
+function shortPeerId(peerId) {
+  const value = asText(peerId);
+  return value.length <= 13 ? value : `${value.slice(0, 8)}…${value.slice(-4)}`;
+}
+
+function initialsOf(name) {
+  const words = asText(name).trim().split(/\s+/u).filter(Boolean);
+  if (words.length === 0) return '';
+  const first = [...words[0]][0] ?? '';
+  const last = words.length > 1 ? ([...words[words.length - 1]][0] ?? '') : '';
+  return (first + last).toUpperCase();
+}
+
 /**
  * Builds the account view.
  *
  * @param {object} options
  * @param {Document} [options.document]
- * @param {string} [options.title]            display name in the header
- * @param {{value?: string, label?: string}} [options.bond]
- *        The BOND VALUE AT THE TOP. `value` is rendered verbatim — currency
- *        formatting is the caller's decision, not this component's, because the
- *        caller knows the locale and the asset.
- * @param {Array<{id: string, name: string}>} [options.wallets]
- * @param {string} [options.activeWalletId]
- * @param {(walletId: string) => void} [options.onWalletChange]
+ * @param {string} [options.title]            the name in the identity bar
+ * @param {string} [options.peerId]           the SDN peer ID; shown short, copied in full
+ * @param {{url?: string, initials?: string}} [options.avatar]
+ *        The identity-bar avatar: a photo URL the caller serves, or initials
+ *        (derived from the title when absent).
+ * @param {string} [options.status]           the quiet status word at the right
  * @param {Array<{label: string, tone?: string, title?: string}>} [options.chips]
- *        Header chips. Tone becomes a `chip-<tone>` class; this component does
- *        not decide what any tone MEANS.
+ *        Small labels after the status. Tone becomes a `chip-<tone>` class;
+ *        this component does not decide what any tone MEANS.
  * @param {Array<{id: string, label: string, render?: (panel: HTMLElement) => void}>} [options.tabs]
- *        Defaults to DEFAULT_ACCOUNT_TABS. A consumer adds its own tabs here
+ *        Defaults to DEFAULT_ACCOUNT_TABS. A consumer adds its own sections here
  *        rather than forking: the strip is data, not markup.
  * @param {string} [options.activeTabId]
  * @param {(tabId: string) => void} [options.onTabChange]
- * @param {object} [options.identity]         the Identity tab's vCard editor
+ * @param {object} [options.identity]         the Profile section's field editor
  * @param {Array<object>} [options.identity.fields]
  *        `{ id, label, value, readOnly, multiline, placeholder }`. A read-only
  *        field renders as a VALUE, never as a disabled input: a disabled box is
@@ -99,7 +104,7 @@ function callerDocument(options) {
  * @param {() => any} [options.identity.onPhotoRemove]
  * @param {string} [options.identity.photoUrl]
  * @param {Array<{label: string, onClick: () => any, variant?: string}>} [options.actions]
- *        Header actions (sign out, and whatever else the host owns).
+ *        Identity-bar actions (sign out, and whatever else the host owns).
  * @param {() => void} [options.onClose]
  */
 export function createAccountView(options = {}) {
@@ -108,60 +113,58 @@ export function createAccountView(options = {}) {
     .filter((tab) => tab && typeof tab.id === 'string' && tab.id !== '');
   if (!tabs.length) throw new Error('createAccountView requires at least one tab');
 
-  const root = el(doc, 'div', 'wallet-account-view modal-glass modal-wide');
+  const root = el(doc, 'div', 'wallet-account-view account-view');
   root.setAttribute('data-wallet-account-view', '');
 
-  // ---- header: bond value at the top -------------------------------------
-  const header = el(doc, 'div', 'modal-header account-modal-header');
-  const info = el(doc, 'div', 'account-header-info');
-
-  const walletRow = el(doc, 'div', 'account-wallet-row');
-  const walletSelect = el(doc, 'select', 'glass-input compact account-wallet-select');
-  walletSelect.setAttribute('aria-label', 'Select wallet');
-  walletRow.append(walletSelect);
-
-  const summary = el(doc, 'div', 'account-wallet-summary');
-  const balanceLine = el(doc, 'div', 'account-wallet-balance-line');
-  const bondValue = el(doc, 'div', 'ph-portfolio-value');
-  bondValue.id = 'wallet-bond-value';
-  const bondLabel = el(doc, 'div', 'ph-portfolio-label');
-  balanceLine.append(bondValue, bondLabel);
-  summary.append(balanceLine);
-
-  const titleRow = el(doc, 'div', 'account-header-title');
-  const titleText = el(doc, 'span', 'account-header-name');
+  // ---- identity bar: avatar, name, short peer ID, status, close -------------
+  const bar = el(doc, 'div', 'account-identity-bar');
+  const inner = el(doc, 'div', 'account-identity-inner');
+  const avatar = el(doc, 'div', 'account-avatar');
+  avatar.setAttribute('aria-hidden', 'true');
+  const text = el(doc, 'div', 'account-identity-text');
+  const nameLine = el(doc, 'div', 'account-name-line');
+  const titleText = el(doc, 'span', 'account-name account-header-name');
+  nameLine.append(titleText);
+  const peerLine = el(doc, 'div', 'account-peer-line');
+  const peerText = el(doc, 'span', 'account-peer-id');
+  const copyButton = button(doc, 'copy-chip', 'Copy');
+  peerLine.append(peerText, copyButton);
+  text.append(nameLine, peerLine);
+  const statusText = el(doc, 'span', 'account-status');
   const chipRow = el(doc, 'span', 'account-header-chips');
-  titleRow.append(titleText, chipRow);
-
-  info.append(walletRow, summary, titleRow);
-
   const headerActions = el(doc, 'div', 'account-header-actions');
-  const closeButton = button(doc, 'modal-close account-modal-close', '×', 'Close');
+  const closeButton = button(doc, 'btn btn-icon account-close', '×', 'Close');
   closeButton.setAttribute('aria-label', 'Close');
   headerActions.append(closeButton);
-  header.append(info, headerActions);
+  inner.append(avatar, text, statusText, chipRow, headerActions);
+  bar.append(inner);
 
-  // ---- tab strip ----------------------------------------------------------
-  const tabStrip = el(doc, 'div', 'modal-tabs');
+  // ---- section tabs -----------------------------------------------------------
+  const tabBar = el(doc, 'div', 'account-tabs');
+  const tabStrip = el(doc, 'div', 'account-tabs-inner');
   tabStrip.setAttribute('role', 'tablist');
-  const body = el(doc, 'div', 'modal-body');
+  tabBar.append(tabStrip);
 
   const panels = new Map();
   const buttons = new Map();
+  const paneNodes = [];
   for (const tab of tabs) {
-    const tabButton = button(doc, 'modal-tab', asText(tab.label ?? tab.id));
-    tabButton.dataset.modalTab = `${tab.id}-tab-content`;
+    const tabButton = button(doc, 'account-tab', asText(tab.label ?? tab.id));
+    tabButton.dataset.section = tab.id;
+    tabButton.id = `account-tab-${tab.id}`;
     tabButton.setAttribute('role', 'tab');
-    const panel = el(doc, 'div', 'modal-tab-content');
-    panel.id = `${tab.id}-tab-content`;
+    tabButton.setAttribute('aria-controls', `account-pane-${tab.id}`);
+    const panel = el(doc, 'section', 'account-pane');
+    panel.id = `account-pane-${tab.id}`;
     panel.setAttribute('role', 'tabpanel');
+    panel.setAttribute('aria-labelledby', `account-tab-${tab.id}`);
     buttons.set(tab.id, tabButton);
     panels.set(tab.id, panel);
     tabStrip.append(tabButton);
-    body.append(panel);
+    paneNodes.push(panel);
   }
 
-  root.append(header, tabStrip, body);
+  root.append(bar, tabBar, ...paneNodes);
 
   let activeTabId = null;
   function setActiveTab(id) {
@@ -169,32 +172,55 @@ export function createAccountView(options = {}) {
     activeTabId = id;
     for (const [tabId, tabButton] of buttons) {
       const active = tabId === id;
-      tabButton.classList.toggle('active', active);
       tabButton.setAttribute('aria-selected', active ? 'true' : 'false');
-      panels.get(tabId).classList.toggle('active', active);
+      tabButton.tabIndex = active ? 0 : -1;
+      panels.get(tabId).hidden = !active;
     }
     if (typeof options.onTabChange === 'function') options.onTabChange(id);
   }
+  const tabIds = [...buttons.keys()];
   for (const [tabId, tabButton] of buttons) {
     tabButton.addEventListener('click', () => setActiveTab(tabId));
+    // Roving tabindex: the arrow keys, Home and End move focus along the tabs;
+    // Enter and Space (the button's own click) activate.
+    tabButton.addEventListener('keydown', (event) => {
+      const index = tabIds.indexOf(tabId);
+      let next = null;
+      if (event.key === 'ArrowRight') next = tabIds[(index + 1) % tabIds.length];
+      else if (event.key === 'ArrowLeft') next = tabIds[(index + tabIds.length - 1) % tabIds.length];
+      else if (event.key === 'Home') next = tabIds[0];
+      else if (event.key === 'End') next = tabIds[tabIds.length - 1];
+      if (!next) return;
+      event.preventDefault?.();
+      buttons.get(next).focus?.();
+    });
   }
 
-  // ---- identity tab: editable vCard fields + photo ------------------------
-  const identityPanel = panels.get('identity');
+  // ---- profile section: editable fields + photo -------------------------------
+  const identityPanel = panels.get('profile') ?? panels.get('identity');
   const identity = createIdentitySection(doc, options.identity ?? {}, identityPanel);
 
-  // Consumer-rendered panels. Identity is rendered here only when the caller
-  // did not claim it themselves.
+  // Consumer-rendered panels.
   for (const tab of tabs) {
     if (typeof tab.render === 'function') tab.render(panels.get(tab.id));
   }
 
   // ---- wiring -------------------------------------------------------------
+  let peerIdValue = '';
   closeButton.addEventListener('click', () => {
     if (typeof options.onClose === 'function') options.onClose();
   });
-  walletSelect.addEventListener('change', () => {
-    if (typeof options.onWalletChange === 'function') options.onWalletChange(walletSelect.value);
+  copyButton.addEventListener('click', async () => {
+    const clipboard = doc.defaultView?.navigator?.clipboard;
+    if (!peerIdValue || typeof clipboard?.writeText !== 'function') return;
+    try {
+      await clipboard.writeText(peerIdValue);
+      copyButton.textContent = 'Copied';
+      const host = doc.defaultView ?? globalThis;
+      host.setTimeout(() => { copyButton.textContent = 'Copy'; }, 1500);
+    } catch {
+      // Clipboard refused: the full value stays available as the title.
+    }
   });
 
   function renderActions(actions) {
@@ -203,7 +229,7 @@ export function createAccountView(options = {}) {
       if (!action || typeof action.label !== 'string') continue;
       const node = button(
         doc,
-        `glass-btn small account-header-action${action.variant ? ` ${action.variant}` : ''}`,
+        `btn btn-sm account-header-action${action.variant ? ` ${action.variant}` : ''}`,
         action.label,
         action.title,
       );
@@ -224,18 +250,24 @@ export function createAccountView(options = {}) {
     }
   }
 
-  function renderWallets(wallets, activeWalletId) {
-    walletSelect.replaceChildren();
-    const list = Array.isArray(wallets) ? wallets : [];
-    for (const wallet of list) {
-      if (!wallet || typeof wallet.id !== 'string') continue;
-      const option = el(doc, 'option', '', asText(wallet.name ?? wallet.id));
-      option.value = wallet.id;
-      walletSelect.append(option);
+  let titleValue = '';
+  let avatarValue = null;
+  function renderAvatar() {
+    avatar.replaceChildren();
+    avatar.className = 'account-avatar';
+    const url = asText(avatarValue?.url);
+    if (url) {
+      const image = el(doc, 'img', 'account-avatar-image');
+      image.alt = '';
+      image.src = url;
+      avatar.append(image);
+      return;
     }
-    walletSelect.hidden = list.length === 0;
-    if (typeof activeWalletId === 'string' && list.some((w) => w?.id === activeWalletId)) {
-      walletSelect.value = activeWalletId;
+    const initials = asText(avatarValue?.initials) || initialsOf(titleValue);
+    if (initials) avatar.append(el(doc, 'span', 'avatar-initials', initials));
+    else {
+      avatar.classList.add('is-mark');
+      avatar.append(el(doc, 'span', 'avatar-mark'));
     }
   }
 
@@ -245,27 +277,35 @@ export function createAccountView(options = {}) {
    * a whole model (and without stomping an edit in progress).
    */
   function update(next = {}) {
-    if ('title' in next) titleText.textContent = asText(next.title);
-    if ('bond' in next) {
-      bondValue.textContent = asText(next.bond?.value ?? '');
-      bondLabel.textContent = asText(next.bond?.label ?? 'Bond');
+    if ('title' in next) {
+      titleValue = asText(next.title);
+      titleText.textContent = titleValue;
+      renderAvatar();
     }
+    if ('avatar' in next) {
+      avatarValue = next.avatar ?? null;
+      renderAvatar();
+    }
+    if ('peerId' in next) {
+      peerIdValue = asText(next.peerId);
+      peerText.textContent = shortPeerId(peerIdValue);
+      peerText.title = peerIdValue;
+      copyButton.hidden = peerIdValue === '';
+    }
+    if ('status' in next) statusText.textContent = asText(next.status);
     if ('chips' in next) renderChips(next.chips);
     if ('actions' in next) renderActions(next.actions);
-    if ('wallets' in next || 'activeWalletId' in next) {
-      renderWallets(next.wallets ?? options.wallets, next.activeWalletId ?? options.activeWalletId);
-    }
     if ('identity' in next) identity.update(next.identity ?? {});
     if ('activeTabId' in next) setActiveTab(next.activeTabId);
   }
 
   update({
     title: options.title ?? '',
-    bond: options.bond ?? {},
+    avatar: options.avatar ?? null,
+    peerId: options.peerId ?? '',
+    status: options.status ?? '',
     chips: options.chips,
     actions: options.actions,
-    wallets: options.wallets,
-    activeWalletId: options.activeWalletId,
   });
   setActiveTab(
     typeof options.activeTabId === 'string' && panels.has(options.activeTabId)
@@ -299,11 +339,11 @@ export function mountAccountView(container, options = {}) {
 // ---------------------------------------------------------------------------
 
 function createIdentitySection(doc, config, panel) {
-  const card = el(doc, 'div', 'identity-card');
+  const card = el(doc, 'div', 'pane identity-card');
 
   // photo
   const photoWrap = el(doc, 'div', 'identity-card-photo');
-  const preview = el(doc, 'div', 'photo-preview');
+  const preview = el(doc, 'div', 'photo-circle photo-preview');
   const image = el(doc, 'img', 'photo-image');
   image.alt = '';
   image.hidden = true;
@@ -316,11 +356,11 @@ function createIdentitySection(doc, config, panel) {
   fileInput.type = 'file';
   fileInput.accept = PHOTO_TYPES.join(',');
   fileInput.hidden = true;
-  const uploadButton = button(doc, 'glass-btn small', 'Upload');
-  const cameraButton = button(doc, 'glass-btn small', 'Use Camera');
-  const captureButton = button(doc, 'glass-btn small primary', 'Capture');
-  const cancelButton = button(doc, 'glass-btn small', 'Cancel');
-  const removeButton = button(doc, 'glass-btn small', 'Remove');
+  const uploadButton = button(doc, 'link-btn', 'Upload photo');
+  const cameraButton = button(doc, 'link-btn', 'Take photo');
+  const captureButton = button(doc, 'btn btn-primary btn-sm', 'Capture');
+  const cancelButton = button(doc, 'btn btn-sm', 'Cancel');
+  const removeButton = button(doc, 'link-btn', 'Remove photo');
   captureButton.hidden = true;
   cancelButton.hidden = true;
   actions.append(uploadButton, cameraButton, captureButton, cancelButton, removeButton, fileInput);
@@ -331,7 +371,7 @@ function createIdentitySection(doc, config, panel) {
   // fields
   const fieldList = el(doc, 'div', 'identity-fields');
   const saveRow = el(doc, 'div', 'identity-save-row');
-  const saveButton = button(doc, 'glass-btn primary', 'Save');
+  const saveButton = button(doc, 'btn btn-primary identity-save', 'Save');
   const saveStatus = el(doc, 'span', 'identity-save-status');
   saveRow.append(saveButton, saveStatus);
 
@@ -372,7 +412,7 @@ function createIdentitySection(doc, config, panel) {
         row.append(value);
       } else {
         editable = true;
-        const input = el(doc, field.multiline ? 'textarea' : 'input', 'glass-input identity-field-input');
+        const input = el(doc, field.multiline ? 'textarea' : 'input', `${field.multiline ? 'textarea' : 'input'} identity-field-input`);
         if (!field.multiline) input.type = 'text';
         input.value = asText(field.value);
         if (field.placeholder) input.placeholder = field.placeholder;

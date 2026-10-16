@@ -374,12 +374,13 @@ test('origin app validates before prompting, then unlocks and consumes the prepa
   ]);
 });
 
-test('legacy UI repairs both createWalletUI forms, rejects WASM init failure, and wipes P-384 state', async () => {
+test('legacy UI repairs both createWalletUI forms, rejects WASM init failure, and wipes the session seed', async () => {
   const app = await readFile(new URL('../src/app.js', import.meta.url), 'utf8');
   expect(app).toContain('normalizeCreateWalletUIArguments');
   expect(app).toMatch(/createWalletUI\(rootElementOrOptions, options/u);
   expect(app).toMatch(/throw err/u);
-  expect(app).toMatch(/state\.wallet\.p384/u);
+  expect(app).toMatch(/state\.masterSeed\?\.fill\?\.\(0\)/u);
+  expect(app).toMatch(/state\.hdRoot\?\.wipe\?\.\(\)/u);
   expect(app).toMatch(/state\.addresses\s*=\s*\{\s*btc:\s*null,\s*eth:\s*null,\s*sol:\s*null/su);
   expect(app).not.toMatch(/async sign\(message\)/u);
   expect(app).not.toMatch(/getSigningKey\(state\.hdRoot, 0, 0, 0\)/u);
@@ -388,210 +389,84 @@ test('legacy UI repairs both createWalletUI forms, rejects WASM init failure, an
   expect(app).toContain('forget-stored-wallet');
 });
 
-test('legacy async work is bound to a login generation and logout tears down sensitive surfaces', async () => {
-  const app = await readFile(new URL('../src/app.js', import.meta.url), 'utf8');
-  const accountsStart = app.indexOf('function renderAccountsList');
-  const accountsEnd = app.indexOf('\nfunction updateWalletActionMenus', accountsStart);
-  const accountsSource = app.slice(accountsStart, accountsEnd);
-  const detachedClickStart = accountsSource.indexOf("row.addEventListener('click'");
-  const detachedClickEnd = accountsSource.indexOf('listEl.appendChild(row)', detachedClickStart);
-  const detachedClickSource = accountsSource.slice(detachedClickStart, detachedClickEnd);
-  const balanceStart = app.indexOf('async function fetchBalanceForScanTarget');
-  const balanceEnd = app.indexOf('\nfunction mergeAccounts', balanceStart);
-  const balanceSource = app.slice(balanceStart, balanceEnd);
-  const namesStart = app.indexOf('async function resolveNames');
-  const namesEnd = app.indexOf('\nfunction clearNameCache', namesStart);
-  const namesSource = app.slice(namesStart, namesEnd);
-  const pkiStart = app.indexOf('function savePKIKeys');
-  const pkiEnd = app.indexOf('// =============================================================================\n// Login / Logout', pkiStart);
-  const pkiSource = app.slice(pkiStart, pkiEnd);
-  const logoutStart = app.indexOf('function logout()');
-  const logoutEnd = app.indexOf('// =============================================================================\n// Export Wallet', logoutStart);
-  const logoutSource = app.slice(logoutStart, logoutEnd);
+function sourceBetween(source, start, end) {
+  const from = source.indexOf(start);
+  expect(from, start).toBeGreaterThanOrEqual(0);
+  const to = source.indexOf(end, from + start.length);
+  expect(to, end).toBeGreaterThan(from);
+  return source.slice(from, to);
+}
 
-  expect(app).toContain('const sessionGeneration = legacySessionGuard.begin();');
+test('session work is bound to a login generation and logout tears every surface down', async () => {
+  const app = await readFile(new URL('../src/app.js', import.meta.url), 'utf8');
+  const balances = await readFile(new URL('../src/balances.js', import.meta.url), 'utf8');
+  const balanceSource = sourceBetween(balances, 'async function fetchBalance(', '\n  /**\n   * Scan every target once.');
+  const refreshSource = sourceBetween(app, 'async function refreshBalances', '\nfunction assetsState');
+  const logoutSource = sourceBetween(app, 'function logout()', '\n// =============================================================================\n// Grid Canvas Animation');
+
+  expect(app).toContain('legacySessionGuard.begin();');
   expect(app).toContain('legacySessionGuard.invalidate();');
-  expect(app).toContain('scanActiveAccounts(sessionGeneration)');
-  expect(balanceSource).toMatch(/fetchBalanceForScanTarget\(target, address, sessionGeneration\)/u);
-  expect(balanceSource.match(/isCurrentLegacySession\(sessionGeneration\)/gu)?.length ?? 0).toBeGreaterThanOrEqual(3);
-  expect(namesSource).toContain('isCurrentLegacySession(sessionGeneration)');
-  expect(pkiSource.match(/isCurrentLegacySession\(sessionGeneration\)/gu)?.length ?? 0).toBeGreaterThanOrEqual(6);
-  expect(detachedClickSource).toContain('isCurrentLegacySession(sessionGeneration)');
-  expect(detachedClickSource.indexOf('isCurrentLegacySession(sessionGeneration)'))
-    .toBeLessThan(detachedClickSource.indexOf('showAssetActionOverlay(acct, idx)'));
+  expect(balanceSource.match(/isCurrent\(\)/gu)?.length ?? 0).toBeGreaterThanOrEqual(4);
+  expect(refreshSource).toMatch(/balanceScanner\.scan\(targets, current, \{ force \}\)/u);
+  expect(refreshSource).toContain('const current = () => isCurrentLegacySession(sessionGeneration) && account === state.account;');
 
-  expect(logoutSource).toContain('clearSensitiveWalletUI();');
-  for (const id of [
-    'wallet-asset-action-title', 'wallet-asset-action-path', 'wallet-asset-action-address',
-    'send-from-account', 'send-to-address', 'send-amount', 'send-fiat-estimate',
-    'send-review-to', 'send-review-amount', 'send-review-fee', 'send-review-total', 'send-status',
-    'signing-path', 'encryption-path', 'signing-pubkey', 'encryption-pubkey',
-    'derived-crypto-name', 'derived-icon', 'derived-address', 'derived-explorer-link', 'address-qr',
-  ]) {
-    expect(app).toContain(`$('${id}')`);
-  }
-  expect(app).toContain("$(`wallet-${network}-address`)");
-  expect(app).toContain("$(`wallet-${network}-explorer`)");
-  expect(app).toContain("$(`bond-${network}-address`)");
-  expect(app).toContain("$(`bond-${network}-explorer`)");
-  expect(app).toContain('sendButton.onclick = null;');
-  expect(app).toContain('receiveButton.onclick = null;');
-  expect(app).toContain("$('wallet-receive-overlay')?.remove();");
-  expect(app).toContain('clearCanvas(addressQr);');
-  expect(app).toContain("$('wallet-accounts-empty')");
-  expect(app).toContain("$('wallet-bond-value')");
-  expect(logoutSource).toContain('state.walletFiatTotals = {};');
-  expect(logoutSource).toContain('state.balanceCache = {};');
-  expect(logoutSource).toContain('state.balanceRateLimitUntil = {};');
+  expect(logoutSource).toContain('wipeSession();');
+  expect(logoutSource).toContain('clearTrustState();');
+  expect(logoutSource).toContain('_shell?.close();');
+  expect(logoutSource).toMatch(/for \(const pane of Object\.values\(_panes \?\? \{\}\)\)[\s\S]*pane\.reset\(\)/u);
+  expect(logoutSource).toContain('state.balances = {};');
+  expect(logoutSource).toContain('balanceScanner.reset();');
+  expect(logoutSource).toContain('state.storage = null;');
+  expect(logoutSource).toContain('_barPhoto.logout();');
+  expect(logoutSource).toContain('clearSeedPhrase();');
 });
 
-test('legacy trust scan is session-bound and logout synchronously clears address-bearing trust UI', async () => {
+test('the trust scan is session-bound, per account, and never polls in the background', async () => {
   const app = await readFile(new URL('../src/app.js', import.meta.url), 'utf8');
-  const scanStart = app.indexOf('async function runTrustScan');
-  const scanEnd = app.indexOf('// Start auto-scanning', scanStart);
-  const scanSource = app.slice(scanStart, scanEnd);
-  const logoutStart = app.indexOf('function logout()');
-  const logoutEnd = app.indexOf('// =============================================================================\n// Export Wallet', logoutStart);
-  const logoutSource = app.slice(logoutStart, logoutEnd);
-  const trustHandlersStart = app.indexOf('// Establish trust button');
-  const trustHandlersEnd = app.indexOf('// Expose start/stop for login/logout', trustHandlersStart);
-  const trustHandlersSource = app.slice(trustHandlersStart, trustHandlersEnd);
-  const clearTrustStart = app.indexOf('function clearTrustStateAndUI()');
-  const clearTrustEnd = app.indexOf('\nfunction logout()', clearTrustStart);
-  const clearTrustSource = app.slice(clearTrustStart, clearTrustEnd);
+  const scanSource = sourceBetween(app, 'async function runTrustScan', '\nfunction clearTrustState');
+  const publishSource = sourceBetween(app, 'async function publishTrustRecord', '\nfunction trustEthRpc');
 
-  expect(scanSource).toContain('runTrustScan(sessionGeneration = currentLegacySession())');
-  expect(scanSource.match(/isCurrentLegacySession\(sessionGeneration\)/gu)?.length ?? 0)
-    .toBeGreaterThanOrEqual(6);
+  expect(scanSource).toContain('runTrustScan(sessionGeneration = currentLegacySession()');
+  expect(scanSource.match(/isCurrentLegacySession\(sessionGeneration\)/gu)?.length ?? 0).toBeGreaterThanOrEqual(5);
   expect(scanSource).toContain('addressesSnapshot');
-  expect(app).toContain('runTrustScan(sessionGeneration)');
-  expect(app).toContain('clearTrustStateAndUI();');
-  expect(logoutSource).toContain('clearTrustStateAndUI();');
-  expect(trustHandlersSource).toContain('closeActiveTrustModals');
-  expect(trustHandlersSource).toContain('state._closeTrustModals = closeActiveTrustModals;');
-  expect(trustHandlersSource.match(/isCurrent:\s*\(\) => isCurrentLegacySession\(sessionGeneration\)/gu)?.length ?? 0)
-    .toBeGreaterThanOrEqual(3);
-  expect(clearTrustSource).toContain('state._closeTrustModals?.();');
-  expect(clearTrustSource).toContain('state._closeTrustModals = null;');
-  expect(clearTrustSource).toContain('state._trustImportAbortController?.abort?.();');
-  expect(clearTrustSource).toContain('state._trustImportAbortController = null;');
-  expect(trustHandlersSource).toContain('signal: importController.signal');
-  expect(trustHandlersSource.match(
-    /state\._trustImportAbortController !== importController/gu,
-  )?.length ?? 0).toBeGreaterThanOrEqual(3);
-  expect(trustHandlersSource).toContain("err?.code === 'STALE_SESSION'");
-  for (const statement of [
-    'state.trustGraph = null;',
-    'state.trustTransactions = [];',
-    'state.trustRelationships = [];',
-    "$('trust-list')",
-    "$('trust-scan-status')",
-    "$('trust-scan-label')",
-    "$('trust-scan-count')",
-  ]) {
-    expect(app).toContain(statement);
-  }
+  expect(scanSource).toContain('TRUST_SCAN_MIN_INTERVAL_MS');
+  expect(app).not.toMatch(/setInterval\(/u);
+  // Publishing and revoking sign with the CURRENT account's chain keys (B10).
+  expect(publishSource).toContain('const paths = chainPaths(state.account);');
+  for (const chain of ['btc', 'eth', 'sol']) expect(publishSource).toContain(`scopedChainKey(paths.${chain}`);
+  expect(publishSource).not.toMatch(/buildSigningPath\(coinType, 0, 0\)/u);
 });
 
-test('legacy photo and camera continuations are session-bound and logout tears down media UI', async () => {
-  const app = await readFile(new URL('../src/app.js', import.meta.url), 'utf8');
-  const logoutStart = app.indexOf('function logout()');
-  const logoutEnd = app.indexOf('// =============================================================================\n// Export Wallet', logoutStart);
-  const logoutSource = app.slice(logoutStart, logoutEnd);
+test('profile photo and camera continuations are session-bound and a section switch stops the camera', async () => {
+  const profile = await readFile(new URL('../src/profile-ui.js', import.meta.url), 'utf8');
+  const resetSource = sourceBetween(profile, '    reset() {', '    destroy() {');
 
-  expect(app).toContain('readFileBytesForSession');
-  expect(app).toContain('acquireMediaStreamForSession');
-  expect(app).toContain('stopMediaStream');
-  expect(app.match(/isCurrentLegacySession\(sessionGeneration\)/gu)?.length ?? 0)
-    .toBeGreaterThanOrEqual(20);
-  expect(app).toContain('state._stopLegacyCamera = stopCamera;');
-  expect(app).toContain('state._resetLegacyPhotoUI = resetLegacyPhotoUI;');
-  expect(logoutSource).toContain('state._stopLegacyCamera?.();');
-  expect(logoutSource).toContain('state._resetLegacyPhotoUI?.();');
-  expect(app).toContain("$('vcard-photo-input')");
-  expect(app).toContain("$('vcard-camera-video')");
-  expect(app).toContain("$('vcard-photo-preview')");
-  expect(app).toContain("$('photo-remove-confirm-modal')");
+  expect(profile).toContain('readFileBytesForSession');
+  expect(profile).toContain('acquireMediaStreamForSession');
+  expect(profile).toContain('stopMediaStream');
+  expect(profile).toContain('inspectPhotoBytes');
+  expect(profile).toContain('PhotoUrlController');
+  expect(profile.match(/stale\(token\)/gu)?.length ?? 0).toBeGreaterThanOrEqual(8);
+  expect(resetSource).toContain('stopCamera();');
+  expect(resetSource).toContain('photoUrls.logout();');
+  expect(profile).not.toMatch(/readAsDataURL|innerHTML/u);
 });
 
-test('logout clears signed-vCard, messaging, and detached receive surfaces without stale repopulation', async () => {
+test('no 2.x account-modal runtime survives: no wallets layer, $EME, vCard, PKI demo or name resolution', async () => {
   const app = await readFile(new URL('../src/app.js', import.meta.url), 'utf8');
-  const logoutStart = app.indexOf('function logout()');
-  const logoutEnd = app.indexOf('// =============================================================================\n// Export Wallet', logoutStart);
-  const logoutSource = app.slice(logoutStart, logoutEnd);
-  const vcardStart = app.indexOf('// vCard generation');
-  const vcardEnd = app.indexOf('// Refresh balances button', vcardStart);
-  const vcardSource = app.slice(vcardStart, vcardEnd);
-  const receiveStart = app.indexOf('async function showReceiveModal');
-  const receiveEnd = app.indexOf('// =============================================================================\n// Send Flow', receiveStart);
-  const receiveSource = app.slice(receiveStart, receiveEnd);
-  const messagingStart = app.indexOf('// ---- EME state for current encryption result ----');
-  const messagingEnd = app.indexOf('// =============================================================================\n// Homepage Handlers', messagingStart);
-  const messagingSource = app.slice(messagingStart, messagingEnd);
-  const clearVCardStart = app.indexOf('function clearSignedVCardStateAndUI()');
-  const clearVCardEnd = app.indexOf('\nfunction clearSensitiveWalletUI()', clearVCardStart);
-  const clearVCardSource = app.slice(clearVCardStart, clearVCardEnd);
-  const importStart = app.indexOf('// VCF import handler');
-  const importEnd = app.indexOf("$('vcf-import-apply')", importStart);
-  const importSource = app.slice(importStart, importEnd);
-
-  expect(app).toContain('function clearSignedVCardStateAndUI()');
-  expect(logoutSource).toContain('clearSignedVCardStateAndUI();');
-  expect(app).toContain('state._exportedVCard = null;');
-  expect(clearVCardSource).toContain('hideImportedVcardPreview();');
-  expect(clearVCardSource).toContain('state._vcardImportAbortController?.abort?.();');
-  expect(clearVCardSource).toContain('state._vcardImportAbortController = null;');
-  expect(clearVCardSource).toContain('state._vcardEditSnapshot = null;');
-  expect(importSource).toContain('const sessionGeneration = currentLegacySession();');
-  expect(importSource).toContain('if (!isCurrentLegacySession(sessionGeneration)) return;');
-  expect(importSource).toContain('readTextFileForSession');
-  expect(importSource).toContain('maximumBytes: MAX_VCARD_FILE_BYTES');
-  expect(importSource).toContain('signal: importController.signal');
-  for (const id of [
-    'qr-code', 'vcard-result-view', 'vcard-form-view', 'vcard-sig-badge', 'vcard-raw-view',
+  for (const gone of [
+    'DEFAULT_WALLET_COUNT', 'normalizeWallets', 'ensureWalletAccounts', 'createNewWallet', 'renderWalletList',
+    'renderWalletSelector', 'updateWalletBondDisplay', 'showWalletsView', 'showWalletMainView', 'addCustomPathAccount',
+    'toggleAccountActive', 'handleAccountAction', 'EMET', 'emeToJSON', 'ecies-x25519-aes256gcm', 'generateVCard',
+    'verifyVCardSignature', 'parseAndDisplayVCF', 'generatePKIKeyPairs', 'loadPKIKeys', 'wallet-pki-keys',
+    'api.hiro.so', 'bonfida', 'resolveENSName', 'autoOpenWallet', 'deriveAndDisplayAddress', 'updatePathDisplay',
+    'applyTrustRules', 'buildSdsTrustExport', 'importTrustData', "'keys-modal'", 'vcard-cryptoperson',
   ]) {
-    expect(app).toContain(`$('${id}')`);
+    expect(app, gone).not.toContain(gone);
   }
-  expect(vcardSource).toContain('const sessionGeneration = currentLegacySession();');
-  expect(vcardSource.match(/isCurrentLegacySession\(sessionGeneration\)/gu)?.length ?? 0)
-    .toBeGreaterThanOrEqual(4);
-  expect(vcardSource).toContain('clearCanvas(qrCanvas);');
-  expect(clearVCardSource).toContain("$q('#vcard-result-view .qr-container')");
-  expect(clearVCardSource).not.toContain('sigBadge.replaceChildren()');
-  expect(clearVCardSource).not.toContain("sigBadge.classList.remove('sig-verified'");
-  for (const id of [
-    'vcard-prefix', 'vcard-firstname', 'vcard-middlename', 'vcard-lastname',
-    'vcard-suffix', 'vcard-nickname', 'vcard-email', 'vcard-phone', 'vcard-org',
-    'vcard-title', 'vcard-street', 'vcard-city', 'vcard-region', 'vcard-postal',
-    'vcard-country',
-  ]) {
-    expect(clearVCardSource).toContain(id);
-  }
-  for (const id of [
-    'identity-card-name', 'identity-card-title', 'identity-card-org',
-    'identity-card-email', 'identity-card-phone',
-  ]) {
-    expect(clearVCardSource).toContain(id);
-  }
-
-  expect(app).toContain('function resetMessagingStateAndUI()');
-  expect(app).toContain('state._resetLegacyMessaging = resetMessagingStateAndUI;');
-  expect(logoutSource).toContain('state._resetLegacyMessaging?.();');
-  expect(messagingSource).toContain('currentEME = null;');
-  expect(messagingSource).toContain("currentFormat = 'json';");
-  for (const id of [
-    'encrypt-sender-pubkey', 'encrypt-sender-path', 'encrypt-sender-algo',
-    'messaging-hd-path', 'encrypt-recipient-pubkey', 'encrypt-plaintext',
-    'encrypt-out-ciphertext', 'encrypt-out-tag', 'encrypt-out-iv', 'encrypt-out-salt',
-    'encrypt-out-sender-pub', 'encrypt-bundle', 'decrypt-payload', 'decrypt-result-value',
-    'encrypt-step-compose', 'encrypt-step-result', 'decrypt-step-input', 'decrypt-step-result',
-  ]) {
-    expect(messagingSource).toContain(id);
-  }
-
-  expect(receiveSource.match(/isCurrentLegacySession\(sessionGeneration\)/gu)?.length ?? 0)
-    .toBeGreaterThanOrEqual(4);
-  expect(app).toContain("$('trust-import-input')");
+  // Private keys are derived per operation, never kept in session state.
+  expect(app).not.toMatch(/state\.wallet\b/u);
+  expect(app).not.toMatch(/privateKey:\s*[a-zA-Z]+\.privateKey/u);
 });
 
 test('both createWalletUI forms hide signer authority and repeated public destroy retries late cleanup', async () => {
@@ -661,8 +536,6 @@ test('both createWalletUI forms hide signer authority and repeated public destro
     globalThis.document = testDocument;
     globalThis.Node = TestNode;
     globalThis.window = testWindow;
-    vi.doMock('vcard-cryptoperson', () => ({ createV3() { return {}; } }));
-    vi.doMock('@sds/lib/js/EME/EME.js', () => ({ EME: {}, EMET: {} }));
     const { createWalletUI } = await import('../src/app.js');
     const positionalMount = new TestNode(testDocument);
     const objectMount = new TestNode(testDocument);
@@ -796,8 +669,6 @@ test('both createWalletUI forms hide signer authority and repeated public destro
       wasm: Promise.reject(initializationFailure),
     })).rejects.toBe(initializationFailure);
   } finally {
-    vi.doUnmock('vcard-cryptoperson');
-    vi.doUnmock('@sds/lib/js/EME/EME.js');
     globalThis.document = originalDocument;
     globalThis.Node = originalNode;
     globalThis.window = originalWindow;

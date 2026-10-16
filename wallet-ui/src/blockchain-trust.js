@@ -23,6 +23,7 @@ import { sha256 } from '@noble/hashes/sha256';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { ed25519 } from '@noble/curves/ed25519';
 import { apiUrl } from './address-derivation.js';
+import { BTC_MAX_SATS, parseBtcRecipient, verifyUtxo } from './send-safety.js';
 
 // @scure/base exports base58check as a factory: base58check(sha256) returns a
 // codec with encode/decode that verifies the 4-byte double-sha256 checksum.
@@ -538,6 +539,8 @@ export function parseEthereumData(dataHex) {
 
 const SIGHASH_ALL = 0x01;
 const BTC_DUST_SATS = 546n;
+/** Inputs a wallet transaction may spend (keeps every buffer bounded). */
+export const BTC_MAX_INPUTS = 40;
 
 function bytesToHexUpper(bytes) {
   return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -566,9 +569,11 @@ function writeVarInt(bytes, offset, value) {
     bytes[offset] = value;
     return offset + 1;
   }
+  if (value > 0xffff) throw new Error('writeVarInt: value out of range');
   bytes[offset] = 0xfd;
-  writeUint32LE(bytes, offset + 1, value);
-  return offset + 4;
+  bytes[offset + 1] = value & 0xff;
+  bytes[offset + 2] = (value >>> 8) & 0xff;
+  return offset + 3;
 }
 
 function sha256d(bytes) {
@@ -658,24 +663,16 @@ export function decodeBech32(str) {
   return { hrp, version, program: Uint8Array.from(acc.slice(1)) };
 }
 
-/** Bitcoin address → scriptPubKey hex (p2pkh and p2wpkh v0 change outputs). */
+/**
+ * Bitcoin address → scriptPubKey hex. The version byte (base58) or witness
+ * version and program length (bech32/bech32m) pick the script; anything that
+ * is not a valid mainnet address throws (send-safety.js parseBtcRecipient).
+ */
 export function btcAddressToScriptPubKey(address) {
   if (typeof address !== 'string' || address.length === 0) {
     throw new Error('btcAddressToScriptPubKey: address is required');
   }
-  if (/^(1|3)[1-9A-HJ-NP-Za-km-z]{25,34}$/.test(address)) {
-    const payload = base58checkCodec.decode(address);
-    if (payload.length !== 21) {
-      throw new Error(`btcAddressToScriptPubKey: unexpected p2pkh payload length ${payload.length}`);
-    }
-    const hash160 = payload.slice(1, 21);
-    return `76a914${bytesToHex(hash160)}88ac`;
-  }
-  const bech32 = decodeBech32(address);
-  if (bech32 && bech32.hrp === 'bc' && bech32.version === 0 && bech32.program.length === 20) {
-    return `0014${bytesToHex(bech32.program)}`;
-  }
-  throw new Error(`btcAddressToScriptPubKey: unsupported address format: ${address.slice(0, 8)}…`);
+  return bytesToHex(parseBtcRecipient(address).script);
 }
 
 /**
@@ -707,8 +704,8 @@ export function btcTrustTransaction({ utxos, metadataBytes, changeAddress, signP
     throw new Error('btcTrustTransaction: signPrivateKey must be 32 bytes');
   }
 
-  const totalIn = utxos.reduce((sum, u) => sum + BigInt(Number(u.value) || 0), 0n);
-  const fee = BigInt(Number(feeSats) || 0);
+  const totalIn = sumUtxoValues(utxos);
+  const fee = satoshis(feeSats, 'feeSats');
   if (totalIn <= fee) throw new Error('btcTrustTransaction: UTXOs do not cover the tx fee');
 
   const opReturn = new Uint8Array(2 + metadataBytes.length);
@@ -725,6 +722,59 @@ export function btcTrustTransaction({ utxos, metadataBytes, changeAddress, signP
     }
     outputs.push({ script: hexToBytes(btcAddressToScriptPubKey(changeAddress)), value: change });
   }
+  return btcSignedTransaction({ utxos, outputs, signPrivateKey });
+}
+
+/** An exact satoshi amount: a non-negative safe integer, BigInt or digit string. */
+function satoshis(value, label) {
+  let result;
+  if (typeof value === 'bigint') result = value;
+  else if (typeof value === 'number' && Number.isSafeInteger(value)) result = BigInt(value);
+  else if (typeof value === 'string' && /^\d{1,16}$/.test(value)) result = BigInt(value);
+  else throw new Error(`${label} must be a whole number of satoshis`);
+  if (result < 0n || result > BTC_MAX_SATS) throw new Error(`${label} is out of range`);
+  return result;
+}
+
+function sumUtxoValues(utxos) {
+  return utxos.reduce((sum, u, i) => sum + satoshis(u?.value, `utxos[${i}].value`), 0n);
+}
+
+/**
+ * Build and sign a Bitcoin transaction spending `utxos` (p2pkh or p2wpkh v0,
+ * all owned by `signPrivateKey`) to `outputs` ({ script, value } with value
+ * in satoshis). The fee is whatever the inputs leave over; callers compute
+ * it from VERIFIED input values (send-safety.js verifyUtxo).
+ *
+ * @returns {{rawHex: string, txid: string, fee: bigint}}
+ */
+export function btcSignedTransaction({ utxos, outputs, signPrivateKey } = {}) {
+  if (!Array.isArray(utxos) || utxos.length === 0) {
+    throw new Error('btcSignedTransaction: at least one UTXO is required');
+  }
+  if (!Array.isArray(outputs) || outputs.length === 0) {
+    throw new Error('btcSignedTransaction: at least one output is required');
+  }
+  if (!(signPrivateKey instanceof Uint8Array) || signPrivateKey.length !== 32) {
+    throw new Error('btcSignedTransaction: signPrivateKey must be 32 bytes');
+  }
+  for (const [i, u] of utxos.entries()) {
+    if (typeof u?.txid !== 'string' || !/^[0-9a-fA-F]{64}$/.test(u.txid)) throw new Error(`btcSignedTransaction: utxos[${i}].txid is malformed`);
+    if (!Number.isInteger(u.vout) || u.vout < 0 || u.vout > 0xffffffff) throw new Error(`btcSignedTransaction: utxos[${i}].vout is malformed`);
+  }
+  outputs = outputs.map((o, i) => {
+    if (!(o?.script instanceof Uint8Array) || o.script.length === 0 || o.script.length > 10000) {
+      throw new Error(`btcSignedTransaction: outputs[${i}].script is malformed`);
+    }
+    return { script: o.script, value: satoshis(o.value, `outputs[${i}].value`) };
+  });
+  if (utxos.length > BTC_MAX_INPUTS) throw new Error(`btcSignedTransaction: at most ${BTC_MAX_INPUTS} inputs`);
+  if (outputs.length > 8) throw new Error('btcSignedTransaction: at most 8 outputs');
+  const totalIn = sumUtxoValues(utxos);
+  const totalOut = outputs.reduce((sum, o) => sum + o.value, 0n);
+  if (totalOut > totalIn) throw new Error('btcSignedTransaction: outputs exceed inputs');
+  const outputBytes = outputs.reduce((sum, o) => sum + 8 + 3 + o.script.length, 0);
+  const txCapacity = 64 + utxos.length * (41 + 110 + 110) + outputBytes;
 
   // ---- prepare prevout scripts ------------------------------------------
   const prevoutScripts = utxos.map((u, i) => {
@@ -736,7 +786,7 @@ export function btcTrustTransaction({ utxos, metadataBytes, changeAddress, signP
   });
 
   const serialized = (sigs, witnesses, withWitness) => {
-    const out = new Uint8Array(4096);
+    const out = new Uint8Array(txCapacity);
     let o = 0;
     writeUint32LE(out, o, 1); o += 4;
     if (withWitness) {
@@ -811,7 +861,7 @@ export function btcTrustTransaction({ utxos, metadataBytes, changeAddress, signP
       scriptCode[0] = 0x76; scriptCode[1] = 0xa9; scriptCode[2] = 0x14;
       scriptCode.set(prevoutScripts[i].hashBytes, 3);
       scriptCode[23] = 0x88; scriptCode[24] = 0xac;
-      const pre = new Uint8Array(320);
+      const pre = new Uint8Array(200 + outputBytes);
       let o = 0;
       writeUint32LE(pre, o, 1); o += 4;                    // version
       pre.set(bip143HashPrevouts, o); o += 32;
@@ -822,7 +872,7 @@ export function btcTrustTransaction({ utxos, metadataBytes, changeAddress, signP
       o = writeVarInt(pre, o, scriptCode.length);
       pre.set(scriptCode, o);
       o += scriptCode.length;
-      writeUint64LE(pre, o, BigInt(utxos[i].value) || 0n); o += 8;
+      writeUint64LE(pre, o, satoshis(utxos[i].value, `utxos[${i}].value`)); o += 8;
       writeUint32LE(pre, o, 0xffffffff); o += 4;           // sequence
       o = writeVarInt(pre, o, outputs.length);
       for (const out2 of outputs) {
@@ -872,7 +922,7 @@ export function btcTrustTransaction({ utxos, metadataBytes, changeAddress, signP
     }
     // P2PKH legacy sighash
     const rawInputs = legacySighashInputs[i];
-    const partial = new Uint8Array(2048);
+    const partial = new Uint8Array(txCapacity);
     let o = 0;
     writeUint32LE(partial, o, 1); o += 4;
     o = writeVarInt(partial, o, rawInputs.length);
@@ -915,7 +965,7 @@ export function btcTrustTransaction({ utxos, metadataBytes, changeAddress, signP
     : serialized(sigs, witnesses, false);
 
   const txid = bytesToHexUpper(reverseBytes(sha256d(rawTx)));
-  return { rawHex: bytesToHexUpper(rawTx), txid };
+  return { rawHex: bytesToHexUpper(rawTx), txid, fee: totalIn - totalOut };
 }
 
 /**
@@ -948,24 +998,44 @@ export function base58EncodeBytes(bytes) {
 }
 
 /**
- * Fetch spendable UTXOs for a Bitcoin address (blockstream free API).
+ * Fetch the spendable UTXOs of a Bitcoin address, VERIFIED.
+ *
+ * The free API lists confirmed outputs; their values are never taken from
+ * it. For each one the raw previous transaction is fetched, its
+ * double-SHA-256 must equal the listed txid, and the output must pay this
+ * address's script; the value is read from those bytes (send-safety.js
+ * verifyUtxo). A legacy (P2PKH) signature does not commit to input values,
+ * so a lying API could otherwise turn the whole balance into a miner fee.
+ * Any listed output that fails verification aborts the fetch.
+ *
+ * @returns {Promise<Array<{txid: string, vout: number, value: bigint, scriptpubkey: string}>>}
  */
-export async function fetchBtcUtxos(address) {
-  const response = await fetch(apiUrl(`https://blockstream.info/api/address/${address}/utxo`));
+export async function fetchBtcUtxos(address, { fetchImpl = (...args) => globalThis.fetch(...args), maxInputs = BTC_MAX_INPUTS } = {}) {
+  const expectedScript = parseBtcRecipient(address).script;
+  const response = await fetchImpl(apiUrl(`https://blockstream.info/api/address/${encodeURIComponent(address)}/utxo`));
   if (!response.ok) {
     throw new Error(`Failed to fetch UTXOs: ${response.status}`);
   }
   const data = await response.json();
-  if (!Array.isArray(data)) return [];
-  return data
-    .filter(u => u.status?.confirmed)
-    .sort((a, b) => (b.value || 0) - (a.value || 0))
-    .map(u => ({
-      txid: u.txid,
-      vout: u.vout,
-      value: u.value,
-      scriptpubkey: u.scriptpubkey || '',
-    }));
+  if (!Array.isArray(data)) throw new Error('Failed to fetch UTXOs: unexpected response');
+  const listed = data
+    .filter((u) => u && u.status?.confirmed === true)
+    .filter((u) => typeof u.txid === 'string' && /^[0-9a-f]{64}$/.test(u.txid) && Number.isInteger(u.vout) && u.vout >= 0)
+    .sort((a, b) => (Number(b.value) || 0) - (Number(a.value) || 0))
+    .slice(0, maxInputs);
+  const verified = [];
+  const rawCache = new Map();
+  for (const utxo of listed) {
+    let rawHex = rawCache.get(utxo.txid);
+    if (rawHex === undefined) {
+      const raw = await fetchImpl(apiUrl(`https://blockstream.info/api/tx/${utxo.txid}/hex`));
+      if (!raw.ok) throw new Error(`Failed to fetch a UTXO's transaction: ${raw.status}`);
+      rawHex = (await raw.text()).trim();
+      rawCache.set(utxo.txid, rawHex);
+    }
+    verified.push(verifyUtxo({ txid: utxo.txid, vout: utxo.vout }, rawHex, expectedScript));
+  }
+  return verified;
 }
 
 // =============================================================================
@@ -1541,11 +1611,9 @@ export function buildTrustGraph(trustTxs) {
 }
 
 // =============================================================================
-// SDS Export / Import — TRE trust edges + $LOT loss-of-trust records
-// (Themis trust-program mapping: level n → WEIGHT (n-1)/4, NEVER → 0.0
-// (never DELETED), wallet Revocation [0x52] → $LOT. TX_HASH is the additive
-// on-chain provenance field. $LOT is the loss-of-trust event grammar from
-// graph/findings/adversarial-security-trust-program.md.)
+// Trust weights (Themis trust-program mapping: level n → WEIGHT (n-1)/4,
+// NEVER → 0.0). The wallet-ui 2.x `.sds.json` export/import was removed in
+// 3.0: it was plain JSON, not SDS, and named the xpub as a peer ID.
 // =============================================================================
 
 /**
@@ -1568,161 +1636,6 @@ export function trustWeightToLevel(weight) {
     throw new Error(`trustWeightToLevel: weight must be in [0, 1], got ${weight}`);
   }
   return Math.min(TrustLevel.ULTIMATE, Math.max(TrustLevel.NEVER, Math.round(w * 4) + 1));
-}
-
-/** chain slug (bitcoin/ethereum/solana) → key algorithm for $LOT. */
-function keyAlgorithmForChain(chain) {
-  if (chain === 'solana') return 'ed25519';
-  return 'secp256k1';
-}
-
-/**
- * Build the SDS export document for the given wallet trust transactions.
- *
- * - trust records → TRE edges: TRUSTER_ID = sender identity, TRUSTEE_ID =
- *   recipient identity, WEIGHT per the Themis map, UPDATED_AT (ms),
- *   DELETED false, additive TX_HASH provenance, PROVIDER_PEER_ID when given.
- * - revocation records → $LOT loss-of-trust events, each bound to the
- *   original trust edge it revokes (EVIDENCE_TRANSACTION_HASHES =
- *   [revocation tx, original tx]).
- *
- * @param {object[]} transactions - Trust tx records (scanner shape)
- * @param {{xpub?: string, peerId?: string}} [opts]
- * @returns {{exportDate: string, recordTypes: string[], tre: object[], lot: object[]}}
- */
-export function buildSdsTrustExport(transactions, { peerId = null } = {}) {
-  const txs = Array.isArray(transactions) ? transactions : [];
-  const byTxHash = new Map();
-  for (const tx of txs) {
-    if (tx.txHash) byTxHash.set(String(tx.txHash).toLowerCase(), tx);
-  }
-
-  const tre = [];
-  const lot = [];
-  const revokedHashes = new Set();
-
-  for (const tx of txs) {
-    if (tx.type !== 'trust') continue;
-    const txHash = String(tx.txHash ?? '');
-    const recipient = String(tx.recipientPubkey ?? '');
-    // A revocation may bind to the trust edge by its transaction hash OR by the
-    // trusted recipient's identity (originalTxHash == recipientPubkey).
-    const revokedBy = txs.find(
-      r => r.type === 'revocation' &&
-        (String(r.originalTxHash ?? '').toLowerCase() === txHash.toLowerCase() ||
-         String(r.originalTxHash ?? '').toLowerCase() === recipient.toLowerCase())
-    );
-    revokedHashes.add(String(tx.originalTxHash ?? '').toLowerCase());
-    tre.push({
-      EDGE_ID: `${String(tx.from ?? '')}->${String(tx.recipientPubkey ?? '')}`,
-      TRUSTER_ID: String(tx.from ?? ''),
-      TRUSTEE_ID: String(tx.recipientPubkey ?? ''),
-      WEIGHT: trustLevelToWeight(tx.level),
-      UPDATED_AT: Number(tx.timestamp) || Date.now(),
-      DELETED: revokedBy ? true : false,
-      TX_HASH: txHash,
-      ...(peerId ? { PROVIDER_PEER_ID: peerId } : {}),
-    });
-  }
-
-  for (const tx of txs) {
-    if (tx.type !== 'revocation') continue;
-    const originalTxHash = String(tx.originalTxHash ?? '');
-    const original = byTxHash.get(originalTxHash.toLowerCase());
-    const key = original?.recipientPubkey || null;
-    lot.push({
-      LOSS_OF_TRUST_ID: String(tx.txHash ?? ''),
-      KEY_PUBLIC_KEY: key || null,
-      KEY_ALGORITHM: key === null ? null : keyAlgorithmForChain(original?.chain || tx.chain),
-      SCOPE_EPM_CID: null,
-      SCOPE_PEER_ID: null,
-      EFFECTIVE_FROM: Number(tx.timestamp) || Date.now(),
-      REASON: 'Distrust',
-      EVIDENCE_CHAIN: tx.chain || null,
-      EVIDENCE_TRANSACTION_HASHES: [
-        String(tx.txHash ?? ''),
-        originalTxHash,
-      ].filter(Boolean),
-      EVIDENCE_BALANCE_DROP: null,
-      EVIDENCE_OBSERVED_AT: Number(tx.timestamp) || Date.now(),
-      OBSERVER_PEER_ID: null,
-      DECLARER_PUBLIC_KEY: String(tx.from ?? '') || null,
-      CREATED_AT: Number(tx.timestamp) || Date.now(),
-      PROVIDER_PEER_ID: peerId,
-      PROVIDER_SIGNATURE: null,
-    });
-  }
-
-  return {
-    exportDate: new Date().toISOString(),
-    recordTypes: [...new Set(['TRE', ...(lot.length ? ['LOT'] : [])])],
-    tre,
-    lot,
-  };
-}
-
-/**
- * Parse an SDS trust export document back into wallet trust transactions.
- * Accepts the { tre, lot } document shape. TRE WEIGHT maps back to the
- * nearest wallet level and every TRE edge restores as a trust record (its
- * DELETED flag is provenance, not a type switch — the loss-of-trust event is
- * carried by the paired $LOT record); $LOT records become revocations via
- * their EVIDENCE_TRANSACTION_HASHES[1]/original trust hash.
- *
- * @param {object} doc - Parsed SDS export document
- * @returns {object[]} Trust transaction records (scanner shape)
- */
-export function parseSdsTrustImport(doc) {
-  if (!doc || typeof doc !== 'object') {
-    throw new Error('parseSdsTrustImport: expected an SDS export document');
-  }
-  const out = [];
-  const seen = new Set();
-  const push = (tx) => {
-    const key = `${tx.type}:${String(tx.txHash ?? '')}`;
-    if (!tx.txHash || seen.has(key)) return;
-    seen.add(key);
-    out.push(tx);
-  };
-
-  const tre = Array.isArray(doc.tre) ? doc.tre : [];
-  for (const rec of tre) {
-    const trustee = String(rec.TRUSTEE_ID ?? '');
-    const truster = String(rec.TRUSTER_ID ?? '');
-    if (!truster || !trustee) continue;
-    const txHash = String(rec.TX_HASH ?? '');
-    // A TRE edge (DELETED or not) restores as the trust edge itself: its
-    // WEIGHT maps back to a level and the recipient survives. The loss-of-trust
-    // event that flagged DELETED is carried by the paired $LOT record, which
-    // imports as the revocation below.
-    push({
-      type: 'trust',
-      txHash: txHash || `${truster}->${trustee}@${Number(rec.UPDATED_AT) || 0}`,
-      timestamp: Number(rec.UPDATED_AT) || Date.now(),
-      from: truster,
-      recipientPubkey: trustee,
-      chain: 'sds',
-      level: trustWeightToLevel(rec.WEIGHT),
-    });
-  }
-
-  const lot = Array.isArray(doc.lot) ? doc.lot : [];
-  for (const rec of lot) {
-    const hashes = Array.isArray(rec.EVIDENCE_TRANSACTION_HASHES)
-      ? rec.EVIDENCE_TRANSACTION_HASHES.filter(Boolean)
-      : [];
-    push({
-      type: 'revocation',
-      txHash: String(rec.LOSS_OF_TRUST_ID ?? ''),
-      originalTxHash: hashes[1] || '',
-      timestamp: Number(rec.EFFECTIVE_FROM) || Date.now(),
-      from: String(rec.DECLARER_PUBLIC_KEY ?? ''),
-      recipientPubkey: String(rec.KEY_PUBLIC_KEY ?? ''),
-      chain: rec.EVIDENCE_CHAIN || 'sds',
-    });
-  }
-
-  return out;
 }
 
 // =============================================================================

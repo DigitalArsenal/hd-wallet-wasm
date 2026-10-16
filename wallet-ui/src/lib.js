@@ -14,7 +14,6 @@ export {
   getSigningKey,
   getEncryptionKey,
   WellKnownCoinType,
-  PKI_STORAGE_KEY,
 } from './constants.js';
 
 // Address derivation & utilities

@@ -202,43 +202,70 @@ const flush = async () => {
 
 // ---- behaviour ------------------------------------------------------------
 
+function tabButtons(view) {
+  return view.element.querySelectorAll('[role=tab]');
+}
+
+function visiblePanels(view) {
+  return view.element.querySelectorAll('[role=tabpanel]').filter((panel) => !panel.hidden);
+}
+
 describe('account view export', () => {
   it('mounts without a driven transaction — the reason this export exists', () => {
     const doc = stubDocument();
     const view = mountAccountView(doc.body, { document: doc, title: 'Ada' });
     expect(doc.body.querySelector('[data-wallet-account-view]')).not.toBeNull();
-    expect(view.element.querySelector('.account-header-name').textContent).toBe('Ada');
+    expect(view.element.querySelector('.account-name').textContent).toBe('Ada');
   });
 
-  it('keeps the wallet app tab grammar so one stylesheet dresses both', () => {
+  it('keeps the wallet app grammar so one stylesheet dresses both', () => {
     const doc = stubDocument();
     const view = createAccountView({ document: doc });
-    expect(view.element.querySelector('.modal-tabs')).not.toBeNull();
-    expect(view.element.querySelectorAll('.modal-tab')).toHaveLength(DEFAULT_ACCOUNT_TABS.length);
+    expect(view.element.classList.contains('account-view')).toBe(true);
+    expect(view.element.querySelector('.account-identity-bar')).not.toBeNull();
+    expect(view.element.querySelector('.account-tabs')).not.toBeNull();
+    expect(tabButtons(view)).toHaveLength(DEFAULT_ACCOUNT_TABS.length);
     for (const tab of DEFAULT_ACCOUNT_TABS) {
-      const control = view.element.querySelector(`[data-modal-tab=${tab.id}-tab-content]`);
+      const control = view.element.querySelector(`[data-section=${tab.id}]`);
       expect(control, `tab ${tab.id}`).not.toBeNull();
       expect(control.textContent).toBe(tab.label);
-      expect(view.element.querySelector(`#${tab.id}-tab-content`)).not.toBeNull();
+      expect(view.element.querySelector(`#account-pane-${tab.id}`)).not.toBeNull();
     }
   });
 
-  it('ships the same tab labels the wallet app itself renders', () => {
+  it('ships the same section labels the wallet app itself renders', () => {
     const template = read('src/template.js');
     for (const tab of DEFAULT_ACCOUNT_TABS) {
       expect(template, `tab ${tab.label}`).toContain(`>${tab.label}<`);
     }
   });
 
-  it('puts the bond value at the top, in the header', () => {
+  it('shows the short peer ID with Copy, a status word and Close; no Bond and no selector', () => {
     const doc = stubDocument();
-    const view = createAccountView({ document: doc, bond: { value: '$1,204.55' } });
-    const header = view.element.querySelector('.account-modal-header');
-    expect(header.querySelector('#wallet-bond-value').textContent).toBe('$1,204.55');
-    expect(header.querySelector('.ph-portfolio-label').textContent).toBe('Bond');
+    const view = createAccountView({
+      document: doc,
+      title: 'Ada Lovelace',
+      peerId: '12D3KooWJB7pwCc5pMGNVykovHTSMHGTxiQBEFBVwsgFoAmMkmWZ',
+      status: 'Seed phrase',
+    });
+    const peer = view.element.querySelector('.account-peer-id');
+    expect(peer.textContent).toBe('12D3KooW…kmWZ');
+    expect(peer.title).toBe('12D3KooWJB7pwCc5pMGNVykovHTSMHGTxiQBEFBVwsgFoAmMkmWZ');
+    expect(view.element.querySelector('.copy-chip').hidden).toBe(false);
+    expect(view.element.querySelector('.account-status').textContent).toBe('Seed phrase');
+    expect(view.element.querySelector('.account-close').getAttribute('aria-label')).toBe('Close');
+    expect(view.element.querySelector('.account-avatar').textContent).toBe('AL');
+    expect(view.element.querySelectorAll('select')).toHaveLength(0);
+    expect(view.element.textContent).not.toMatch(/Bond/u);
   });
 
-  it('lets a consumer add its own tab instead of forking the strip', () => {
+  it('shows the avatar photo the consumer serves', () => {
+    const doc = stubDocument();
+    const view = createAccountView({ document: doc, avatar: { url: '/ipfs/bafkreiavatar' } });
+    expect(view.element.querySelector('.account-avatar-image').src).toBe('/ipfs/bafkreiavatar');
+  });
+
+  it('lets a consumer add its own section instead of forking the strip', () => {
     const doc = stubDocument();
     const view = createAccountView({
       document: doc,
@@ -248,29 +275,47 @@ describe('account view export', () => {
         DEFAULT_ACCOUNT_TABS[4],
       ],
     });
-    expect(view.element.querySelectorAll('.modal-tab')).toHaveLength(6);
+    expect(tabButtons(view)).toHaveLength(6);
     expect(view.panel('node').textContent).toBe('peer facts');
   });
 
-  it('activates exactly one tab at a time', () => {
+  it('shows exactly one section at a time', () => {
     const doc = stubDocument();
     const view = createAccountView({ document: doc });
-    expect(view.getActiveTab()).toBe('identity');
-    view.setActiveTab('wallet');
-    expect(view.getActiveTab()).toBe('wallet');
-    expect(view.element.querySelectorAll('.modal-tab.active')).toHaveLength(1);
-    expect(view.element.querySelectorAll('.modal-tab-content.active')).toHaveLength(1);
-    expect(view.element.querySelector('#wallet-tab-content').classList.contains('active')).toBe(true);
+    expect(view.getActiveTab()).toBe('profile');
+    view.setActiveTab('assets');
+    expect(view.getActiveTab()).toBe('assets');
+    expect(tabButtons(view).filter((tab) => tab.getAttribute('aria-selected') === 'true')).toHaveLength(1);
+    expect(visiblePanels(view).map((panel) => panel.id)).toEqual(['account-pane-assets']);
   });
 
   it('clicking a tab switches it', () => {
     const doc = stubDocument();
     const view = createAccountView({ document: doc });
-    view.element.querySelector('[data-modal-tab=manage-tab-content]').click();
-    expect(view.getActiveTab()).toBe('manage');
+    view.element.querySelector('[data-section=settings]').click();
+    expect(view.getActiveTab()).toBe('settings');
   });
 
-  it('renders editable vCard fields and hands their values back on save', async () => {
+  it('the arrow keys, Home and End move focus along the tabs', () => {
+    const doc = stubDocument();
+    const view = createAccountView({ document: doc });
+    let focused = null;
+    const tabs = tabButtons(view);
+    for (const tab of tabs) tab.focus = () => { focused = tab.dataset.section; };
+    const press = (tab, key) => {
+      for (const handler of tab.listeners.get('keydown') ?? []) handler({ key, target: tab, preventDefault() {} });
+    };
+    press(tabs[0], 'ArrowRight');
+    expect(focused).toBe('messages');
+    press(tabs[0], 'ArrowLeft');
+    expect(focused).toBe('settings');
+    press(tabs[2], 'Home');
+    expect(focused).toBe('profile');
+    press(tabs[2], 'End');
+    expect(focused).toBe('settings');
+  });
+
+  it('renders editable profile fields and hands their values back on save', async () => {
     const doc = stubDocument();
     let saved = null;
     const view = createAccountView({
@@ -284,7 +329,7 @@ describe('account view export', () => {
       },
     });
     view.element.querySelector('#identity-field-organization').value = 'Analytical Engines';
-    view.element.querySelector('.identity-save-row').querySelector('.glass-btn').click();
+    view.element.querySelector('.identity-save-row').querySelector('.btn').click();
     await flush();
     expect(saved).toEqual({ name: 'Ada', organization: 'Analytical Engines' });
     expect(view.element.querySelector('.identity-save-status').textContent).toBe('Saved');
@@ -299,7 +344,7 @@ describe('account view export', () => {
         onSave: () => { throw new Error('this entry comes from the node config file'); },
       },
     });
-    view.element.querySelector('.identity-save-row').querySelector('.glass-btn').click();
+    view.element.querySelector('.identity-save-row').querySelector('.btn').click();
     await flush();
     expect(view.element.querySelector('.identity-save-status').textContent)
       .toBe('this entry comes from the node config file');
@@ -316,7 +361,7 @@ describe('account view export', () => {
     expect(view.element.descendants().filter((n) => n.disabled)).toHaveLength(0);
   });
 
-  it('hides the save control when nothing on the tab is editable', () => {
+  it('hides the save control when nothing on the section is editable', () => {
     const doc = stubDocument();
     const view = createAccountView({
       document: doc,
@@ -325,15 +370,15 @@ describe('account view export', () => {
     expect(view.element.querySelector('.identity-save-row').hidden).toBe(true);
   });
 
-  it('offers the wallet app photo controls and reports storage failure honestly', async () => {
+  it('offers the photo controls as text buttons and reports storage failure honestly', async () => {
     const doc = stubDocument();
     const view = createAccountView({
       document: doc,
       identity: { onPhoto: () => { throw new Error('the node could not store the image'); } },
     });
     const actions = view.element.querySelector('.photo-actions');
-    const labels = actions.querySelectorAll('.glass-btn').map((b) => b.textContent);
-    expect(labels).toEqual(['Upload', 'Use Camera', 'Capture', 'Cancel', 'Remove']);
+    const labels = actions.querySelectorAll('button').map((b) => b.textContent);
+    expect(labels).toEqual(['Upload photo', 'Take photo', 'Capture', 'Cancel', 'Remove photo']);
 
     const fileInput = view.element.querySelector('.photo-file-input');
     fileInput.files = [{ type: 'image/png' }];
@@ -346,7 +391,7 @@ describe('account view export', () => {
   it('says so when the browser has no camera rather than failing silently', async () => {
     const doc = stubDocument();
     const view = createAccountView({ document: doc, identity: {} });
-    view.element.querySelector('.photo-actions').querySelectorAll('.glass-btn')[1].click();
+    view.element.querySelector('.photo-actions').querySelectorAll('button')[1].click();
     await flush();
     expect(view.element.querySelector('.photo-status').textContent)
       .toBe('This browser has no camera available.');
@@ -368,13 +413,14 @@ describe('account view export', () => {
     const view = createAccountView({
       document: doc,
       title: '<img src=x onerror=alert(1)>',
+      status: '<b>bold</b>',
       chips: [{ label: '<script>bad()</script>' }],
     });
     // The only <img> in the view is the photo element this component creates.
-    // Caller text never becomes an element.
     expect(view.element.querySelectorAll('img')).toHaveLength(1);
     expect(view.element.querySelector('script')).toBeNull();
-    expect(view.element.querySelector('.account-header-name').textContent)
+    expect(view.element.querySelector('b')).toBeNull();
+    expect(view.element.querySelector('.account-name').textContent)
       .toBe('<img src=x onerror=alert(1)>');
     expect(view.element.querySelector('.account-chip').textContent).toBe('<script>bad()</script>');
   });
@@ -384,12 +430,13 @@ describe('account view export', () => {
     const view = createAccountView({
       document: doc,
       title: 'Ada',
-      bond: { value: '$1.00' },
+      peerId: '12D3KooWJB7pwCc5pMGNVykovHTSMHGTxiQBEFBVwsgFoAmMkmWZ',
       identity: { fields: [{ id: 'name', label: 'Name', value: 'Ada' }] },
     });
-    view.update({ bond: { value: '$2.00' } });
-    expect(view.element.querySelector('#wallet-bond-value').textContent).toBe('$2.00');
-    expect(view.element.querySelector('.account-header-name').textContent).toBe('Ada');
+    view.update({ status: 'Account 1' });
+    expect(view.element.querySelector('.account-status').textContent).toBe('Account 1');
+    expect(view.element.querySelector('.account-name').textContent).toBe('Ada');
+    expect(view.element.querySelector('.account-peer-id').textContent).toBe('12D3KooW…kmWZ');
     expect(view.element.querySelector('#identity-field-name').value).toBe('Ada');
   });
 

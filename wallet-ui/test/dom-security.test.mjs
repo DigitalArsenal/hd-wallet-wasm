@@ -13,11 +13,11 @@ import {
   inspectPhotoBytes,
 } from '../origin-app/photo.mjs';
 import { renderSafeInlineTranslation } from '../src/i18n.js';
-import {
-  closeActiveTrustModals,
-  importTrustData,
-  showEstablishTrustModal,
-} from '../src/trust-ui.js';
+import { createMessagesPane } from '../src/messages-ui.js';
+import { createPeoplePane } from '../src/people-ui.js';
+import { createProfilePane } from '../src/profile-ui.js';
+import { createAccountShell } from '../src/account-view.js';
+import { createTestContext } from './helpers/account-context.mjs';
 
 class SafeNode {
   constructor(tagName, document) {
@@ -630,209 +630,133 @@ describe('local byte-only photos', () => {
   });
 });
 
-describe('trust modal lifecycle and accessibility', () => {
-  test('is a named dialog with initial focus, a trusted focus trap, Escape, and focus restoration', () => {
-    const originalDocument = globalThis.document;
-    const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
+const HOSTILE = '<img src=x onerror=alert(1)><script>bad()</script><b>bold</b>';
+
+function elementsNamed(document, names) {
+  const found = [];
+  const visit = (node) => {
+    if (names.includes(node.tagName)) found.push(node);
+    node.children.forEach(visit);
+  };
+  visit(document.body);
+  return found;
+}
+
+async function settle(check) {
+  for (let index = 0; index < 200; index += 1) {
+    if (check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+}
+
+describe('account view renders hostile text only as text', () => {
+  test('profile fields and the name become text, never markup', () => {
     const document = new SafeDocument();
-    globalThis.document = document;
-    globalThis.requestAnimationFrame = (callback) => callback();
-    try {
-      const prior = document.createElement('button');
-      document.body.append(prior);
-      prior.focus();
-      showEstablishTrustModal(() => {});
-
-      const modal = document.find((node) => node.classList.contains('trust-modal'));
-      const recipient = document.find((node) => node.id === 'trust-recipient');
-      const heading = document.find((node) => node.tagName === 'h3');
-      const close = document.find((node) => node.getAttribute('aria-label') === 'Close');
-      const confirm = document.find((node) => node.id === 'trust-confirm');
-      expect(modal.getAttribute('role')).toBe('dialog');
-      expect(modal.getAttribute('aria-modal')).toBe('true');
-      expect(modal.getAttribute('aria-labelledby')).toBe(heading.id);
-      expect(heading.id).not.toBe('');
-      expect(document.activeElement).toBe(recipient);
-
-      modal.dispatch('keydown', { isTrusted: false, key: 'Escape', preventDefault() {} });
-      expect(modal.classList.contains('active')).toBe(true);
-      confirm.focus();
-      let prevented = 0;
-      modal.dispatch('keydown', {
-        isTrusted: true,
-        key: 'Tab',
-        preventDefault() { prevented += 1; },
-        shiftKey: false,
-      });
-      expect(prevented).toBe(1);
-      expect(document.activeElement).toBe(close);
-      close.focus();
-      modal.dispatch('keydown', {
-        isTrusted: true,
-        key: 'Tab',
-        preventDefault() { prevented += 1; },
-        shiftKey: true,
-      });
-      expect(document.activeElement).toBe(confirm);
-      modal.dispatch('keydown', {
-        isTrusted: true,
-        key: 'Escape',
-        preventDefault() { prevented += 1; },
-      });
-      expect(modal.classList.contains('active')).toBe(false);
-      expect(document.activeElement).toBe(prior);
-    } finally {
-      closeActiveTrustModals();
-      globalThis.document = originalDocument;
-      globalThis.requestAnimationFrame = originalRequestAnimationFrame;
-    }
+    const panel = document.createElement('section');
+    document.body.append(panel);
+    const ctx = createTestContext({
+      document,
+      kind: 'seed',
+      profile: { name: HOSTILE, jobTitle: HOSTILE, organization: HOSTILE, city: HOSTILE },
+    });
+    ctx.session = () => ({ kind: 'seed', account: 0, identity: { edPub: new Uint8Array(32), xPub: new Uint8Array(32), peerId: '12D3KooWtest', account: 0 } });
+    createProfilePane(panel, ctx).show();
+    expect(elementsNamed(document, ['img', 'script', 'b'])).toEqual([]);
+    expect(panel.textContent).toContain(HOSTILE);
   });
 
-  test('close/logout invalidates a queued vCard read and clears contact/address UI', () => {
-    const originalDocument = globalThis.document;
-    const originalFileReader = globalThis.FileReader;
-    const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
-    const readers = [];
-    class DeferredFileReader {
-      constructor() { readers.push(this); }
-      readAsText() {}
-    }
+  test('a contact name, photo and addresses become text, never markup', () => {
     const document = new SafeDocument();
-    globalThis.document = document;
-    globalThis.FileReader = DeferredFileReader;
-    globalThis.requestAnimationFrame = (callback) => callback();
-    try {
-      showEstablishTrustModal(() => {});
-      const vcfTab = document.find((node) => node.dataset.tab === 'vcf');
-      const vcfInput = document.find((node) => node.type === 'file');
-      const summary = document.find((node) => node.classList.contains('trust-vcf-summary'));
-      const recipient = document.find((node) => node.id === 'trust-recipient');
-      vcfTab.dispatch('click', { isTrusted: true });
-      vcfInput.files = [{ name: 'queued.vcf', size: 100 }];
-      vcfInput.dispatch('change', { isTrusted: true });
-      expect(readers).toHaveLength(1);
-      const queuedOnload = readers[0].onload;
-
-      recipient.value = '0x1111111111111111111111111111111111111111';
-      closeActiveTrustModals();
-      readers[0].result = [
-        'BEGIN:VCARD',
-        'FN:Late Contact',
-        'KEY:0x2222222222222222222222222222222222222222',
-        'END:VCARD',
-      ].join('\n');
-      queuedOnload();
-
-      expect(recipient.value).toBe('');
-      expect(vcfInput.value).toBe('');
-      expect(summary.textContent).toBe('');
-    } finally {
-      closeActiveTrustModals();
-      globalThis.document = originalDocument;
-      globalThis.FileReader = originalFileReader;
-      globalThis.requestAnimationFrame = originalRequestAnimationFrame;
-    }
+    const panel = document.createElement('section');
+    document.body.append(panel);
+    const ctx = createTestContext({
+      document,
+      contacts: [{
+        peerId: '12D3KooWJB7pwCc5pMGNVykovHTSMHGTxiQBEFBVwsgFoAmMkmWZ',
+        name: HOSTILE,
+        encryptionKey: 'ab'.repeat(32),
+        signingKey: 'cd'.repeat(32),
+        photo: 'javascript:alert(1)',
+        addresses: { eth: HOSTILE },
+      }],
+    });
+    createPeoplePane(panel, ctx).show();
+    expect(elementsNamed(document, ['img', 'script', 'b'])).toEqual([]);
+    expect(panel.textContent).toContain(HOSTILE);
   });
 
-  test.each([
-    ['missing', undefined],
-    ['non-finite', Number.POSITIVE_INFINITY],
-    ['negative', -1],
-    ['oversized', (256 * 1024) + 1],
-  ])('trust vCard import rejects a %s size before constructing FileReader', (_label, size) => {
-    const originalDocument = globalThis.document;
-    const originalFileReader = globalThis.FileReader;
-    const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
-    const FileReader = vi.fn();
+  test('FILE_NAME, NAME, MEDIA_TYPE and decrypted text become text, never markup', async () => {
     const document = new SafeDocument();
-    globalThis.document = document;
-    globalThis.FileReader = FileReader;
-    globalThis.requestAnimationFrame = (callback) => callback();
-    try {
-      showEstablishTrustModal(() => {});
-      const vcfTab = document.find((node) => node.dataset.tab === 'vcf');
-      const vcfInput = document.find((node) => node.type === 'file');
-      vcfTab.dispatch('click', { isTrusted: true });
-      vcfInput.files = [{ name: 'invalid.vcf', size }];
-      vcfInput.dispatch('change', { isTrusted: true });
-      expect(FileReader).not.toHaveBeenCalled();
-    } finally {
-      closeActiveTrustModals();
-      globalThis.document = originalDocument;
-      globalThis.FileReader = originalFileReader;
-      globalThis.requestAnimationFrame = originalRequestAnimationFrame;
-    }
+    const panel = document.createElement('section');
+    document.body.append(panel);
+    const envelopes = {
+      verifyInput: () => ({
+        kind: 'rec',
+        valid: true,
+        reason: null,
+        timestampValid: true,
+        signer: { peerId: '12D3KooWtest' },
+        notice: { PUBLISH_TIMESTAMP: '2026-10-15T00:00:00.000Z', FILE_NAME: HOSTILE },
+        content: new TextEncoder().encode(HOSTILE),
+        fileName: HOSTILE,
+        size: 3,
+      }),
+      decryptFile: () => ({
+        ok: true,
+        isFileRecord: true,
+        file: { name: HOSTILE, mediaType: `text/plain; x=${HOSTILE}`, size: 3, content: new TextEncoder().encode(HOSTILE) },
+        signature: null,
+      }),
+    };
+    const ctx = createTestContext({ document, envelopes, profile: { name: HOSTILE } });
+    ctx.session = () => ({ kind: 'seed', account: 0, identity: { edPub: new Uint8Array(32), xPub: new Uint8Array(32), peerId: '12D3KooWself', account: 0 } });
+    ctx.keys.withXKey = (fn) => fn(new Uint8Array(32));
+    const pane = createMessagesPane(panel, ctx);
+    pane.show({ mode: 'verify' });
+    const file = { name: 'x.rec', size: 3, type: '', arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer };
+    const zone = document.find((node) => node.classList.contains('drop-zone'));
+    zone.dispatch('drop', { dataTransfer: { files: [file] } });
+    await settle(() => panel.textContent.includes('Valid signature'));
+    expect(panel.textContent).toContain('Valid signature');
+    expect(elementsNamed(document, ['img', 'script', 'b'])).toEqual([]);
+
+    pane.reset();
+    pane.show({ mode: 'decrypt' });
+    const decryptZone = document.find((node) => node.classList.contains('drop-zone'));
+    decryptZone.dispatch('drop', { dataTransfer: { files: [file] } });
+    await settle(() => panel.textContent.includes('Decrypted'));
+    expect(panel.textContent).toContain('Decrypted');
+    expect(panel.textContent).toContain(HOSTILE);
+    expect(elementsNamed(document, ['img', 'script', 'b'])).toEqual([]);
   });
 
-  test('trust-data import rejects a FileReader completion from a stale login generation', async () => {
-    const originalFileReader = globalThis.FileReader;
-    const readers = [];
-    class DeferredFileReader {
-      constructor() { readers.push(this); }
-      readAsText() {}
+  test('the identity bar shows a hostile name as text', () => {
+    const document = new SafeDocument();
+    const root = document.createElement('div');
+    const ids = ['account-close', 'account-name', 'account-add-name', 'account-peer-id', 'account-copy-peer', 'account-status', 'account-avatar'];
+    const byId = new Map();
+    for (const id of ids) {
+      const node = document.createElement(id === 'account-close' || id.includes('copy') || id.includes('add') ? 'button' : 'span');
+      node.id = id;
+      byId.set(`#${id}`, node);
+      root.append(node);
     }
-    globalThis.FileReader = DeferredFileReader;
-    let current = true;
-    try {
-      const importing = importTrustData(
-        { size: 100 },
-        { isCurrent: () => current },
-      );
-      expect(readers).toHaveLength(1);
-      current = false;
-      readers[0].result = JSON.stringify({ transactions: [{ txHash: 'late' }] });
-      readers[0].onload();
-      await expect(importing).rejects.toMatchObject({ code: 'STALE_SESSION' });
-    } finally {
-      globalThis.FileReader = originalFileReader;
+    for (const section of ['profile', 'messages', 'people', 'assets', 'settings']) {
+      const tab = document.createElement('button');
+      tab.id = `account-tab-${section}`;
+      const panel = document.createElement('section');
+      panel.id = `account-pane-${section}`;
+      byId.set(`#${tab.id}`, tab);
+      byId.set(`#${panel.id}`, panel);
+      root.append(tab, panel);
     }
-  });
-
-  test.each([
-    ['missing', undefined],
-    ['non-finite', Number.NaN],
-    ['negative', -1],
-    ['fractional', 1.5],
-    ['oversized', (2 * 1024 * 1024) + 1],
-  ])('trust-data import rejects a %s size before constructing FileReader', async (_label, size) => {
-    const originalFileReader = globalThis.FileReader;
-    const FileReader = vi.fn();
-    globalThis.FileReader = FileReader;
-    try {
-      await expect(importTrustData({ size })).rejects.toThrow(/valid file|file size/iu);
-      expect(FileReader).not.toHaveBeenCalled();
-    } finally {
-      globalThis.FileReader = originalFileReader;
-    }
-  });
-
-  test('trust-data import aborts its reader on teardown and ignores the retained stale callback', async () => {
-    const originalFileReader = globalThis.FileReader;
-    const readers = [];
-    class DeferredFileReader {
-      constructor() {
-        this.abort = vi.fn();
-        readers.push(this);
-      }
-      readAsText() {}
-    }
-    globalThis.FileReader = DeferredFileReader;
-    const abort = new AbortController();
-    try {
-      const importing = importTrustData(
-        { size: 100 },
-        { isCurrent: () => true, signal: abort.signal },
-      );
-      expect(readers).toHaveLength(1);
-      const staleOnload = readers[0].onload;
-      abort.abort();
-      expect(readers[0].abort).toHaveBeenCalledTimes(1);
-      readers[0].result = JSON.stringify({ transactions: [{ txHash: 'late' }] });
-      staleOnload();
-      await expect(importing).rejects.toMatchObject({ code: 'STALE_SESSION' });
-    } finally {
-      globalThis.FileReader = originalFileReader;
-    }
+    root.querySelector = (selector) => byId.get(selector) ?? null;
+    document.body.append(root);
+    const win = { location: { hash: '', pathname: '/', search: '' }, history: { replaceState() {} }, addEventListener() {}, removeEventListener() {} };
+    const shell = createAccountShell({ document, window: win, root, storage: null });
+    shell.setIdentity({ name: HOSTILE, avatar: { initials: 'X' }, peerId: HOSTILE, statusText: HOSTILE });
+    expect(elementsNamed(document, ['img', 'script', 'b'])).toEqual([]);
+    expect(byId.get('#account-name').textContent).toBe(HOSTILE);
   });
 });
 
@@ -846,13 +770,41 @@ test('Task 9 sources contain no HTML sinks, Math.random, or remote photo path', 
     '../origin-app/relay.mjs',
     '../src/app.js',
     '../src/template.js',
-    '../src/trust-ui.js',
     '../src/i18n.js',
+    '../src/seed-slots.js',
+    '../src/account-view.js',
+    '../src/account-storage.js',
+    '../src/identity-keys.js',
+    '../src/contact-card.js',
+    '../src/ui-dom.js',
+    '../src/profile-ui.js',
+    '../src/messages-ui.js',
+    '../src/people-ui.js',
+    '../src/assets-ui.js',
+    '../src/settings-ui.js',
+    '../src/balances.js',
+    '../src/envelopes.js',
+    '../account/index.mjs',
   ];
+  // Every markup sink, not only innerHTML. app.js parses one string with
+  // DOMParser: the constant template (appendTrustedStaticTemplate), checked below.
+  const SINKS = /innerHTML|outerHTML|insertAdjacentHTML|document\.write|srcdoc|createContextualFragment|setHTMLUnsafe|parseHTMLUnsafe|DOMParser/u;
   for (const path of paths) {
-    const source = await readFile(new URL(path, import.meta.url), 'utf8');
-    expect(source, path).not.toMatch(/innerHTML|insertAdjacentHTML|Math\.random|https?:\/\/[^\s'"]*(?:avatar|photo)/iu);
+    let source = await readFile(new URL(path, import.meta.url), 'utf8');
+    expect(source, path).not.toMatch(/Math\.random|https?:\/\/[^\s'"]*(?:avatar|photo)/iu);
+    if (path === '../src/app.js') {
+      const parserUses = source.match(/DOMParser/gu) ?? [];
+      expect(parserUses, 'app.js parses only the static template').toHaveLength(1);
+      expect(source).toMatch(/function appendTrustedStaticTemplate\(container, source\) \{\n  const parser = new DOMParser\(\);/u);
+      expect(source.match(/appendTrustedStaticTemplate\(/gu)).toHaveLength(2);
+      expect(source).toMatch(/appendTrustedStaticTemplate\(container, getModalHTML\(\)\)/u);
+      source = source.replace('new DOMParser()', '');
+    }
+    expect(source, path).not.toMatch(SINKS);
   }
+  // The template is one constant string: no ${} interpolation.
+  const template = await readFile(new URL('../src/template.js', import.meta.url), 'utf8');
+  expect(template).not.toMatch(/\$\{/u);
   const legacyApp = await readFile(new URL('../src/app.js', import.meta.url), 'utf8');
   expect(legacyApp).not.toMatch(/readAsDataURL|state\.vcardPhoto(?!Bytes|Url)|VALUE=URI:data:image/u);
 });

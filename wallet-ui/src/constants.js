@@ -57,10 +57,9 @@ export const coinTypeToConfig = Object.fromEntries(
 export { buildSigningPath, buildEncryptionPath, getSigningKey, getEncryptionKey, WellKnownCoinType } from 'hd-wallet-wasm';
 
 // =============================================================================
-// PKI Storage Key
+// Storage keys
 // =============================================================================
 
-export const PKI_STORAGE_KEY = 'wallet-pki-keys';
 export const STORED_WALLET_KEY = 'encrypted_wallet';
 export const PASSKEY_CREDENTIAL_KEY = 'passkey_credential';
 export const PASSKEY_WALLET_KEY = 'passkey_wallet';
