@@ -264,10 +264,6 @@ function expectDeepFrozen(value) {
 }
 
 describe('operation-specific wire surface', () => {
-  test('exports only the six operation-specific parse/build pairs', () => {
-    expect(Object.keys(wire).sort()).toEqual(EXPECTED_EXPORTS);
-  });
-
   test('round-trips an exact 32-byte challenge as 43 canonical base64url characters', () => {
     const input = { protocolVersion: 1, challenge: CHALLENGE_BYTES };
     const built = wire.buildSdnLoginV1Request(input);

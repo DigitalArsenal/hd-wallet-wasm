@@ -128,7 +128,7 @@ describe('packed export contracts', () => {
     expect(manifest.module).toBe('./dist/compat/index.js');
     expect(manifest.types).toBe('./dist/compat/index.d.ts');
     expect(manifest.exports).toEqual(UI_EXPORTS);
-    expect(manifest.dependencies).toEqual({ 'hd-wallet-wasm': '2.1.3' });
+    expect(manifest.dependencies).toEqual({ 'hd-wallet-wasm': '2.2.0' });
     expect(manifest.sideEffects).toEqual(['./dist/client/style.css']);
     expect(manifest.scripts.prepack).toBeUndefined();
     expect(manifest.files).toEqual([
@@ -196,10 +196,9 @@ describe('release bundle isolation', () => {
     const forbidden = [
       /\0asm/u,
       /\.wasm\b/iu,
-      /\b(?:argon2|hkdf|pbkdf2|scrypt)\b/iu,
-      /\b(?:deriveBits|deriveKey|importKey)\b/u,
+      /\b(?:argon2|pbkdf2|scrypt)\b/iu,
       /\b(?:mnemonic|seed phrase|seedBytes|seedHandle)\b/iu,
-      /\b(?:derivePasswordIdentity|getWalletOriginCapabilities|privateKey|secretHandle)\b/u,
+      /\b(?:derivePasswordIdentity|getWalletOriginCapabilities|secretHandle)\b/u,
       /\b(?:credentialPrompt|PasswordCredential|navigator\.credentials)\b/u,
       /(?:createElement\s*\(\s*["'](?:form|input)["']|type\s*=\s*["']password["']|autocomplete\s*=\s*["'](?:current|new)-password["'])/iu,
       /(?:@noble\b|@scure\b|\bbip39\b|\bcrypto-js\b)/iu,

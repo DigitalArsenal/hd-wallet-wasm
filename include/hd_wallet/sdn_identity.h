@@ -47,6 +47,8 @@ enum class RegisteredOperation : uint8_t {
     AssetReviewDecision = 3,
     SdnPublishRequest = 4,
     ModuleDeliveryKey = 5,
+    FieldOpen = 6,
+    KeyUnwrap = 7,
 };
 
 enum class RegistryRowId : uint8_t {
@@ -55,6 +57,8 @@ enum class RegistryRowId : uint8_t {
     AssetReviewDecision = 3,
     SpaceAwarePublishRequest = 4,
     SpaceAwareModuleDeliveryKey = 5,
+    FlatbuffersFieldOpen = 6,
+    FlatsqlKeyUnwrap = 7,
 };
 
 enum class ReviewDecision : uint8_t {
@@ -253,6 +257,40 @@ struct AssetReviewDecisionFields {
     std::optional<std::string> reason;
 };
 
+/// One field sealed to this identity's contact-encryption key with the SDN
+/// Unified ECIES field cipher (an SDS `$ENC` header's values plus the field's
+/// ciphertext). The registry row names the one site whose fields it opens.
+struct SealedField {
+    std::array<uint8_t, 32> ephemeral_public;
+    std::array<uint8_t, 8> recipient_key_id;
+    std::string context;
+    uint16_t field_id;
+    std::vector<uint8_t> ciphertext;
+};
+
+enum class FieldOpenStatus : uint8_t {
+    Opened = 0,
+    NotAddressedToAccount = 1,
+};
+
+/// A field's plaintext sealed again, to the requesting page's reply key, with
+/// the same cipher (reply field id = the field's index in the batch).
+struct ResealedField {
+    FieldOpenStatus status;
+    std::vector<uint8_t> ciphertext;
+};
+
+struct FieldReply {
+    std::array<uint8_t, 32> ephemeral_public;
+    std::vector<ResealedField> fields;
+};
+
+/// The reply cipher's HKDF info (the reply's $ENC CONTEXT).
+inline constexpr std::string_view kFieldReplyContext = "sdn-wallet-reply/v1";
+inline constexpr size_t kMaximumSealedFields = 16;
+inline constexpr size_t kMaximumSealedFieldBytes = 4096;
+inline constexpr size_t kMaximumSealedBatchBytes = 12288;
+
 IdentityOutcome<IdentityHandle> derive_password_identity(
     std::span<const uint8_t> username_utf8,
     std::span<const uint8_t> exact_password_utf8,
@@ -296,6 +334,19 @@ IdentityOutcome<CanonicalSignature> sign_asset_review_authority_activation(
 IdentityOutcome<CanonicalSignature> sign_asset_review_decision(
     IdentityHandle handle,
     const AssetReviewDecisionFields& request,
+    RegistryRowId registry_row);
+
+/// Opens fields sealed to this identity's contact-encryption key and seals
+/// each plaintext to `reply_public`; no key, shared secret or plaintext
+/// leaves native memory. Refuses the whole batch unless every CONTEXT is
+/// `<row audience>|<schema>|<field>|k<version>` (the row's audience is
+/// `sdn-field-encryption/v1|<site>`). A field whose RECIPIENT_KEY_ID is not
+/// sha256(contact public)[:8] comes back NotAddressedToAccount. The
+/// key-unwrap row takes exactly one 32-byte $KMF KEY_BYTES (field id 4).
+IdentityOutcome<FieldReply> open_sealed_fields(
+    IdentityHandle handle,
+    std::span<const SealedField> fields,
+    std::span<const uint8_t, 32> reply_public,
     RegistryRowId registry_row);
 
 IdentityOutcome<std::vector<uint8_t>> remember_wallet_seal(

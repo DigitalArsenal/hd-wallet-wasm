@@ -7,7 +7,7 @@ canonical EPM attestations.
 ## Install
 
 ```sh
-npm install hd-wallet-wasm@2.1.3
+npm install hd-wallet-wasm@2.2.0
 ```
 
 Use the package through a standards-compliant ESM bundler or from an installed

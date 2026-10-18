@@ -1116,3 +1116,172 @@ export function buildAssetReviewDecisionResult(value) {
 export function parseAssetReviewDecisionResult(value) {
   return validateCanonicalSignature(value, 'asset-review-attestation');
 }
+
+// Sealed-field opening (sdn.wallet.field-open.v1) and content-key unwrap
+// (sdn.wallet.key-unwrap.v1). The page sends SDS `$ENC` (and `$KMF`) bytes
+// sealed to the user's contact-encryption key with the SDN Unified ECIES field
+// cipher, plus a one-use X25519 reply key; the wallet returns each plaintext
+// sealed to that reply key with the same cipher, so the relay never holds a
+// plaintext. Bounds keep a request under the relay's 32 KiB registration body.
+export const FIELD_OPEN_LIMITS = Object.freeze({
+  envelopeBytes: 512,
+  fieldBytes: 4096,
+  batchBytes: 12288,
+  fields: 16,
+  contextBytes: 256,
+});
+const FIELD_CONTEXT = /^sdn-field-encryption\/v1\|[A-Za-z0-9_.-]{1,64}\|[A-Za-z0-9_.-]{1,64}\|[A-Za-z0-9_.-]{1,64}\|k[1-9][0-9]{0,8}$/u;
+const FIELD_REQUEST_FIELDS = ['ciphertextBase64url', 'context', 'encBase64url', 'fieldId'];
+const FIELD_OPEN_REQUEST_FIELDS = ['fields', 'protocolVersion', 'replyPublicKeyHex'];
+const KEY_UNWRAP_REQUEST_FIELDS = ['context', 'encBase64url', 'kmfBase64url', 'protocolVersion', 'replyPublicKeyHex'];
+const FIELD_RESULT_FIELDS = ['fields', 'replyEphemeralPublicKeyHex', 'schemaVersion'];
+const BASE64URL = /^[A-Za-z0-9_-]*$/u;
+
+function plainBytes(value, label) {
+  if (!ArrayBuffer.isView(value) || !(value instanceof Uint8Array)
+      || Object.getPrototypeOf(value) !== Uint8Array.prototype) {
+    fail(`${label} must be a plain Uint8Array`);
+  }
+  return Uint8Array.from(value);
+}
+
+export function encodeBase64url(bytes) {
+  let binary = '';
+  for (let index = 0; index < bytes.length; index += 1) binary += String.fromCharCode(bytes[index]);
+  return globalThis.btoa(binary).replace(/\+/gu, '-').replace(/\//gu, '_').replace(/=+$/gu, '');
+}
+
+/** Canonical unpadded base64url of minimum..maximum bytes; returns the bytes. */
+export function decodeBase64urlBytes(value, minimum, maximum, label) {
+  validateUnicodeScalarString(value, label);
+  if (!BASE64URL.test(value) || value.length % 4 === 1
+      || value.length > Math.ceil((maximum * 4) / 3)) fail(`${label} must be canonical unpadded base64url`);
+  let binary;
+  try {
+    binary = globalThis.atob(value.replace(/-/gu, '+').replace(/_/gu, '/').padEnd(Math.ceil(value.length / 4) * 4, '='));
+  } catch {
+    fail(`${label} must be valid base64url`);
+  }
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  if (bytes.length < minimum || bytes.length > maximum || encodeBase64url(bytes) !== value) {
+    fail(`${label} must canonically encode ${minimum}..${maximum} bytes`);
+  }
+  return bytes;
+}
+
+function validateFieldContext(value, label) {
+  validateUnicodeScalarString(value, label);
+  if (textEncoder.encode(value).byteLength > FIELD_OPEN_LIMITS.contextBytes || !FIELD_CONTEXT.test(value)) {
+    fail(`${label} must be sdn-field-encryption/v1|<site>|<schema>|<field>|k<version>`);
+  }
+  return value;
+}
+
+/** The site segment of a field-encryption context. */
+export function fieldContextSite(context) {
+  return validateFieldContext(context, 'context').split('|')[1];
+}
+
+function validateFieldOpenRequest(input) {
+  const value = exactRecord(input, FIELD_OPEN_REQUEST_FIELDS, 'field-open request');
+  exactLiteral(value.protocolVersion, 1, 'field-open protocolVersion');
+  exactPattern(value.replyPublicKeyHex, LOWER_HEX_32, 'replyPublicKeyHex');
+  if (!Array.isArray(value.fields) || value.fields.length < 1 || value.fields.length > FIELD_OPEN_LIMITS.fields) {
+    fail(`field-open request carries 1..${FIELD_OPEN_LIMITS.fields} fields`);
+  }
+  validatePlainDenseArray(value.fields, value.fields.length, 'field-open fields');
+  let total = 0;
+  const fields = value.fields.map((entry, index) => {
+    const field = exactRecord(entry, FIELD_REQUEST_FIELDS, `field ${index}`);
+    decodeBase64urlBytes(field.encBase64url, 1, FIELD_OPEN_LIMITS.envelopeBytes, `field ${index} encBase64url`);
+    total += decodeBase64urlBytes(field.ciphertextBase64url, 1, FIELD_OPEN_LIMITS.fieldBytes, `field ${index} ciphertextBase64url`).length;
+    validateFieldContext(field.context, `field ${index} context`);
+    if (!Number.isInteger(field.fieldId) || field.fieldId < 0 || field.fieldId > 0xffff) fail(`field ${index} fieldId must be 0..65535`);
+    return frozenRecord(FIELD_REQUEST_FIELDS.map((name) => [name, field[name]]));
+  });
+  if (total > FIELD_OPEN_LIMITS.batchBytes) fail(`field-open ciphertext exceeds ${FIELD_OPEN_LIMITS.batchBytes} bytes`);
+  return frozenRecord([
+    ['fields', deepFreeze(fields)],
+    ['protocolVersion', 1],
+    ['replyPublicKeyHex', value.replyPublicKeyHex],
+  ]);
+}
+
+function validateKeyUnwrapRequest(input) {
+  const value = exactRecord(input, KEY_UNWRAP_REQUEST_FIELDS, 'key-unwrap request');
+  exactLiteral(value.protocolVersion, 1, 'key-unwrap protocolVersion');
+  exactPattern(value.replyPublicKeyHex, LOWER_HEX_32, 'replyPublicKeyHex');
+  validateFieldContext(value.context, 'key-unwrap context');
+  decodeBase64urlBytes(value.encBase64url, 1, FIELD_OPEN_LIMITS.envelopeBytes, 'key-unwrap encBase64url');
+  decodeBase64urlBytes(value.kmfBase64url, 1, FIELD_OPEN_LIMITS.envelopeBytes, 'key-unwrap kmfBase64url');
+  return frozenRecord(KEY_UNWRAP_REQUEST_FIELDS.map((name) => [name, value[name]]));
+}
+
+function validateFieldResult(input, count) {
+  const value = exactRecord(input, FIELD_RESULT_FIELDS, 'field result');
+  exactLiteral(value.schemaVersion, 1, 'field result schemaVersion');
+  exactPattern(value.replyEphemeralPublicKeyHex, LOWER_HEX_32, 'replyEphemeralPublicKeyHex');
+  if (!Array.isArray(value.fields) || value.fields.length < 1 || value.fields.length > count) {
+    fail(`field result carries 1..${count} fields`);
+  }
+  validatePlainDenseArray(value.fields, value.fields.length, 'field result fields');
+  const fields = value.fields.map((entry, index) => {
+    const status = isObjectRecord(entry) ? entry.status : undefined;
+    if (status === 'opened') {
+      const field = exactRecord(entry, ['ciphertextBase64url', 'status'], `field result ${index}`);
+      decodeBase64urlBytes(field.ciphertextBase64url, 1, FIELD_OPEN_LIMITS.fieldBytes, `field result ${index} ciphertext`);
+      return frozenRecord([['ciphertextBase64url', field.ciphertextBase64url], ['status', 'opened']]);
+    }
+    const field = exactRecord(entry, ['reason', 'status'], `field result ${index}`);
+    exactLiteral(field.status, 'refused', `field result ${index} status`);
+    exactLiteral(field.reason, 'NOT_ADDRESSED_TO_ACCOUNT', `field result ${index} reason`);
+    return frozenRecord([['reason', 'NOT_ADDRESSED_TO_ACCOUNT'], ['status', 'refused']]);
+  });
+  return frozenRecord([
+    ['fields', deepFreeze(fields)],
+    ['replyEphemeralPublicKeyHex', value.replyEphemeralPublicKeyHex],
+    ['schemaVersion', 1],
+  ]);
+}
+
+/**
+ * Page input `{ fields: [{ enc, context, fieldId, ciphertext }] }` to the
+ * wire request; the client adds its reply key (replyPublicKeyHex) before
+ * registering, so the draft carries a placeholder of 64 zeros.
+ */
+export function buildFieldOpenRequest(input, replyPublicKeyHex = '0'.repeat(64)) {
+  const value = exactRecord(input, ['fields'], 'openFields input');
+  if (!Array.isArray(value.fields)) fail('openFields fields must be an array');
+  validatePlainDenseArray(value.fields, value.fields.length, 'openFields fields');
+  return validateFieldOpenRequest({
+    fields: value.fields.map((entry, index) => {
+      const field = exactRecord(entry, ['ciphertext', 'context', 'enc', 'fieldId'], `openFields field ${index}`);
+      return {
+        ciphertextBase64url: encodeBase64url(plainBytes(field.ciphertext, `field ${index} ciphertext`)),
+        context: field.context,
+        encBase64url: encodeBase64url(plainBytes(field.enc, `field ${index} enc`)),
+        fieldId: field.fieldId,
+      };
+    }),
+    protocolVersion: 1,
+    replyPublicKeyHex,
+  });
+}
+export function parseFieldOpenRequest(value) { return validateFieldOpenRequest(value); }
+export function buildFieldOpenResult(value) { return validateFieldResult(value, FIELD_OPEN_LIMITS.fields); }
+export function parseFieldOpenResult(value) { return validateFieldResult(value, FIELD_OPEN_LIMITS.fields); }
+
+/** Page input `{ enc, kmf, context }` to the wire request (reply key as above). */
+export function buildKeyUnwrapRequest(input, replyPublicKeyHex = '0'.repeat(64)) {
+  const value = exactRecord(input, ['context', 'enc', 'kmf'], 'unwrapKey input');
+  return validateKeyUnwrapRequest({
+    context: value.context,
+    encBase64url: encodeBase64url(plainBytes(value.enc, 'enc')),
+    kmfBase64url: encodeBase64url(plainBytes(value.kmf, 'kmf')),
+    protocolVersion: 1,
+    replyPublicKeyHex,
+  });
+}
+export function parseKeyUnwrapRequest(value) { return validateKeyUnwrapRequest(value); }
+export function buildKeyUnwrapResult(value) { return validateFieldResult(value, 1); }
+export function parseKeyUnwrapResult(value) { return validateFieldResult(value, 1); }

@@ -33,6 +33,10 @@ interface WireModule {
   parseWalletAccountResult(value: unknown): unknown;
   parseWalletConnectRequest(value: unknown): unknown;
   parseWalletConnectResult(value: unknown): unknown;
+  parseFieldOpenRequest(value: unknown): unknown;
+  parseFieldOpenResult(value: unknown): unknown;
+  parseKeyUnwrapRequest(value: unknown): unknown;
+  parseKeyUnwrapResult(value: unknown): unknown;
 }
 
 const wire = await import(new URL('../../../client/wire.mjs', import.meta.url).href) as WireModule;
@@ -45,6 +49,8 @@ const requestParsers: Readonly<Record<string, (value: unknown) => unknown>> = Ob
   'sdn.auth.raw-challenge.v1': wire.parseSdnLoginV1Request,
   'sdn.wallet.account.v1': wire.parseWalletAccountRequest,
   'sdn.wallet.connect.v1': wire.parseWalletConnectRequest,
+  'sdn.wallet.field-open.v1': wire.parseFieldOpenRequest,
+  'sdn.wallet.key-unwrap.v1': wire.parseKeyUnwrapRequest,
 });
 
 const resultParsers: Readonly<Record<string, (value: unknown) => unknown>> = Object.freeze({
@@ -55,6 +61,8 @@ const resultParsers: Readonly<Record<string, (value: unknown) => unknown>> = Obj
   'sdn.auth.raw-challenge.v1': wire.parseSdnLoginV1Result,
   'sdn.wallet.account.v1': wire.parseWalletAccountResult,
   'sdn.wallet.connect.v1': wire.parseWalletConnectResult,
+  'sdn.wallet.field-open.v1': wire.parseFieldOpenResult,
+  'sdn.wallet.key-unwrap.v1': wire.parseKeyUnwrapResult,
 });
 
 const TRANSACTION_PATH = /^\/relay\/v1\/transactions\/([0-9a-f]{64})$/u;

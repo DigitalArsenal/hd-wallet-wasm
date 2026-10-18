@@ -39,7 +39,7 @@ const BINDING_FIELDS = [
   'serviceActivationState',
   'serviceInstance',
 ] as const;
-const EXPECTED_RELEASE_SHA256 = '7674bfb019753eee8387f064467c0f6f2ff6babd1ecabbd70dc585afc31fbc1a';
+const EXPECTED_RELEASE_SHA256 = '63784143e2ad8e2542d22148ff4a0a4da7a10f4b3f9909ae91a20dc0f60db06b';
 const OPERATION_POLICY: Readonly<Record<string, Readonly<{
   audience: string | null;
   registryRow: string | null;
@@ -85,6 +85,17 @@ const OPERATION_POLICY: Readonly<Record<string, Readonly<{
   'sdn.wallet.connect.v1': Object.freeze({
     audience: null,
     registryRow: null,
+    serviceActivationState: null,
+    serviceInstance: null,
+  }),  'sdn.wallet.field-open.v1': Object.freeze({
+    audience: 'sdn-field-encryption/v1|flatbuffers',
+    registryRow: 'flatbuffers-field-open-v1',
+    serviceActivationState: null,
+    serviceInstance: null,
+  }),
+  'sdn.wallet.key-unwrap.v1': Object.freeze({
+    audience: 'sdn-field-encryption/v1|flatsql',
+    registryRow: 'flatsql-key-unwrap-v1',
     serviceActivationState: null,
     serviceInstance: null,
   }),

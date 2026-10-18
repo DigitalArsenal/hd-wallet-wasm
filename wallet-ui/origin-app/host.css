@@ -1,5 +1,5 @@
 :root {
-  --sdn-wallet-origin-style-ready: "2.1.3";
+  --sdn-wallet-origin-style-ready: "2.2.0";
   color-scheme: dark;
   font-family: system-ui, sans-serif;
   background: #07101f;
@@ -62,6 +62,12 @@ textarea:focus-visible {
   min-width: 0;
   max-width: 100%;
   overflow-wrap: anywhere;
+}
+.wallet-confirmation-remember {
+  display: flex;
+  gap: .5rem;
+  align-items: center;
+  margin: .75rem 0;
 }
 
 @media (max-width: 320px) {

@@ -31,8 +31,8 @@ cmake_minimum_required(VERSION 3.16...3.28)
 
 # Version
 set(HD_WALLET_VERSION_MAJOR 2)
-set(HD_WALLET_VERSION_MINOR 1)
-set(HD_WALLET_VERSION_PATCH 3)
+set(HD_WALLET_VERSION_MINOR 2)
+set(HD_WALLET_VERSION_PATCH 0)
 
 project(HDWalletWasm
   VERSION ${HD_WALLET_VERSION_MAJOR}.${HD_WALLET_VERSION_MINOR}.${HD_WALLET_VERSION_PATCH}
@@ -658,6 +658,7 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       "_hd_sdn_transfer_begin"
       "_hd_sdn_transfer_seal"
       "_hd_sdn_transfer_open"
+      "_hd_sdn_open_sealed_fields"
       "_hd_sdn_destroy_identity"
     )
     string(JOIN "," BROWSER_EXPORTED_FUNCS_STR ${BROWSER_EXPORTED_FUNCTIONS})

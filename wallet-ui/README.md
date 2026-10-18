@@ -8,10 +8,10 @@ and signed approval requests.
 ## Install
 
 ```sh
-npm install hd-wallet-ui@2.1.3
+npm install hd-wallet-ui@2.2.0
 ```
 
-`hd-wallet-wasm` 2.1.3 is the package's only runtime dependency.
+`hd-wallet-wasm` 2.2.0 is the package's only runtime dependency.
 
 ## Published surfaces
 
@@ -80,6 +80,48 @@ Request objects are validated against the frozen protocol contract before the
 wallet window opens. The caller receives only a public identity or a bounded
 signature response; credential material and signing keys remain on the wallet
 origin.
+
+## Sealed fields and database keys
+
+Two registered documentation sites can ask the wallet to open data sealed to
+the signed-in user's contact-encryption key (X25519, `m/44'/0'/0'/1'/0'`) with
+the SDN Unified ECIES field cipher. The wallet opens it only after the user
+approves, only for the site the data is bound to, and returns only the opened
+bytes. Keys and shared secrets never leave the wallet.
+
+```js
+// sdn-flatbuffers-pages-v1: fields with their SDS $ENC headers.
+const opened = await wallet.openFields({
+  fields: [{ enc, context, fieldId, ciphertext }], // 1..16, <= 4096 B each, <= 12288 B in all
+});
+// [{ plaintext: Uint8Array } | { refused: 'NOT_ADDRESSED_TO_ACCOUNT' }], in order
+
+// sdn-flatsql-pages-v1: one database's content key, an $ENC + $KMF pair.
+const { contentKey } = await wallet.unwrapKey({ enc, kmf, context });
+```
+
+- `context` is the HKDF info and must equal the header's CONTEXT:
+  `sdn-field-encryption/v1|<site>|<schema>|<field>|k<version>`. The site is
+  `flatbuffers` for `sdn-flatbuffers-pages-v1` and `flatsql` for
+  `sdn-flatsql-pages-v1` (registry rows `flatbuffers-field-open-v1` and
+  `flatsql-key-unwrap-v1`). Data bound to another site is refused by the
+  client and, independently, by the wallet before it asks for a password.
+- The header must carry `RECIPIENT_KEY_ID` = sha256(contact public key)[:8].
+  A field sealed to another key comes back `refused`; an unwrap rejects with
+  `NOT_ADDRESSED_TO_ACCOUNT`.
+- `contentKey` is the database's own 32-byte content key, scoped to that
+  database. It is not a wallet key.
+- The prompt names the site and the number of fields. "Don't ask again for
+  this site" covers that site and account for 15 minutes or 20 openings,
+  whichever ends first; signing out of the wallet forgets it. Every opening
+  still needs the wallet unlocked.
+- The wallet seals its answer to a one-use X25519 key the client makes for
+  the request (the same field cipher, info `sdn-wallet-reply/v1`), so the relay
+  that carries the answer never holds a plaintext. The browser needs Web
+  Crypto X25519.
+
+Pages on one origin are one security principal to the browser: every page on
+`https://digitalarsenal.github.io` can name either client ID.
 
 ## Callback page
 

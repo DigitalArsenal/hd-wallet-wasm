@@ -23,6 +23,20 @@ const OPERATION_POLICY = Object.freeze({
     serviceActivationState: null,
     serviceInstance: null,
   }),
+  // Field opening: the audience is the one context prefix ("sdn-field-
+  // encryption/v1|<site>") whose fields the client's row opens.
+  'sdn.wallet.field-open.v1': Object.freeze({
+    audience: 'sdn-field-encryption/v1|flatbuffers',
+    registryRow: 'flatbuffers-field-open-v1',
+    serviceActivationState: null,
+    serviceInstance: null,
+  }),
+  'sdn.wallet.key-unwrap.v1': Object.freeze({
+    audience: 'sdn-field-encryption/v1|flatsql',
+    registryRow: 'flatsql-key-unwrap-v1',
+    serviceActivationState: null,
+    serviceInstance: null,
+  }),
   'sdn.auth.raw-challenge.v1': Object.freeze({
     audience: 'sdn-login:sdn.spaceaware.io',
     registryRow: null,
@@ -59,6 +73,8 @@ const SDN_OPERATIONS = Object.freeze([
   ...PUBLIC_OPERATIONS,
 ]);
 const PUBLISH_OPERATIONS = Object.freeze(['sdn.auth.publish-request.v1', ...PUBLIC_OPERATIONS]);
+const FLATBUFFERS_OPERATIONS = Object.freeze([...PUBLIC_OPERATIONS, 'sdn.wallet.field-open.v1']);
+const FLATSQL_OPERATIONS = Object.freeze([...PUBLIC_OPERATIONS, 'sdn.wallet.key-unwrap.v1']);
 const REVIEW_OPERATIONS = Object.freeze([
   'sdn.asset-review.authority-activation.v1',
   'sdn.asset-review.decision.v1',
@@ -68,8 +84,8 @@ const REVIEW_OPERATIONS = Object.freeze([
 const EXPECTED_CLIENTS = Object.freeze([
   Object.freeze(['sdn-landing-web-v1', 'Space Data Network', 'https://spacedatanetwork.org', 'https://spacedatanetwork.org/wallet-callback.html', PUBLIC_OPERATIONS]),
   Object.freeze(['sdn-standards-web-v1', 'Space Data Standards', 'https://spacedatastandards.org', 'https://spacedatastandards.org/wallet-callback.html', PUBLIC_OPERATIONS]),
-  Object.freeze(['sdn-flatbuffers-pages-v1', 'FlatBuffers Documentation', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/flatbuffers/wallet-callback.html', PUBLIC_OPERATIONS]),
-  Object.freeze(['sdn-flatsql-pages-v1', 'FlatSQL Documentation', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/flatsql/wallet-callback.html', PUBLIC_OPERATIONS]),
+  Object.freeze(['sdn-flatbuffers-pages-v1', 'FlatBuffers Documentation', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/flatbuffers/wallet-callback.html', FLATBUFFERS_OPERATIONS]),
+  Object.freeze(['sdn-flatsql-pages-v1', 'FlatSQL Documentation', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/flatsql/wallet-callback.html', FLATSQL_OPERATIONS]),
   Object.freeze(['sdn-module-sdk-pages-v1', 'Space Data Module SDK', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/space-data-module-sdk/wallet-callback.html', PUBLIC_OPERATIONS]),
   Object.freeze(['spaceaware-web-v1', 'SpaceAware', 'https://spaceaware.io', 'https://spaceaware.io/wallet/callback', PUBLISH_OPERATIONS]),
   Object.freeze(['sdn-node-console-v1', 'SDN Node Console', 'https://sdn.spaceaware.io', 'https://sdn.spaceaware.io/wallet/callback', SDN_OPERATIONS]),
@@ -117,6 +133,25 @@ const COMPILED_SIGNING_ROWS = Object.freeze([
     requestOrigin: 'https://review.spacedatanetwork.org',
     registryRow: 'asset-review-decision-v1',
     serviceActivationState: 'activated',
+    serviceInstance: null,
+  }),  Object.freeze({
+    audience: 'sdn-field-encryption/v1|flatbuffers',
+    clientId: 'sdn-flatbuffers-pages-v1',
+    maxLifetimeSeconds: 300,
+    operation: 'sdn.wallet.field-open.v1',
+    requestOrigin: 'https://digitalarsenal.github.io',
+    registryRow: 'flatbuffers-field-open-v1',
+    serviceActivationState: null,
+    serviceInstance: null,
+  }),
+  Object.freeze({
+    audience: 'sdn-field-encryption/v1|flatsql',
+    clientId: 'sdn-flatsql-pages-v1',
+    maxLifetimeSeconds: 300,
+    operation: 'sdn.wallet.key-unwrap.v1',
+    requestOrigin: 'https://digitalarsenal.github.io',
+    registryRow: 'flatsql-key-unwrap-v1',
+    serviceActivationState: null,
     serviceInstance: null,
   }),
 ]);

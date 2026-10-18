@@ -1,5 +1,49 @@
 # Changelog
 
+## 2.2.0 (2026-10-18)
+
+### Wallet opens sealed fields
+
+Two documentation sites can now ask the wallet to open data sealed to the
+signed-in user's contact-encryption key (X25519, `m/44'/0'/<account>'/1'/0'`)
+with the SDN Unified ECIES field cipher (Z = X25519, K = HKDF-SHA256(Z, info =
+CONTEXT), the flatbuffers field key and IV, AES-256-CTR; SDS `$ENC` headers).
+No new envelope format.
+
+- **`openFields`** (`sdn-flatbuffers-pages-v1`, operation
+  `sdn.wallet.field-open.v1`, registry row `flatbuffers-field-open-v1`): 1..16
+  fields, at most 4096 bytes each and 12288 bytes in all, each with its `$ENC`
+  header and HKDF info. Returns each field's plaintext, or
+  `{ refused: 'NOT_ADDRESSED_TO_ACCOUNT' }` for a field sealed to another key.
+- **`unwrapKey`** (`sdn-flatsql-pages-v1`, operation
+  `sdn.wallet.key-unwrap.v1`, registry row `flatsql-key-unwrap-v1`): unwraps
+  one database's content key from an `$ENC` + `$KMF` pair (KEY_BYTES, field
+  id 4) and returns it to the page. **This is a scoped content key for that
+  one database, not a wallet key.**
+- **Site binding.** Each row's audience is the one context prefix it opens
+  (`sdn-field-encryption/v1|flatbuffers`, `sdn-field-encryption/v1|flatsql`):
+  origin plus client ID gives the site. Data bound to another site is refused
+  by the client, by the wallet before it asks for a password, and by native
+  code before it decrypts. The `$ENC` header must carry RECIPIENT_KEY_ID =
+  sha256(contact public key)[:8]; native code compares it in constant time.
+- **Consent.** The wallet prompt names the site and the number of fields.
+  "Don't ask again for this site" covers that client, origin, operation and
+  account for 15 minutes or 20 unattended openings, whichever ends first;
+  signing out forgets it. Each opening still needs the wallet unlocked.
+- **Nothing secret leaves the wallet.** Native code opens each field and
+  seals its plaintext to a one-use X25519 reply key the page makes for the
+  request (same cipher, info `sdn-wallet-reply/v1`, reply field id = index).
+  Keys, shared secrets, ECDH outputs, the mnemonic and even the plaintext
+  never reach the wallet's JavaScript or the relay; only the page opens the
+  reply (Web Crypto X25519, HKDF, AES-CTR).
+- Native: `hd_sdn_open_sealed_fields`, C++ `open_sealed_fields`; JS
+  capability `sdn.openSealedFields(handle, { fields, replyPublic }, row)`.
+- The relay accepts the two operations for those two clients only (registry
+  release `63784143…`).
+
+Pages on one origin are one security principal to the browser: every page on
+`https://digitalarsenal.github.io` can name either client ID.
+
 ## 2.1.3 (2026-10-18)
 
 ### Memory

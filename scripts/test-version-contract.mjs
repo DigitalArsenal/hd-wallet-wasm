@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const expectedVersion = '2.1.3';
+const expectedVersion = '2.2.0';
 const [expectedVersionMajor, expectedVersionMinor, expectedVersionPatch] = expectedVersion
   .split('.')
   .map(Number);

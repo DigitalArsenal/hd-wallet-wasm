@@ -47,7 +47,7 @@ struct RegistryRow {
     uint32_t maximum_lifetime_seconds;
 };
 
-constexpr std::array<RegistryRow, 5> kRegistryRows = {{
+constexpr std::array<RegistryRow, 7> kRegistryRows = {{
     {RegistryRowId::SdnNodeConsoleV2, RegisteredOperation::SdnLoginV2,
      "sdn-node-console-v1", "https://sdn.spaceaware.io",
      "sdn-login:sdn.spaceaware.io", "", 300},
@@ -64,6 +64,13 @@ constexpr std::array<RegistryRow, 5> kRegistryRows = {{
      "spaceaware-web-v1", "https://spaceaware.io", "", "", 300},
     {RegistryRowId::SpaceAwareModuleDeliveryKey, RegisteredOperation::ModuleDeliveryKey,
      "spaceaware-web-v1", "https://spaceaware.io", "", "", 300},
+    // Field opening: the audience is the one CONTEXT prefix the row opens.
+    {RegistryRowId::FlatbuffersFieldOpen, RegisteredOperation::FieldOpen,
+     "sdn-flatbuffers-pages-v1", "https://digitalarsenal.github.io",
+     "sdn-field-encryption/v1|flatbuffers", "", 300},
+    {RegistryRowId::FlatsqlKeyUnwrap, RegisteredOperation::KeyUnwrap,
+     "sdn-flatsql-pages-v1", "https://digitalarsenal.github.io",
+     "sdn-field-encryption/v1|flatsql", "", 300},
 }};
 
 const RegistryRow* registryRow(RegistryRowId id) {
@@ -1766,6 +1773,168 @@ IdentityOutcome<ImportedIdentity> identity_transfer_open(
         return insertRawSeedImported(std::move(seed), IdentityKind::PasswordV2,
                                      account, std::move(username),
                                      internal::derive_identity_material);
+    });
+#endif
+}
+
+namespace {
+
+constexpr std::string_view kFieldKeyLabel = "flatbuffers-field";
+constexpr std::string_view kFieldIvLabel = "flatbuffers-iv";
+// $KMF KEY_BYTES is field 4 of the record (record index 0).
+constexpr uint16_t kKmfKeyBytesFieldId = 4;
+constexpr size_t kContentKeyBytes = 32;
+
+bool fieldLabel(std::string_view label) noexcept {
+    if (label.empty() || label.size() > 64) return false;
+    for (const char c : label) {
+        const bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                        (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '-';
+        if (!ok) return false;
+    }
+    return true;
+}
+
+// CONTEXT = <audience> "|" schema "|" field "|k" version, where the audience
+// is the registry row's "sdn-field-encryption/v1|<site>".
+bool fieldContextForRow(std::string_view context, std::string_view audience) noexcept {
+    if (audience.empty() || context.size() > 256 || context.size() <= audience.size() + 1 ||
+        context.substr(0, audience.size()) != audience || context[audience.size()] != '|') {
+        return false;
+    }
+    std::string_view rest = context.substr(audience.size() + 1);
+    std::array<std::string_view, 3> parts{};
+    for (size_t i = 0; i < parts.size(); ++i) {
+        const size_t bar = rest.find('|');
+        if (i + 1 < parts.size()) {
+            if (bar == std::string_view::npos) return false;
+            parts[i] = rest.substr(0, bar);
+            rest = rest.substr(bar + 1);
+        } else {
+            if (bar != std::string_view::npos) return false;
+            parts[i] = rest;
+        }
+    }
+    const std::string_view version = parts[2];
+    if (!fieldLabel(parts[0]) || !fieldLabel(parts[1]) || version.size() < 2 ||
+        version.size() > 10 || version[0] != 'k' || version[1] == '0') {
+        return false;
+    }
+    for (size_t i = 1; i < version.size(); ++i) {
+        if (version[i] < '0' || version[i] > '9') return false;
+    }
+    return true;
+}
+
+// HKDF-SHA256(master, salt = none, label || BE16(fieldId) || BE32(record 0)),
+// the flatbuffers EncryptVector derivation.
+SecretBuffer deriveFieldMaterial(const SecretBuffer& master, std::string_view label,
+                                 uint16_t field_id, size_t size) {
+    std::vector<uint8_t> info(label.begin(), label.end());
+    info.push_back(static_cast<uint8_t>(field_id >> 8));
+    info.push_back(static_cast<uint8_t>(field_id));
+    info.insert(info.end(), 4, uint8_t{0});
+    return internal::hkdf_sha256(master.span(), {}, info, size);
+}
+
+// AES-256-CTR(fieldKey, fieldIV) of one field under `master`, in place.
+bool fieldCipher(const SecretBuffer& master, uint16_t field_id, std::span<uint8_t> data) {
+    const SecretBuffer key = deriveFieldMaterial(master, kFieldKeyLabel, field_id, 32);
+    const SecretBuffer iv = deriveFieldMaterial(master, kFieldIvLabel, field_id, 16);
+    if (key.size() != 32 || iv.size() != 16) return false;
+    return internal::aes256_ctr_xor(span32(key), std::span<const uint8_t, 16>(iv.data(), 16), data);
+}
+
+} // namespace
+
+IdentityOutcome<FieldReply> open_sealed_fields(
+    IdentityHandle handle,
+    std::span<const SealedField> fields,
+    std::span<const uint8_t, 32> reply_public,
+    RegistryRowId registry_row) {
+#if HD_WALLET_FIPS_MODE
+    (void)handle;
+    (void)fields;
+    (void)reply_public;
+    (void)registry_row;
+    return IdentityError::FipsNotAllowed;
+#else
+    return safeOutcome<FieldReply>([&]() -> IdentityOutcome<FieldReply> {
+        const RegistryRow* row = registryRow(registry_row);
+        if (row == nullptr || (row->operation != RegisteredOperation::FieldOpen &&
+                               row->operation != RegisteredOperation::KeyUnwrap)) {
+            return IdentityError::OperationNotAllowed;
+        }
+        const bool unwrap = row->operation == RegisteredOperation::KeyUnwrap;
+        if (fields.empty() || fields.size() > kMaximumSealedFields ||
+            (unwrap && fields.size() != 1)) {
+            return IdentityError::InvalidRequest;
+        }
+        size_t total = 0;
+        for (const auto& field : fields) {
+            if (field.ciphertext.empty() || field.ciphertext.size() > kMaximumSealedFieldBytes ||
+                !fieldContextForRow(field.context, row->audience) ||
+                (unwrap && (field.field_id != kKmfKeyBytesFieldId ||
+                            field.ciphertext.size() != kContentKeyBytes))) {
+                return IdentityError::InvalidRequest;
+            }
+            total += field.ciphertext.size();
+        }
+        if (total > kMaximumSealedBatchBytes) return IdentityError::InvalidRequest;
+
+        // The reply key: one fresh ephemeral X25519 key per reply.
+        SecretBuffer reply_ephemeral(32);
+        if (!internal::fill_random_secret(reply_ephemeral.span())) {
+            return IdentityError::CryptoFailure;
+        }
+        clampX25519(reply_ephemeral);
+        FieldReply reply{};
+        reply.ephemeral_public = internal::x25519_public_key(span32(reply_ephemeral));
+        SecretBuffer reply_shared(32);
+        if (!internal::x25519_shared_secret(span32(reply_ephemeral), reply_public,
+                                            std::span<uint8_t, 32>(reply_shared.data(), 32))) {
+            return IdentityError::InvalidRequest;
+        }
+        reply_ephemeral = SecretBuffer();
+        const SecretBuffer reply_master =
+            internal::hkdf_sha256(reply_shared.span(), {}, bytes(kFieldReplyContext), 32);
+        reply_shared = SecretBuffer();
+
+        std::lock_guard lock(g_slots_mutex);
+        auto* record = lookupLocked(handle);
+        if (!record) return IdentityError::StaleHandle;
+        if (record->material.kind != IdentityKind::PasswordV2 ||
+            record->material.contact_private.size() != 32) {
+            return IdentityError::OperationNotAllowed;
+        }
+        const auto contact_digest = internal::sha256_public(record->material.contact_public);
+        const std::span<const uint8_t> own_key_id(contact_digest.data(), 8);
+        reply.fields.reserve(fields.size());
+        for (size_t index = 0; index < fields.size(); ++index) {
+            const auto& field = fields[index];
+            if (!internal::constant_time_equal(field.recipient_key_id, own_key_id)) {
+                reply.fields.push_back({FieldOpenStatus::NotAddressedToAccount, {}});
+                continue;
+            }
+            SecretBuffer shared(32);
+            if (!internal::x25519_shared_secret(
+                    span32(record->material.contact_private), field.ephemeral_public,
+                    std::span<uint8_t, 32>(shared.data(), 32))) {
+                return IdentityError::InvalidRequest;
+            }
+            const SecretBuffer master =
+                internal::hkdf_sha256(shared.span(), {}, bytes(field.context), 32);
+            SecretBuffer data(field.ciphertext.size());
+            std::copy(field.ciphertext.begin(), field.ciphertext.end(), data.data());
+            if (!fieldCipher(master, field.field_id, data.span()) ||
+                !fieldCipher(reply_master, static_cast<uint16_t>(index), data.span())) {
+                return IdentityError::CryptoFailure;
+            }
+            // `data` now holds only the reply ciphertext.
+            reply.fields.push_back({FieldOpenStatus::Opened,
+                                    std::vector<uint8_t>(data.data(), data.data() + data.size())});
+        }
+        return reply;
     });
 #endif
 }

@@ -21,6 +21,7 @@ export const WALLET_CLIENT_ERRORS = Object.freeze({
   EXPIRED: 'The wallet connection expired.',
   INVALID_CLIENT: 'This wallet client is not registered.',
   INVALID_REQUEST: 'The wallet request is invalid.',
+  NOT_ADDRESSED_TO_ACCOUNT: 'This data is not sealed to your wallet.',
   RELAY_ERROR: 'The wallet service could not complete the request. Try again.',
   REPLACED: 'A newer wallet request replaced this one.',
   WALLET_NOT_COMPLETED: 'The wallet did not complete. Check popup settings and try again.',
@@ -657,6 +658,7 @@ class InternalWalletClient {
       registrationDeadlineMs: now + REGISTRATION_WINDOW_MS,
       registrationOutcome: 'none',
       reject: operation.reject,
+      openResult: null,
       request,
       resolve: operation.resolve,
       retryResolve: null,
@@ -769,6 +771,11 @@ class InternalWalletClient {
           for (const controller of pending.controllers) controller.abort();
         }
       }, Math.max(0, pending.registrationDeadlineMs - this.#now()));
+      if (typeof pending.adapter.seal === 'function') {
+        const sealed = await pending.adapter.seal(pending.request, this.#dependencies.crypto);
+        pending.request = sealed.request;
+        pending.openResult = sealed.open;
+      }
       const digest = await this.#dependencies.crypto.subtle.digest(
         'SHA-256',
         textEncoder.encode(pending.verifier),
@@ -967,6 +974,7 @@ class InternalWalletClient {
       } catch {
         throw walletClientError('RELAY_ERROR');
       }
+      if (pending.openResult) result = await pending.openResult(result);
       if (!this.#isActive(pending)) return;
       this.#complete(pending, result);
     } catch (error) {

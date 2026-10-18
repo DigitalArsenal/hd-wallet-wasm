@@ -11,6 +11,7 @@
 #include <cryptopp/hmac.h>
 #include <cryptopp/integer.h>
 #include <cryptopp/misc.h>
+#include <cryptopp/modes.h>
 #include <cryptopp/nbtheory.h>
 #include <cryptopp/oids.h>
 #include <cryptopp/osrng.h>
@@ -724,6 +725,21 @@ IdentityOutcome<SecretBuffer> aes256_gcm_open(
         return IdentityError::OutOfMemory;
     } catch (...) {
         return IdentityError::CryptoFailure;
+    }
+}
+
+bool aes256_ctr_xor(std::span<const uint8_t, 32> key,
+                    std::span<const uint8_t, 16> iv,
+                    std::span<uint8_t> data) noexcept {
+    if (data.empty()) return true;
+    try {
+        CryptoPP::CTR_Mode<CryptoPP::AES>::Encryption cipher;
+        cipher.SetKeyWithIV(key.data(), key.size(), iv.data(), iv.size());
+        cipher.ProcessData(data.data(), data.data(), data.size());
+        return true;
+    } catch (...) {
+        secureWipe(data.data(), data.size());
+        return false;
     }
 }
 

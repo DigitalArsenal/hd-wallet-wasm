@@ -41,11 +41,23 @@ const RAW_ENTRYPOINTS = Object.freeze([
   '_hd_sdn_transfer_begin',
   '_hd_sdn_transfer_seal',
   '_hd_sdn_transfer_open',
+  '_hd_sdn_open_sealed_fields',
   '_hd_sdn_destroy_identity',
 ]);
 
 const TRANSFER_PUBLIC_KEY_BYTES = 32;
 const MAX_TRANSFER_BYTES = 1024;
+
+// Sealed-field opening (hd_sdn_open_sealed_fields). The registry row names
+// the one site whose fields a call opens.
+const SEALED_FIELD_ROWS = Object.freeze({
+  'flatbuffers-field-open-v1': 6,
+  'flatsql-key-unwrap-v1': 7,
+});
+const MAX_SEALED_FIELDS = 16;
+const MAX_SEALED_FIELD_BYTES = 4096;
+const MAX_SEALED_BATCH_BYTES = 12288;
+const MAX_SEALED_CONTEXT_BYTES = 256;
 
 // Each capabilities object's transfer sealer, reachable only from this file:
 // sealing is never a public capability (it would hand out a seed sealed to
@@ -1085,6 +1097,94 @@ export function createSdnTypedCapabilities(wasm, options = {}) {
         if (authorityEstablished && (cleanupFailed || secretCleanupFailed)) {
           fail('CRYPTO_FAILURE');
         }
+      }
+    },
+
+    /**
+     * Opens fields sealed to this identity's contact-encryption key (SDN
+     * Unified ECIES field cipher) and seals each plaintext to
+     * `input.replyPublic` with the same cipher. Plaintext, keys and shared
+     * secrets stay native; only reply ciphertext returns. Native refuses a
+     * field whose context is bound to another site than the row's.
+     */
+    openSealedFields(handle, input, registryRow) {
+      const record = recordFor(handle);
+      const row = Object.hasOwn(SEALED_FIELD_ROWS, registryRow) ? SEALED_FIELD_ROWS[registryRow] : 0;
+      if (!row) fail('INVALID_REQUEST');
+      requireExactObject(input, ['fields', 'replyPublic']);
+      const replyPublic = copyBytes(input.replyPublic);
+      if (replyPublic.length !== 32 || !Array.isArray(input.fields) ||
+          input.fields.length < 1 || input.fields.length > MAX_SEALED_FIELDS) {
+        fail('INVALID_REQUEST');
+      }
+      const parts = [Uint8Array.of(input.fields.length)];
+      let total = 0;
+      for (const field of input.fields) {
+        requireExactObject(field, ['ephemeralPublic', 'recipientKeyId', 'context', 'fieldId', 'ciphertext']);
+        const ephemeral = copyBytes(field.ephemeralPublic);
+        const keyId = copyBytes(field.recipientKeyId);
+        const context = encodeString(field.context, MAX_SEALED_CONTEXT_BYTES);
+        const ciphertext = copyBytes(field.ciphertext);
+        if (ephemeral.length !== 32 || keyId.length !== 8 ||
+            !Number.isInteger(field.fieldId) || field.fieldId < 0 || field.fieldId > 0xffff ||
+            ciphertext.length < 1 || ciphertext.length > MAX_SEALED_FIELD_BYTES) {
+          fail('INVALID_REQUEST');
+        }
+        total += ciphertext.length;
+        parts.push(ephemeral, keyId,
+          Uint8Array.of(field.fieldId >> 8, field.fieldId & 0xff),
+          Uint8Array.of(context.length >> 8, context.length & 0xff), context,
+          Uint8Array.of(ciphertext.length >> 8, ciphertext.length & 0xff), ciphertext);
+      }
+      if (total > MAX_SEALED_BATCH_BYTES) fail('INVALID_REQUEST');
+      const length = parts.reduce((sum, part) => sum + part.length, 0);
+      const request = new SafeUint8Array(length);
+      let offset = 0;
+      for (const part of parts) {
+        intrinsicSet.call(request, part, offset);
+        offset += part.length;
+      }
+      const capacity = 33 + input.fields.length * 3 + total;
+      const scope = createAllocationScope(wasm);
+      try {
+        const requestPointer = scope.allocate(request);
+        const replyPointer = scope.allocate(replyPublic);
+        const outRequired = scope.allocate(4);
+        const outBytes = scope.allocate(capacity);
+        let status;
+        try {
+          status = wasm._hd_sdn_open_sealed_fields(
+            record.nativeValue, requestPointer, request.length,
+            replyPointer, replyPublic.length, row, outBytes, capacity, outRequired,
+          );
+        } catch {
+          fail('CRYPTO_FAILURE');
+        }
+        if (status !== 0) throwStatus(status);
+        const required = readRequired(scope, outRequired);
+        if (required < 33 || required > capacity) fail('CRYPTO_FAILURE');
+        const out = scope.bytes(outBytes, required);
+        if (out[32] !== input.fields.length) fail('CRYPTO_FAILURE');
+        const fields = [];
+        let at = 33;
+        for (let index = 0; index < input.fields.length; index += 1) {
+          if (at + 3 > out.length) fail('CRYPTO_FAILURE');
+          const opened = out[at] === 0;
+          const size = (out[at + 1] << 8) | out[at + 2];
+          at += 3;
+          if ((out[at - 3] !== 0 && out[at - 3] !== 1) || (opened && size === 0) ||
+              (!opened && size !== 0) || at + size > out.length) {
+            fail('CRYPTO_FAILURE');
+          }
+          fields.push(Object.freeze(opened
+            ? { opened: true, ciphertext: out.slice(at, at + size) }
+            : { opened: false }));
+          at += size;
+        }
+        if (at !== out.length) fail('CRYPTO_FAILURE');
+        return Object.freeze({ ephemeralPublic: out.slice(0, 32), fields: Object.freeze(fields) });
+      } finally {
+        if (scope.cleanup()) fail('CRYPTO_FAILURE');
       }
     },
 

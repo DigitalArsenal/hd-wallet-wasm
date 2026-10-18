@@ -5,7 +5,9 @@ export type WalletRelayOperation =
   | 'sdn.auth.jcs-envelope.v2'
   | 'sdn.auth.publish-request.v1'
   | 'sdn.asset-review.authority-activation.v1'
-  | 'sdn.asset-review.decision.v1';
+  | 'sdn.asset-review.decision.v1'
+  | 'sdn.wallet.field-open.v1'
+  | 'sdn.wallet.key-unwrap.v1';
 
 export type WalletClientStatus = 'dormant' | 'opening' | 'connected' | 'error';
 export type WalletClientId =
@@ -27,6 +29,7 @@ export type WalletClientErrorCode =
   | 'EXPIRED'
   | 'INVALID_CLIENT'
   | 'INVALID_REQUEST'
+  | 'NOT_ADDRESSED_TO_ACCOUNT'
   | 'RELAY_ERROR'
   | 'REPLACED'
   | 'WALLET_NOT_COMPLETED';
@@ -223,6 +226,42 @@ export interface WalletPublicClient {
   openAccount(): Promise<void>;
   disconnect(): Promise<void>;
   destroy(): Promise<void>;
+}
+
+/**
+ * One field sealed to the signed-in user's contact-encryption key with the SDN
+ * Unified ECIES field cipher: its SDS `$ENC` header bytes, the HKDF info
+ * (`sdn-field-encryption/v1|<site>|<schema>|<field>|k<version>`, equal to the
+ * header's CONTEXT), its field id and its ciphertext.
+ */
+export interface SealedFieldInput {
+  readonly enc: Uint8Array;
+  readonly context: string;
+  readonly fieldId: number;
+  readonly ciphertext: Uint8Array;
+}
+
+export type OpenedField =
+  | { readonly plaintext: Uint8Array }
+  | { readonly refused: 'NOT_ADDRESSED_TO_ACCOUNT' };
+
+/** sdn-flatbuffers-pages-v1: the wallet opens this site's fields after consent. */
+export interface FlatbuffersWalletClient extends WalletPublicClient {
+  /** 1..16 fields, at most 4096 bytes each and 12288 bytes in all. */
+  openFields(value: { readonly fields: readonly SealedFieldInput[] }): Promise<readonly OpenedField[]>;
+}
+
+/**
+ * sdn-flatsql-pages-v1: the wallet unwraps one database's content key (an
+ * `$ENC` + `$KMF` pair wrapped to the user) after consent. The content key is
+ * a scoped key for that database, not a wallet key.
+ */
+export interface FlatsqlWalletClient extends WalletPublicClient {
+  unwrapKey(value: {
+    readonly enc: Uint8Array;
+    readonly kmf: Uint8Array;
+    readonly context: string;
+  }): Promise<{ readonly contentKey: Uint8Array }>;
 }
 
 export interface SdnWalletClient extends WalletPublicClient {

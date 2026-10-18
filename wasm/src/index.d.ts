@@ -382,6 +382,28 @@ export interface SdnIdentityCapabilities {
     handle: SdnIdentityHandle,
     input: RememberWalletSealInput,
   ): Uint8Array;
+  /**
+   * Opens fields sealed to the contact-encryption key (SDN Unified ECIES field
+   * cipher, the site bound by the registry row) and seals each plaintext to
+   * `replyPublic`. Only reply ciphertext returns.
+   */
+  openSealedFields(
+    handle: SdnIdentityHandle,
+    input: {
+      fields: ReadonlyArray<{
+        ephemeralPublic: Uint8Array;
+        recipientKeyId: Uint8Array;
+        context: string;
+        fieldId: number;
+        ciphertext: Uint8Array;
+      }>;
+      replyPublic: Uint8Array;
+    },
+    registryRow: 'flatbuffers-field-open-v1' | 'flatsql-key-unwrap-v1',
+  ): {
+    ephemeralPublic: Uint8Array;
+    fields: ReadonlyArray<{ opened: true; ciphertext: Uint8Array } | { opened: false }>;
+  };
   destroySdnIdentity(handle: SdnIdentityHandle): void;
 }
 

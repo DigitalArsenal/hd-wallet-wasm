@@ -2274,6 +2274,90 @@ uint16_t hd_sdn_transfer_open(
     });
 }
 
+// Sealed-field batch, all integers big-endian:
+//   request = count u8, then per field: ephemeral public (32), recipient key
+//             id (8), field id u16, context length u16, context, ciphertext
+//             length u16, ciphertext;
+//   output  = reply ephemeral public (32), count u8, then per field: status u8
+//             (0 opened, 1 not addressed to this account), length u16, reply
+//             ciphertext.
+extern "C" HD_WALLET_EXPORT
+uint16_t hd_sdn_open_sealed_fields(
+    uint64_t handle, const uint8_t* request, uint32_t request_len,
+    const uint8_t* reply_public, uint32_t reply_len, uint8_t registry_row,
+    uint8_t* out_bytes, uint32_t out_capacity, uint32_t* out_required) {
+    return guarded([&] {
+        if (!prepareOutput(out_bytes, out_capacity, out_required) ||
+            !validRange(request, request_len) || request_len > kMaximumOutputBytes ||
+            reply_len != 32 || !validRange(reply_public, reply_len)) {
+            return status(IdentityError::InvalidRequest);
+        }
+        if (registry_row != static_cast<uint8_t>(RegistryRowId::FlatbuffersFieldOpen) &&
+            registry_row != static_cast<uint8_t>(RegistryRowId::FlatsqlKeyUnwrap)) {
+            return status(IdentityError::OperationNotAllowed);
+        }
+        size_t offset = 0;
+        const auto take = [&](size_t length) -> const uint8_t* {
+            if (length > request_len - offset) return nullptr;
+            const uint8_t* at = request + offset;
+            offset += length;
+            return at;
+        };
+        const auto u16 = [&](uint16_t& value) {
+            const uint8_t* at = take(2);
+            if (at == nullptr) return false;
+            value = static_cast<uint16_t>((at[0] << 8) | at[1]);
+            return true;
+        };
+        const uint8_t* count = take(1);
+        if (count == nullptr || *count == 0 || *count > kMaximumSealedFields) {
+            return status(IdentityError::InvalidRequest);
+        }
+        std::vector<SealedField> fields(*count);
+        for (auto& field : fields) {
+            const uint8_t* ephemeral = take(32);
+            const uint8_t* key_id = take(8);
+            uint16_t context_len = 0;
+            uint16_t ciphertext_len = 0;
+            if (ephemeral == nullptr || key_id == nullptr || !u16(field.field_id) ||
+                !u16(context_len)) {
+                return status(IdentityError::InvalidRequest);
+            }
+            const uint8_t* context = take(context_len);
+            if (context == nullptr || !u16(ciphertext_len)) {
+                return status(IdentityError::InvalidRequest);
+            }
+            const uint8_t* ciphertext = take(ciphertext_len);
+            if (ciphertext == nullptr) return status(IdentityError::InvalidRequest);
+            std::copy_n(ephemeral, 32, field.ephemeral_public.begin());
+            std::copy_n(key_id, 8, field.recipient_key_id.begin());
+            field.context.assign(reinterpret_cast<const char*>(context), context_len);
+            field.ciphertext.assign(ciphertext, ciphertext + ciphertext_len);
+        }
+        if (offset != request_len) return status(IdentityError::InvalidRequest);
+        auto outcome = open_sealed_fields(
+            handle, fields, std::span<const uint8_t, 32>(reply_public, 32),
+            static_cast<RegistryRowId>(registry_row));
+        if (std::holds_alternative<IdentityError>(outcome)) {
+            return status(std::get<IdentityError>(outcome));
+        }
+        const FieldReply& reply = std::get<FieldReply>(outcome);
+        std::vector<uint8_t> output(reply.ephemeral_public.begin(), reply.ephemeral_public.end());
+        output.push_back(static_cast<uint8_t>(reply.fields.size()));
+        for (const auto& field : reply.fields) {
+            output.push_back(static_cast<uint8_t>(field.status));
+            output.push_back(static_cast<uint8_t>(field.ciphertext.size() >> 8));
+            output.push_back(static_cast<uint8_t>(field.ciphertext.size()));
+            output.insert(output.end(), field.ciphertext.begin(), field.ciphertext.end());
+        }
+        const uint32_t required = static_cast<uint32_t>(output.size());
+        storeScalar(out_required, required);
+        if (out_capacity < required) return status(IdentityError::InvalidRequest);
+        std::memcpy(out_bytes, output.data(), output.size());
+        return uint16_t{0};
+    });
+}
+
 extern "C" HD_WALLET_EXPORT
 void hd_sdn_destroy_identity(uint64_t handle) noexcept {
     try {

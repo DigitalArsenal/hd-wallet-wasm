@@ -11,13 +11,13 @@ int32_t hd_get_version_patch();
 
 TEST_CASE(VersionContract, VersionMacrosMatchRelease) {
     ASSERT_EQ(2, HD_WALLET_VERSION_MAJOR);
-    ASSERT_EQ(1, HD_WALLET_VERSION_MINOR);
-    ASSERT_EQ(3, HD_WALLET_VERSION_PATCH);
-    ASSERT_STR_EQ("2.1.3", HD_WALLET_VERSION_STRING);
+    ASSERT_EQ(2, HD_WALLET_VERSION_MINOR);
+    ASSERT_EQ(0, HD_WALLET_VERSION_PATCH);
+    ASSERT_STR_EQ("2.2.0", HD_WALLET_VERSION_STRING);
 }
 
 TEST_CASE(VersionContract, RuntimeVersionStringMatchesRelease) {
-    ASSERT_STR_EQ("2.1.3", hd_get_version_string());
+    ASSERT_STR_EQ("2.2.0", hd_get_version_string());
 }
 
 TEST_CASE(VersionContract, RuntimeVersionIntegerMatchesRelease) {

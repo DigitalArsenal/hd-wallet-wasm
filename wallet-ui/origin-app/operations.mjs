@@ -6,6 +6,13 @@ import {
   buildSdnPublishResult,
   buildWalletAccountResult,
   buildWalletConnectResult,
+  buildFieldOpenResult,
+  buildKeyUnwrapResult,
+  decodeBase64urlBytes,
+  encodeBase64url,
+  FIELD_OPEN_LIMITS,
+  parseFieldOpenRequest,
+  parseKeyUnwrapRequest,
   parseAssetReviewAuthorityActivationRequest,
   parseAssetReviewDecisionRequest,
   parseSdnLoginV1Request,
@@ -14,6 +21,8 @@ import {
   parseWalletAccountRequest,
   parseWalletConnectRequest,
 } from '../client/wire.mjs';
+import { readEncHeader, readKmfKeyBytes, SealedEnvelopeError } from './sealed-envelopes.mjs';
+import { SESSION_MS } from './consent-memory.mjs';
 
 const TRANSACTION_FIELDS = Object.freeze([
   'callbackUri',
@@ -78,8 +87,79 @@ const OPERATIONS = Object.freeze({
     parseRequest: parseWalletConnectRequest,
     buildResult: buildWalletConnectResult,
     connect: true,
+  }),  'sdn.wallet.field-open.v1': Object.freeze({
+    parseRequest: parseFieldOpenRequest,
+    buildResult: buildFieldOpenResult,
+    bindRequest: (request, binding) => request.fields.map((field) => (
+      sealedField(field.encBase64url, field.context, field.fieldId, field.ciphertextBase64url, binding))),
+  }),
+  'sdn.wallet.key-unwrap.v1': Object.freeze({
+    parseRequest: parseKeyUnwrapRequest,
+    buildResult: buildKeyUnwrapResult,
+    bindRequest: (request, binding) => [sealedField(request.encBase64url, request.context,
+      KMF_KEY_BYTES_FIELD_ID, request.kmfBase64url, binding, true)],
   }),
 });
+
+// $KMF KEY_BYTES is field 4 of the record: the field id its cipher uses.
+const KMF_KEY_BYTES_FIELD_ID = 4;
+
+/**
+ * One envelope of a field-open or key-unwrap request, read and bound to the
+ * requesting client's site: its $ENC CONTEXT must equal the declared context,
+ * and that context must start with the registry row's audience
+ * ("sdn-field-encryption/v1|<site>"), so a site opens only its own fields.
+ * Native code checks the binding again before it decrypts.
+ */
+function sealedField(encBase64url, context, fieldId, payloadBase64url, binding, kmf = false) {
+  let header;
+  let ciphertext;
+  try {
+    header = readEncHeader(decodeBase64urlBytes(encBase64url, 1, FIELD_OPEN_LIMITS.envelopeBytes, 'enc'));
+    const payload = decodeBase64urlBytes(payloadBase64url, 1,
+      kmf ? FIELD_OPEN_LIMITS.envelopeBytes : FIELD_OPEN_LIMITS.fieldBytes, 'payload');
+    ciphertext = kmf ? readKmfKeyBytes(payload) : payload;
+  } catch (error) {
+    if (error instanceof SealedEnvelopeError) fail('MALFORMED_ENVELOPE');
+    fail('INVALID_TRANSACTION');
+  }
+  if (header.context !== context) fail('MALFORMED_ENVELOPE');
+  if (typeof binding?.audience !== 'string' || !context.startsWith(`${binding.audience}|`)) {
+    fail('FIELD_SITE_MISMATCH');
+  }
+  return Object.freeze({
+    ciphertext,
+    context,
+    ephemeralPublic: header.ephemeralPublic,
+    fieldId,
+    recipientKeyId: header.recipientKeyId,
+  });
+}
+
+function hexBytes(hex) {
+  return Uint8Array.from(hex.match(/../gu), (pair) => Number.parseInt(pair, 16));
+}
+
+function bytesHex(bytes) {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+/** Opens the bound envelopes natively; the result holds only reply ciphertext. */
+function openSealed(capabilities, handle, request, binding, operation) {
+  if (typeof capabilities.openSealedFields !== 'function') fail('OPERATION_NOT_ALLOWED');
+  const fields = operation.bindRequest(request, binding);
+  const reply = capabilities.openSealedFields(handle, {
+    fields: fields.map((field) => ({ ...field })),
+    replyPublic: hexBytes(request.replyPublicKeyHex),
+  }, binding.registryRow);
+  return operation.buildResult({
+    fields: reply.fields.map((field) => (field.opened
+      ? { ciphertextBase64url: encodeBase64url(field.ciphertext), status: 'opened' }
+      : { reason: 'NOT_ADDRESSED_TO_ACCOUNT', status: 'refused' })),
+    replyEphemeralPublicKeyHex: bytesHex(reply.ephemeralPublic),
+    schemaVersion: 1,
+  });
+}
 
 export class WalletOperationError extends Error {
   constructor(code) {
@@ -252,6 +332,8 @@ export async function validateWalletTransaction(
   } catch {
     fail('INVALID_TRANSACTION');
   }
+  // Before any credential is asked for: a page names only its own site.
+  if (operation.bindRequest) operation.bindRequest(request, binding);
   let requestSha256;
   try {
     requestSha256 = await nativeRequestHash(request, sha256);
@@ -345,6 +427,16 @@ export function describeTransaction(binding, request = {}) {
         ['Note', request.note],
       ]);
     }
+    case 'sdn.wallet.field-open.v1': {
+      const count = Array.isArray(request.fields) ? request.fields.length : 0;
+      return about(`Open ${count} encrypted ${count === 1 ? 'field' : 'fields'} for ${who}`,
+        'Your wallet decrypts fields sealed to your encryption key for this site and gives the site their contents. Your keys stay in the wallet.',
+        'Open', [['Fields', count]]);
+    }
+    case 'sdn.wallet.key-unwrap.v1':
+      return about(`Reopen a database for ${who}`,
+        'Your wallet unwraps the key of this one database, sealed to your encryption key for this site, and gives that key to the site. Your wallet keys stay in the wallet.',
+        'Reopen', [['Database', String(request.context ?? '').split('|')[2]]]);
     default:
       return about(`Confirm a request from ${who}`, '', 'Confirm');
   }
@@ -436,7 +528,7 @@ async function signPublication({ assertCurrent, binding, capabilities, handle, i
   return buildSdnPublishResult({ ...signed, challengeId: challenge.challenge_id, challengeBase64url });
 }
 
-export function requestTrustedConfirmation({ binding, document, request }) {
+export function requestTrustedConfirmation({ binding, document, request, offerRemember = false }) {
   const previousFocus = document.activeElement ?? null;
   const root = document.createElement('section');
   root.className = 'wallet-confirmation';
@@ -445,6 +537,16 @@ export function requestTrustedConfirmation({ binding, document, request }) {
   root.setAttribute?.('aria-labelledby', 'wallet-confirmation-heading');
   root.tabIndex = -1;
   renderTransactionConfirmation(root, { binding, document, request });
+  let remember = null;
+  if (offerRemember) {
+    const label = document.createElement('label');
+    label.className = 'wallet-confirmation-remember';
+    remember = document.createElement('input');
+    remember.type = 'checkbox';
+    remember.dataset.walletControl = 'remember-site';
+    label.append(remember, ` Don't ask again for this site for ${Math.round(SESSION_MS / 60000)} minutes`);
+    root.append(label);
+  }
   const actions = document.createElement('div');
   actions.className = 'wallet-confirmation-actions';
   const confirm = document.createElement('button');
@@ -471,7 +573,7 @@ export function requestTrustedConfirmation({ binding, document, request }) {
     settled = true;
     confirm.disabled = true;
     cancel.disabled = true;
-    if (accepted) resolvePromise();
+    if (accepted) resolvePromise(Object.freeze({ remember: remember?.checked === true }));
     else rejectPromise(new WalletOperationError('USER_CANCELLED'));
   };
   const onConfirm = (event) => finish(true, event);
@@ -532,6 +634,17 @@ export async function executeWalletOperation({
   const operation = OPERATIONS[transaction.operation];
   if (!operation || !capabilities) fail('OPERATION_NOT_ALLOWED');
   if (operation.publish) return signPublication({ assertCurrent, binding, capabilities, handle, identity, transaction });
+  if (operation.bindRequest) {
+    let result;
+    try {
+      result = openSealed(capabilities, handle, transaction.request, binding, operation);
+    } catch (error) {
+      if (error instanceof WalletOperationError) throw error;
+      fail(error?.code === 'OPERATION_NOT_ALLOWED' ? 'OPERATION_NOT_ALLOWED' : 'INVALID_WALLET_RESULT');
+    }
+    assertCurrent();
+    return result;
+  }
   if (operation.connect) {
     return operation.buildResult({
       connectionExpiresAt: transaction.expiresAt,

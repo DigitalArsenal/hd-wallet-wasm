@@ -14,6 +14,7 @@ import {
   createRememberedWalletCoordinator,
 } from './remember-wallet.mjs';
 import { validateWalletRelayCompletion } from './relay.mjs';
+import { consentScope, createConsentMemory } from './consent-memory.mjs';
 
 const SafeUint8Array = Uint8Array;
 const intrinsicFill = SafeUint8Array.prototype.fill;
@@ -123,6 +124,7 @@ export class WalletOriginController {
   #activeTransaction = false;
   #capabilities;
   #confirmation = null;
+  #consent;
   #controllers = new Set();
   #credentialControls = new Set();
   #destroyPromise = null;
@@ -198,6 +200,10 @@ export class WalletOriginController {
         getRandomValues: window?.crypto?.getRandomValues?.bind(window.crypto)
           ?? globalThis.crypto?.getRandomValues?.bind(globalThis.crypto),
       },
+      storage: storage ?? window?.localStorage ?? globalThis.localStorage,
+    });
+    this.#consent = createConsentMemory({
+      now,
       storage: storage ?? window?.localStorage ?? globalThis.localStorage,
     });
     this.#installLifecycle();
@@ -940,14 +946,21 @@ export class WalletOriginController {
       });
       this.#assertCurrent(handle, generation);
       assertWalletContext({ document: this.#document, window: this.#window });
-      this.#confirmation = requestTrustedConfirmation({
-        binding: validated.binding,
-        document: this.#document,
-        identity,
-        request: validated.request,
-        transaction: validated.transaction,
-      });
-      await this.#confirmation.promise;
+      // A person's "don't ask again for this site" covers a few more
+      // openings for that site and account; anything else is confirmed here.
+      const scope = consentScope(validated.binding, identity);
+      if (!this.#consent.take(scope)) {
+        this.#confirmation = requestTrustedConfirmation({
+          binding: validated.binding,
+          document: this.#document,
+          identity,
+          offerRemember: scope !== null,
+          request: validated.request,
+          transaction: validated.transaction,
+        });
+        const answer = await this.#confirmation.promise;
+        if (scope !== null && answer?.remember === true) this.#consent.grant(scope);
+      }
       this.#assertCurrent(handle, generation);
       assertWalletContext({ document: this.#document, window: this.#window });
       validated = await validateWalletTransaction(prepared.transaction, {
@@ -1054,6 +1067,7 @@ export class WalletOriginController {
     if (this.#pendingAccountPublication || this.#accountPublicationPromise) {
       return this.#completePendingAccount('disconnected');
     }
+    this.#consent.clear();
     this.revokeNow('logout');
     this.#retainedIdentity = null;
   }

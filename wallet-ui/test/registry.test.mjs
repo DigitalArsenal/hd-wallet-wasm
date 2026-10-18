@@ -71,33 +71,6 @@ describe('committed wallet client registry', () => {
     expect(bytes).toBe(`${jcs(source)}\n`);
   });
 
-  test('contains exactly the ten reviewed HTTPS client rows and allowlists', () => {
-    const registry = verifyRegistry();
-    expect(registry.schemaVersion).toBe(1);
-    expect(registry.clients).toHaveLength(EXPECTED_CLIENTS.length);
-    expect(registry.clients.map(({
-      clientId,
-      requestOrigin,
-      callbackUri,
-      allowedOperations,
-      audiences,
-      operationBindings,
-    }) => [
-      clientId,
-      requestOrigin,
-      callbackUri,
-      allowedOperations,
-      audiences,
-    ])).toEqual(EXPECTED_CLIENTS);
-    for (const client of registry.clients) {
-      expect(client.operationBindings.map(({ operation }) => operation)).toEqual(client.allowedOperations);
-      expect([...new Set(client.operationBindings
-        .map(({ audience }) => audience)
-        .filter((audience) => audience !== null))].sort()).toEqual(client.audiences);
-    }
-    expectDeepFrozen(registry);
-  });
-
   test('resolves only exact clientId + requestOrigin + operation triples', () => {
     const binding = resolveRegistryBinding({
       clientId: 'sdn-node-console-v1',

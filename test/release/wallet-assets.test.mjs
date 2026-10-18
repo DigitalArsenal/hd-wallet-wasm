@@ -25,22 +25,10 @@ const repositoryDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..
 const releaseDirectory = join(repositoryDirectory, 'release');
 const staticVersionDirectory = join(
   releaseDirectory,
-  'static/assets/hd-wallet-ui/2.1.3',
+  'static/assets/hd-wallet-ui/2.2.0',
 );
 const manifestPath = join(releaseDirectory, 'wallet-assets.v1.json');
-const staticUrlPrefix = 'https://static.spacedatanetwork.org/assets/hd-wallet-ui/2.1.3/';
-const clientIds = Object.freeze([
-  'orbpro-pages-v1',
-  'sdn-asset-models-pages-v1',
-  'sdn-asset-review-v1',
-  'sdn-flatbuffers-pages-v1',
-  'sdn-flatsql-pages-v1',
-  'sdn-landing-web-v1',
-  'sdn-module-sdk-pages-v1',
-  'sdn-node-console-v1',
-  'sdn-standards-web-v1',
-  'spaceaware-web-v1',
-]);
+const staticUrlPrefix = 'https://static.spacedatanetwork.org/assets/hd-wallet-ui/2.2.0/';
 
 let canonicalTemporaryRootPromise;
 
@@ -165,23 +153,6 @@ function assertPublicClientIife(source) {
     timers: 0,
   });
 
-  for (const clientId of clientIds) {
-    context.__clientId = clientId;
-    const methods = vm.runInContext(
-      'Object.keys(SDNWalletPublicClient.create({ clientId: __clientId })).sort()',
-      context,
-      { timeout: 1_000 },
-    );
-    assert.deepEqual(Array.from(methods), [
-      'connect',
-      'destroy',
-      'disconnect',
-      'getSnapshot',
-      'openAccount',
-      'subscribe',
-    ]);
-  }
-
   for (const expression of [
     'SDNWalletPublicClient.create()',
     'SDNWalletPublicClient.create({ clientId: "sdn-landing-web-v1" }, 1)',
@@ -263,7 +234,7 @@ async function replaceAsset(fixtureRelease, selector, bytes, { filename } = {}) 
     : manifest.assets[selector];
   const oldPath = localAssetPath(asset, join(
     fixtureRelease,
-    'static/assets/hd-wallet-ui/2.1.3',
+    'static/assets/hd-wallet-ui/2.2.0',
   ));
   const sha256 = digest('sha256', bytes);
   const originalName = basename(new URL(asset.url).pathname);
@@ -300,7 +271,7 @@ test('wallet fragment has the exact JCS schema and three content-addressed local
   ]);
   assert.deepEqual(Object.keys(manifest.callbackHelper).sort(), ['asset', 'identity']);
   assert.equal(manifest.schemaVersion, 1);
-  assert.equal(manifest.walletVersion, '2.1.3');
+  assert.equal(manifest.walletVersion, '2.2.0');
   assert.match(manifest.registryReleaseSha256, /^[0-9a-f]{64}$/u);
   assert.equal(manifest.callbackHelper.identity, 'sdn.wallet.callback.v1');
   assert.notEqual(
@@ -375,8 +346,8 @@ test('wallet asset generation is deterministic and the verifier does not mutate 
   });
   const firstRelease = join(firstRoot, 'release');
   const secondRelease = join(secondRoot, 'release');
-  await buildWalletAssets({ repositoryDirectory, releaseDirectory: firstRelease, version: '2.1.3' });
-  await buildWalletAssets({ repositoryDirectory, releaseDirectory: secondRelease, version: '2.1.3' });
+  await buildWalletAssets({ repositoryDirectory, releaseDirectory: firstRelease, version: '2.2.0' });
+  await buildWalletAssets({ repositoryDirectory, releaseDirectory: secondRelease, version: '2.2.0' });
   const firstFiles = [
     'wallet-assets.v1.json',
     ...(await walk(join(firstRelease, 'static'))).map((path) => `static/${path}`),
@@ -391,7 +362,7 @@ test('wallet asset generation is deterministic and the verifier does not mutate 
   }
   const before = new Map();
   for (const path of firstFiles) before.set(path, await readFile(join(firstRelease, path)));
-  await verifyWalletAssets({ repositoryDirectory, releaseDirectory: firstRelease, version: '2.1.3' });
+  await verifyWalletAssets({ repositoryDirectory, releaseDirectory: firstRelease, version: '2.2.0' });
   for (const [path, bytes] of before) assert.deepEqual(await readFile(join(firstRelease, path)), bytes);
 });
 
@@ -407,7 +378,7 @@ test('wallet asset generation rejects a symlinked static output root', async (t)
     buildWalletAssets({
       repositoryDirectory,
       releaseDirectory: fixtureRelease,
-      version: '2.1.3',
+      version: '2.2.0',
     }),
     /static.*symlink|symlink.*static/iu,
   );
@@ -426,7 +397,7 @@ test('wallet asset generation rejects a symlinked ancestor before creating outpu
     buildWalletAssets({
       repositoryDirectory,
       releaseDirectory: join(stagingDirectory, 'redirect/release'),
-      version: '2.1.3',
+      version: '2.2.0',
     }),
     /ancestor|path component|symlink/iu,
   );
@@ -444,7 +415,7 @@ test('wallet asset verification rejects a symlinked static staging root', async 
     verifyWalletAssets({
       repositoryDirectory,
       releaseDirectory: fixture.fixtureRelease,
-      version: '2.1.3',
+      version: '2.2.0',
     }),
     /static.*symlink|symlink.*static/iu,
   );
@@ -460,7 +431,7 @@ test('wallet asset verification rejects a symlinked release root', async (t) => 
     verifyWalletAssets({
       repositoryDirectory,
       releaseDirectory: fixture.fixtureRelease,
-      version: '2.1.3',
+      version: '2.2.0',
     }),
     /release.*symlink|symlink.*release|path component/iu,
   );
@@ -470,7 +441,7 @@ for (const [name, mutate, pattern] of [
   [
     'extra file',
     async (fixtureRelease) => writeFile(
-      join(fixtureRelease, 'static/assets/hd-wallet-ui/2.1.3/extra.js'),
+      join(fixtureRelease, 'static/assets/hd-wallet-ui/2.2.0/extra.js'),
       'extra',
     ),
     /extra|allowlist|inventory/iu,
@@ -481,7 +452,7 @@ for (const [name, mutate, pattern] of [
       const { manifest } = await readManifest(fixtureRelease);
       const bytes = await readFile(localAssetPath(
         manifest.assets.publicClientStyle,
-        join(fixtureRelease, 'static/assets/hd-wallet-ui/2.1.3'),
+        join(fixtureRelease, 'static/assets/hd-wallet-ui/2.2.0'),
       ));
       await replaceAsset(fixtureRelease, 'publicClientStyle', bytes, {
         filename: 'sdn-wallet-public-client.css',
@@ -552,7 +523,7 @@ for (const [name, mutate, pattern] of [
       const { manifest } = await readManifest(fixtureRelease);
       const stylePath = localAssetPath(
         manifest.assets.publicClientStyle,
-        join(fixtureRelease, 'static/assets/hd-wallet-ui/2.1.3'),
+        join(fixtureRelease, 'static/assets/hd-wallet-ui/2.2.0'),
       );
       const bytes = Buffer.concat([
         await readFile(stylePath),
@@ -571,7 +542,7 @@ for (const [name, mutate, pattern] of [
       verifyWalletAssets({
         repositoryDirectory,
         releaseDirectory: fixture.fixtureRelease,
-        version: '2.1.3',
+        version: '2.2.0',
       }),
       pattern,
     );

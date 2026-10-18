@@ -21,7 +21,7 @@
     "clientId": "sdn-landing-web-v1",
     "expiresAt": "2026-07-21T00:05:00.000Z",
     "operation": "sdn.wallet.account.v1",
-    "registryVersion": "7674bfb019753eee8387f064467c0f6f2ff6babd1ecabbd70dc585afc31fbc1a",
+    "registryVersion": "63784143e2ad8e2542d22148ff4a0a4da7a10f4b3f9909ae91a20dc0f60db06b",
     "request": {},
     "requestOrigin": "https://spacedatanetwork.org",
     "requestSha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",

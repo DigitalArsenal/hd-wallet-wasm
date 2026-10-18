@@ -99,6 +99,11 @@ IdentityOutcome<SecretBuffer> aes256_gcm_open(
     std::span<const uint8_t, 12> nonce,
     std::span<const uint8_t> ciphertext_and_tag,
     std::span<const uint8_t> aad);
+// AES-256-CTR over `data` in place (the 16-byte IV is the initial counter
+// block, incremented as one big-endian 128-bit integer). Its own inverse.
+bool aes256_ctr_xor(std::span<const uint8_t, 32> key,
+                    std::span<const uint8_t, 16> iv,
+                    std::span<uint8_t> data) noexcept;
 bool constant_time_equal(std::span<const uint8_t> left,
                          std::span<const uint8_t> right) noexcept;
 // Fills `output` from the platform CSPRNG in place. In WASM the runtime writes

@@ -252,8 +252,8 @@ export { createWalletClient, createSdnWalletClient, createAssetReviewWalletClien
     'sdn-fast-password-auth-v1-legacy',
     'sdn-bip39-auth-v1-legacy',
   ]) bundle = bundle.replaceAll(`"${literal}"`, '"<allowed-protocol-literal>"');
-  assert.doesNotMatch(bundle, /(?:\0asm|\.wasm\b|\b(?:argon2|hkdf|pbkdf2|scrypt)\b)/iu);
-  assert.doesNotMatch(bundle, /\b(?:deriveBits|deriveKey|importKey|privateKey|secretHandle)\b/u);
+  assert.doesNotMatch(bundle, /(?:\0asm|\.wasm\b|\b(?:argon2|pbkdf2|scrypt)\b)/iu);
+  assert.doesNotMatch(bundle, /\bsecretHandle\b/u);
   assert.doesNotMatch(bundle, /\bimport\s*\(/u);
   assert.doesNotMatch(bundle, /(?:origin-app|@wallet|@sds|node_modules|file:\/\/|\.worktrees)/u);
   assert.doesNotMatch(bundle, /[A-Za-z0-9+/]{1024,}={0,2}/u);

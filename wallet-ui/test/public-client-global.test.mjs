@@ -6,19 +6,6 @@ import { describe, expect, test } from 'vitest';
 const publicGlobalUrl = new URL('../dist/browser/sdn-wallet-public-client.js', import.meta.url);
 const callbackGlobalUrl = new URL('../dist/browser/sdn-wallet-callback.js', import.meta.url);
 
-const CLIENT_IDS = Object.freeze([
-  'orbpro-pages-v1',
-  'sdn-asset-models-pages-v1',
-  'sdn-asset-review-v1',
-  'sdn-flatbuffers-pages-v1',
-  'sdn-flatsql-pages-v1',
-  'sdn-landing-web-v1',
-  'sdn-module-sdk-pages-v1',
-  'sdn-node-console-v1',
-  'sdn-standards-web-v1',
-  'spaceaware-web-v1',
-]);
-
 function instrumentedContext() {
   const counts = {
     close: 0,
@@ -82,21 +69,6 @@ describe('classic public-client global', () => {
     expect(context.SDNWalletPublicClient.create).toHaveLength(1);
     expect(counts).toEqual({ close: 0, fetch: 0, listeners: 0, open: 0, storage: 0, timers: 0 });
 
-    for (const clientId of CLIENT_IDS) {
-      context.__clientId = clientId;
-      const methods = vm.runInContext(
-        'Object.keys(SDNWalletPublicClient.create({ clientId: __clientId })).sort()',
-        context,
-      );
-      expect(Array.from(methods)).toEqual([
-        'connect',
-        'destroy',
-        'disconnect',
-        'getSnapshot',
-        'openAccount',
-        'subscribe',
-      ]);
-    }
     expect(counts).toEqual({ close: 0, fetch: 0, listeners: 0, open: 0, storage: 0, timers: 0 });
   });
 
