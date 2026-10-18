@@ -1,5 +1,36 @@
 # Changelog
 
+## 2.1.3 (2026-10-18)
+
+### Memory
+
+A phone session held four wallet instances from two builds, 165 MB committed.
+No API changes; upgrade every copy in a page to 2.1.3 together.
+
+- **One instance per realm and version.** `init()` instantiates the WASM once
+  per realm and package version and publishes it on a realm-global
+  (`Symbol.for('hd-wallet-wasm/realm-instances')`). Every copy of this file in
+  the realm (the site runtime, a bundler's copy, sdn-js's copy) shares that one
+  instance; each copy keeps its own JS wrapper. A different version never
+  shares.
+- **Password sign-in releases its 64 MiB.** `sdn.derivePasswordIdentity` runs
+  the password KDF (password-scrypt-v2, 64 MiB) in a short-lived instance, then
+  moves the identity into the realm's instance with the identity transfer
+  below, destroys the short-lived identity, zeroes that instance's whole memory
+  and drops it. A WASM memory never shrinks, so deriving in place kept 64 MiB
+  committed for the session.
+- **Identity transfer (hd-wallet/sdn-identity-transfer-v1).** The receiver
+  makes an X25519 key from native randomness and returns only its public half;
+  the sender seals the identity to it (ephemeral X25519, HKDF-SHA256,
+  AES-256-GCM, as remember-wallet seals); the receiver opens it into a new
+  handle without running the KDF and forgets its key. Only public keys and
+  sealed bytes pass through JS; sealing is not a public capability. Native
+  exports `hd_sdn_transfer_begin`, `hd_sdn_transfer_seal` and
+  `hd_sdn_transfer_open`; C++ `identity_transfer_begin`, `_seal` and `_open`.
+- **Browser builds start at 4 MiB** (were 32 MiB): 0.84 MiB of data, a 2 MiB
+  stack and the heap that initialization, derivation and signing use. Memory
+  still grows on demand (to 512 MiB). The WASI builds are unchanged.
+
 ## 2.1.2 (2026-10-15)
 
 ### Security

@@ -314,6 +314,27 @@ IdentityOutcome<ImportedIdentity> remember_wallet_open(
     std::span<const uint8_t> canonical_username_utf8,
     std::span<const uint8_t> canonical_aad_utf8);
 
+// Identity transfer between two wallet instances (hd-wallet/sdn-identity-
+// transfer-v1). A password identity moves from one instance to another
+// without its seed leaving native memory, so the password KDF can run in a
+// short-lived instance whose memory is then released:
+//   1. the receiver calls identity_transfer_begin(): a fresh X25519 key made
+//      from native randomness; only its public half is returned, and the
+//      private half stays in the receiver for one open;
+//   2. the sender seals the identity to that public key: an ephemeral X25519
+//      agreement, HKDF-SHA256 and AES-256-GCM (as remember-wallet seals);
+//   3. the receiver opens it into a new handle (no KDF runs) and forgets its
+//      private key.
+// Only the public keys and the sealed bytes pass between the instances.
+IdentityOutcome<std::array<uint8_t, 32>> identity_transfer_begin();
+
+IdentityOutcome<std::vector<uint8_t>> identity_transfer_seal(
+    IdentityHandle handle,
+    std::span<const uint8_t, 32> recipient_public);
+
+IdentityOutcome<ImportedIdentity> identity_transfer_open(
+    std::span<const uint8_t> sealed);
+
 void destroy_identity(IdentityHandle handle) noexcept;
 
 } // namespace hd_wallet::sdn

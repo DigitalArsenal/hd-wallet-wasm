@@ -91,7 +91,7 @@ function digest(algorithm, bytes, encoding) {
 }
 
 function immutablePath(name, extension, bytes) {
-  return `/assets/hd-wallet-ui/2.1.2/${name}.${digest('sha256', bytes, 'hex')}.${extension}`;
+  return `/assets/hd-wallet-ui/2.1.3/${name}.${digest('sha256', bytes, 'hex')}.${extension}`;
 }
 
 function sri(bytes) {

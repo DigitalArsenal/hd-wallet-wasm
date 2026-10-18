@@ -9,7 +9,7 @@
  * - Transaction building and signing
  *
  * @module hd-wallet-wasm
- * @version 2.1.2
+ * @version 2.1.3
  */
 
 // Import aligned API for batch operations
@@ -1340,6 +1340,59 @@ export async function computeWasmHash(wasmBytes) {
   const bytes = wasmBytes instanceof Uint8Array ? wasmBytes : new Uint8Array(wasmBytes);
   const wallet = await init();
   return bytesToHex(wallet.utils.sha256(bytes));
+}
+
+/**
+ * ONE WALLET INSTANCE PER REALM AND VERSION.
+ *
+ * A page can hold several copies of this file: the site runtime
+ * (/wallet-wasm/runtime/index.mjs), a bundler's copy inside an app chunk and
+ * another inside sdn-js. Each used to instantiate its own WASM, and every
+ * instance commits its own linear memory. The first init() of a version now
+ * instantiates it and publishes the promise on a realm-global keyed by the
+ * package version, so every copy of the same version in the realm shares
+ * that one instance (each copy keeps its own JS wrapper over it). A different
+ * version never shares: its exports may differ.
+ */
+const PACKAGE_VERSION = '2.1.3';
+const REALM_INSTANCES = Symbol.for('hd-wallet-wasm/realm-instances');
+
+function realmInstances() {
+  const existing = globalThis[REALM_INSTANCES];
+  if (existing && typeof existing === 'object') return existing;
+  const created = Object.create(null);
+  Object.defineProperty(globalThis, REALM_INSTANCES, {
+    value: created,
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
+  return created;
+}
+
+function sharedWasmModule() {
+  const instances = realmInstances();
+  let pending = instances[PACKAGE_VERSION];
+  if (!pending) {
+    pending = loadWasmModule();
+    instances[PACKAGE_VERSION] = pending;
+    // A failed load is not cached: the next init() tries again.
+    pending.catch(() => {
+      if (instances[PACKAGE_VERSION] === pending) delete instances[PACKAGE_VERSION];
+    });
+  }
+  return pending;
+}
+
+/**
+ * A SHORT-LIVED INSTANCE for the password KDF (scrypt dirties 64 MiB, and a
+ * WASM memory never shrinks). It is never shared or published: the caller
+ * moves the derived identity into the realm's instance (sdn-typed.mjs,
+ * identity transfer), zeroes this instance's whole memory and drops it, so
+ * the collector releases the memory.
+ */
+function createKdfInstance() {
+  return loadWasmModule();
 }
 
 /**
@@ -5192,7 +5245,7 @@ function createModule(wasm) {
   };
 
   Object.defineProperty(module, 'sdn', {
-    value: createSdnTypedCapabilities(wasm),
+    value: createSdnTypedCapabilities(wasm, { createKdfInstance }),
     enumerable: true,
     writable: false,
     configurable: false,
@@ -5337,9 +5390,14 @@ export const WellKnownCoinType = Object.freeze({
  * Initialize the HD Wallet WASM module
  * @returns {Promise<Object>} Initialized HDWalletModule
  */
+let realmModule = null;
 export default async function init() {
-  const wasm = await loadWasmModule();
-  return createModule(wasm);
+  // One wrapper per copy of this file, over the realm's one instance.
+  if (!realmModule) {
+    realmModule = sharedWasmModule().then(createModule);
+    realmModule.catch(() => { realmModule = null; });
+  }
+  return realmModule;
 }
 
 /**

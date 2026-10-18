@@ -1566,6 +1566,210 @@ IdentityOutcome<ImportedIdentity> remember_wallet_open(
         internal::aes256_gcm_open, internal::derive_identity_material);
 }
 
+namespace {
+
+constexpr std::string_view kTransferProfile = "hd-wallet/sdn-identity-transfer-v1";
+constexpr uint8_t kTransferFormat = 1;
+constexpr uint8_t kTransferKindPasswordV2 = 0;
+constexpr size_t kTransferHeaderBytes = 8;  // format, kind, account (4), username length (2)
+constexpr size_t kTransferSeedBytes = 64;
+constexpr size_t kTransferMaximumUsernameBytes = 256;
+// One transfer key per seal: the AES-GCM key is never reused, so the nonce is fixed.
+constexpr std::array<uint8_t, 12> kTransferNonce{};
+
+std::mutex g_transfer_mutex;
+// The receiver's X25519 private key between begin and open (one open).
+SecretBuffer g_transfer_recipient;
+
+void clampX25519(SecretBuffer& key) noexcept {
+    key.data()[0] &= 248;
+    key.data()[31] &= 127;
+    key.data()[31] |= 64;
+}
+
+std::span<const uint8_t, 32> span32(const SecretBuffer& value) {
+    return std::span<const uint8_t, 32>(value.data(), 32);
+}
+
+// salt = sender ephemeral public || recipient public; AAD = profile || salt.
+struct TransferContext {
+    std::array<uint8_t, 64> salt{};
+    std::vector<uint8_t> aad;
+};
+
+TransferContext transferContext(std::span<const uint8_t, 32> sender_public,
+                                std::span<const uint8_t, 32> recipient_public) {
+    TransferContext context;
+    std::copy(sender_public.begin(), sender_public.end(), context.salt.begin());
+    std::copy(recipient_public.begin(), recipient_public.end(),
+              context.salt.begin() + 32);
+    const auto profile = bytes(kTransferProfile);
+    context.aad.reserve(profile.size() + context.salt.size());
+    context.aad.insert(context.aad.end(), profile.begin(), profile.end());
+    context.aad.insert(context.aad.end(), context.salt.begin(), context.salt.end());
+    return context;
+}
+
+SecretBuffer transferKey(const SecretBuffer& shared, const TransferContext& context) {
+    return internal::hkdf_sha256(shared.span(), context.salt,
+                                 bytes(kTransferProfile), 32);
+}
+
+} // namespace
+
+IdentityOutcome<std::array<uint8_t, 32>> identity_transfer_begin() {
+#if HD_WALLET_FIPS_MODE
+    return IdentityError::FipsNotAllowed;
+#else
+    return safeOutcome<std::array<uint8_t, 32>>(
+        []() -> IdentityOutcome<std::array<uint8_t, 32>> {
+            SecretBuffer recipient(32);
+            if (!internal::fill_random_secret(recipient.span())) {
+                return IdentityError::CryptoFailure;
+            }
+            clampX25519(recipient);
+            const auto recipient_public = internal::x25519_public_key(span32(recipient));
+            std::lock_guard lock(g_transfer_mutex);
+            // A begin replaces (and wipes) any key an earlier begin left unopened.
+            g_transfer_recipient = std::move(recipient);
+            return recipient_public;
+        });
+#endif
+}
+
+IdentityOutcome<std::vector<uint8_t>> identity_transfer_seal(
+    IdentityHandle handle,
+    std::span<const uint8_t, 32> recipient_public) {
+#if HD_WALLET_FIPS_MODE
+    (void)handle;
+    (void)recipient_public;
+    return IdentityError::FipsNotAllowed;
+#else
+    return safeOutcome<std::vector<uint8_t>>(
+        [&]() -> IdentityOutcome<std::vector<uint8_t>> {
+            SecretBuffer plaintext;
+            {
+                std::lock_guard lock(g_slots_mutex);
+                auto* record = lookupLocked(handle);
+                if (!record) return IdentityError::StaleHandle;
+                if (record->material.kind != IdentityKind::PasswordV2) {
+                    return IdentityError::OperationNotAllowed;
+                }
+                const auto username = bytes(record->canonical_username);
+                const auto& seed = record->material.seed;
+                const uint32_t account = record->material.account_index;
+                if (username.empty() || username.size() > kTransferMaximumUsernameBytes ||
+                    seed.size() != kTransferSeedBytes) {
+                    return IdentityError::CryptoFailure;
+                }
+                plaintext.reserve(kTransferHeaderBytes + username.size() + seed.size());
+                plaintext.push_back(kTransferFormat);
+                plaintext.push_back(kTransferKindPasswordV2);
+                for (int shift = 24; shift >= 0; shift -= 8) {
+                    plaintext.push_back(static_cast<uint8_t>(account >> shift));
+                }
+                plaintext.push_back(static_cast<uint8_t>(username.size() >> 8));
+                plaintext.push_back(static_cast<uint8_t>(username.size()));
+                for (const auto byte : username) plaintext.push_back(byte);
+                for (const auto byte : seed.span()) plaintext.push_back(byte);
+            }
+            SecretBuffer ephemeral(32);
+            if (!internal::fill_random_secret(ephemeral.span())) {
+                return IdentityError::CryptoFailure;
+            }
+            clampX25519(ephemeral);
+            const auto sender_public = internal::x25519_public_key(span32(ephemeral));
+            SecretBuffer shared(32);
+            if (!internal::x25519_shared_secret(
+                    span32(ephemeral), recipient_public,
+                    std::span<uint8_t, 32>(shared.data(), 32))) {
+                return IdentityError::InvalidRequest;
+            }
+            const auto context = transferContext(sender_public, recipient_public);
+            const auto key = transferKey(shared, context);
+            auto sealed = internal::aes256_gcm_seal(
+                span32(key), kTransferNonce, plaintext.span(), context.aad);
+            std::vector<uint8_t> output;
+            output.reserve(sender_public.size() + sealed.size());
+            output.insert(output.end(), sender_public.begin(), sender_public.end());
+            output.insert(output.end(), sealed.begin(), sealed.end());
+            return output;
+        });
+#endif
+}
+
+IdentityOutcome<ImportedIdentity> identity_transfer_open(
+    std::span<const uint8_t> sealed) {
+#if HD_WALLET_FIPS_MODE
+    (void)sealed;
+    return IdentityError::FipsNotAllowed;
+#else
+    return safeOutcome<ImportedIdentity>([&]() -> IdentityOutcome<ImportedIdentity> {
+        SecretBuffer recipient;
+        {
+            std::lock_guard lock(g_transfer_mutex);
+            recipient = std::move(g_transfer_recipient);
+            g_transfer_recipient = SecretBuffer();
+        }
+        if (recipient.size() != 32) return IdentityError::OperationNotAllowed;
+        constexpr size_t kMinimum = 32 + kTransferHeaderBytes + 1 + kTransferSeedBytes + 16;
+        constexpr size_t kMaximum =
+            32 + kTransferHeaderBytes + kTransferMaximumUsernameBytes + kTransferSeedBytes + 16;
+        if (sealed.size() < kMinimum || sealed.size() > kMaximum) {
+            return IdentityError::InvalidRequest;
+        }
+        const std::span<const uint8_t, 32> sender_public(sealed.data(), 32);
+        const auto recipient_public = internal::x25519_public_key(span32(recipient));
+        SecretBuffer shared(32);
+        if (!internal::x25519_shared_secret(span32(recipient), sender_public,
+                                            std::span<uint8_t, 32>(shared.data(), 32))) {
+            return IdentityError::AuthenticationFailed;
+        }
+        const auto context = transferContext(sender_public, recipient_public);
+        const auto key = transferKey(shared, context);
+        auto opened = internal::aes256_gcm_open(span32(key), kTransferNonce,
+                                                sealed.subspan(32), context.aad);
+        if (std::holds_alternative<IdentityError>(opened)) {
+            return std::get<IdentityError>(opened);
+        }
+        const auto plaintext = std::get<SecretBuffer>(std::move(opened));
+        const uint8_t* p = plaintext.data();
+        if (plaintext.size() < kTransferHeaderBytes || p[0] != kTransferFormat ||
+            p[1] != kTransferKindPasswordV2) {
+            return IdentityError::InvalidRequest;
+        }
+        const uint32_t account = (static_cast<uint32_t>(p[2]) << 24) |
+                                 (static_cast<uint32_t>(p[3]) << 16) |
+                                 (static_cast<uint32_t>(p[4]) << 8) |
+                                 static_cast<uint32_t>(p[5]);
+        const size_t username_size = (static_cast<size_t>(p[6]) << 8) | p[7];
+        if (account >= 0x80000000U || username_size == 0 ||
+            username_size > kTransferMaximumUsernameBytes ||
+            plaintext.size() != kTransferHeaderBytes + username_size + kTransferSeedBytes) {
+            return IdentityError::InvalidRequest;
+        }
+        const std::span<const uint8_t> username_bytes(p + kTransferHeaderBytes, username_size);
+        auto canonical = canonicalize_username(username_bytes);
+        if (!std::holds_alternative<std::string>(canonical)) {
+            return IdentityError::InvalidRequest;
+        }
+        std::string username = std::get<std::string>(std::move(canonical));
+        const auto canonical_bytes = bytes(username);
+        if (canonical_bytes.size() != username_bytes.size() ||
+            !std::equal(username_bytes.begin(), username_bytes.end(),
+                        canonical_bytes.begin())) {
+            return IdentityError::InvalidRequest;
+        }
+        SecretBuffer seed(kTransferSeedBytes);
+        std::copy_n(p + kTransferHeaderBytes + username_size, kTransferSeedBytes,
+                    seed.data());
+        return insertRawSeedImported(std::move(seed), IdentityKind::PasswordV2,
+                                     account, std::move(username),
+                                     internal::derive_identity_material);
+    });
+#endif
+}
+
 void destroy_identity(IdentityHandle handle) noexcept {
     try {
         std::lock_guard lock(g_slots_mutex);

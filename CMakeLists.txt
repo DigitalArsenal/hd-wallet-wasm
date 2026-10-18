@@ -32,7 +32,7 @@ cmake_minimum_required(VERSION 3.16...3.28)
 # Version
 set(HD_WALLET_VERSION_MAJOR 2)
 set(HD_WALLET_VERSION_MINOR 1)
-set(HD_WALLET_VERSION_PATCH 2)
+set(HD_WALLET_VERSION_PATCH 3)
 
 project(HDWalletWasm
   VERSION ${HD_WALLET_VERSION_MAJOR}.${HD_WALLET_VERSION_MINOR}.${HD_WALLET_VERSION_PATCH}
@@ -655,6 +655,9 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       "_hd_sdn_sign_asset_review_authority_activation"
       "_hd_sdn_sign_asset_review_decision"
       "_hd_sdn_seal_remembered_identity"
+      "_hd_sdn_transfer_begin"
+      "_hd_sdn_transfer_seal"
+      "_hd_sdn_transfer_open"
       "_hd_sdn_destroy_identity"
     )
     string(JOIN "," BROWSER_EXPORTED_FUNCS_STR ${BROWSER_EXPORTED_FUNCTIONS})
@@ -1093,7 +1096,7 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       -sEXPORT_NAME=HDWalletWasm
       -sEXPORT_ES6=1
       -sALLOW_MEMORY_GROWTH=1
-      -sINITIAL_MEMORY=32MB
+      -sINITIAL_MEMORY=4MB
       -sMAXIMUM_MEMORY=512MB
       -sSTACK_SIZE=2MB
       -sERROR_ON_UNDEFINED_SYMBOLS=0
@@ -1148,7 +1151,7 @@ if(HD_WALLET_BUILD_WASM OR EMSCRIPTEN)
       -sEXPORT_ES6=1
       -sSINGLE_FILE=1
       -sALLOW_MEMORY_GROWTH=1
-      -sINITIAL_MEMORY=32MB
+      -sINITIAL_MEMORY=4MB
       -sMAXIMUM_MEMORY=512MB
       -sSTACK_SIZE=2MB
       -sERROR_ON_UNDEFINED_SYMBOLS=0

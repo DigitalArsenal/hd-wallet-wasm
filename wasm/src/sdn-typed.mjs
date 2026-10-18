@@ -38,8 +38,19 @@ const RAW_ENTRYPOINTS = Object.freeze([
   '_hd_sdn_sign_asset_review_authority_activation',
   '_hd_sdn_sign_asset_review_decision',
   '_hd_sdn_seal_remembered_identity',
+  '_hd_sdn_transfer_begin',
+  '_hd_sdn_transfer_seal',
+  '_hd_sdn_transfer_open',
   '_hd_sdn_destroy_identity',
 ]);
+
+const TRANSFER_PUBLIC_KEY_BYTES = 32;
+const MAX_TRANSFER_BYTES = 1024;
+
+// Each capabilities object's transfer sealer, reachable only from this file:
+// sealing is never a public capability (it would hand out a seed sealed to
+// any key a caller names).
+const transferSealers = new WeakMap();
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder('utf-8', { fatal: true });
@@ -528,7 +539,13 @@ function readRequired(scope, pointer) {
  * Internal per-WASM-instance factory. This is intentionally not a package
  * export subpath; the wallet-origin wrapper constructs it inside createModule.
  */
-export function createSdnTypedCapabilities(wasm) {
+export function createSdnTypedCapabilities(wasm, options = {}) {
+  // createKdfInstance (index.mjs) makes a fresh, unshared WASM instance: the
+  // password KDF runs there and the identity is moved into `wasm`.
+  const createKdfInstance = isObject(options) &&
+    typeof options.createKdfInstance === 'function'
+    ? options.createKdfInstance
+    : null;
   if (!isObject(wasm) || typeof wasm._malloc !== 'function' ||
       typeof wasm._free !== 'function' ||
       RAW_ENTRYPOINTS.some((name) => typeof wasm[name] !== 'function')) {
@@ -658,6 +675,108 @@ export function createSdnTypedCapabilities(wasm) {
     }
   }
 
+  // THE RECEIVER: a fresh X25519 key in this instance (native randomness);
+  // only its public half comes back. Its private half stays native for one open.
+  function beginTransfer() {
+    const scope = createAllocationScope(wasm);
+    try {
+      const out = scope.allocate(TRANSFER_PUBLIC_KEY_BYTES);
+      let status;
+      try {
+        status = wasm._hd_sdn_transfer_begin(out, TRANSFER_PUBLIC_KEY_BYTES);
+      } catch {
+        fail('CRYPTO_FAILURE');
+      }
+      if (status !== 0) throwStatus(status);
+      return scope.bytes(out, TRANSFER_PUBLIC_KEY_BYTES);
+    } finally {
+      if (scope.cleanup()) fail('CRYPTO_FAILURE');
+    }
+  }
+
+  // THE SENDER: this instance's identity sealed to the receiver's public key.
+  function sealTransfer(handle, recipientPublic) {
+    const record = recordFor(handle);
+    const scope = createAllocationScope(wasm);
+    try {
+      const recipient = scope.allocate(recipientPublic);
+      const outRequired = scope.allocate(4);
+      const outBytes = scope.allocate(MAX_TRANSFER_BYTES);
+      let status;
+      try {
+        status = wasm._hd_sdn_transfer_seal(
+          record.nativeValue, recipient, recipientPublic.length,
+          outBytes, MAX_TRANSFER_BYTES, outRequired,
+        );
+      } catch {
+        fail('CRYPTO_FAILURE');
+      }
+      if (status !== 0) throwStatus(status);
+      const required = readRequired(scope, outRequired);
+      if (required <= TRANSFER_PUBLIC_KEY_BYTES || required > MAX_TRANSFER_BYTES) {
+        fail('CRYPTO_FAILURE');
+      }
+      return scope.bytes(outBytes, required);
+    } finally {
+      if (scope.cleanup()) fail('CRYPTO_FAILURE');
+    }
+  }
+
+  /**
+   * THE PASSWORD KDF IN A SHORT-LIVED INSTANCE. scrypt (password-scrypt-v2)
+   * dirties 64 MiB, and a WASM memory never shrinks, so deriving here would
+   * keep 64 MiB committed for the session. Instead: a fresh instance derives,
+   * its identity moves into this one (seed sealed native-to-native: only
+   * public keys and sealed bytes pass through JS), the fresh instance's
+   * identity is destroyed, its whole memory is zeroed and it is dropped.
+   * Nothing awaits between begin, seal and open, so no other transfer can
+   * interleave.
+   */
+  async function deriveInKdfInstance(derive, expectedAccountIndex) {
+    let kdfWasm;
+    try {
+      kdfWasm = await createKdfInstance();
+    } catch {
+      fail('CRYPTO_FAILURE');
+    }
+    let kdf;
+    let derived;
+    try {
+      kdf = createSdnTypedCapabilities(kdfWasm);
+      derived = await derive(kdf);
+      const recipient = beginTransfer();
+      const sealed = transferSealers.get(kdf)(derived.handle, recipient);
+      const opened = invokeDerive(
+        '_hd_sdn_transfer_open',
+        ([sealedPointer]) => [sealedPointer, sealed.length],
+        [{ bytes: sealed }],
+        'sdn-bip32-slip10-purpose-v1',
+        'password-scrypt-v2',
+        expectedAccountIndex,
+        () => wipeAll([sealed]),
+      );
+      if (JSON.stringify(opened.identity) !== JSON.stringify(derived.identity)) {
+        capabilities.destroySdnIdentity(opened.handle);
+        fail('CRYPTO_FAILURE');
+      }
+      return opened;
+    } finally {
+      try {
+        if (derived) kdf.destroySdnIdentity(derived.handle);
+      } catch {
+        // The memory is zeroed below either way.
+      }
+      try {
+        const heap = checkedHeap(kdfWasm);
+        new SafeUint8Array(heap.buffer).fill(0);
+      } catch {
+        // Nothing else holds the instance; the collector still releases it.
+      }
+      kdf = null;
+      kdfWasm = null;
+    }
+  }
+
   const capabilities = {
     async derivePasswordIdentity(input) {
       let callerPassword;
@@ -671,6 +790,13 @@ export function createSdnTypedCapabilities(wasm) {
         if (username.length > MAX_MODERN_CREDENTIAL_BYTES) fail('INVALID_USERNAME');
         if (password.length > MAX_MODERN_CREDENTIAL_BYTES) fail('INVALID_PASSWORD');
         const account = requireAccount(input.accountIndex);
+        if (createKdfInstance) {
+          return await deriveInKdfInstance((kdf) => kdf.derivePasswordIdentity({
+            usernameUtf8: username,
+            passwordUtf8: password,
+            accountIndex: account,
+          }), account);
+        }
         return invokeDerive(
           '_hd_sdn_derive_password_identity',
           ([usernamePointer, passwordPointer]) => [
@@ -978,5 +1104,7 @@ export function createSdnTypedCapabilities(wasm) {
     },
   };
 
-  return Object.freeze(capabilities);
+  const frozen = Object.freeze(capabilities);
+  transferSealers.set(frozen, sealTransfer);
+  return frozen;
 }

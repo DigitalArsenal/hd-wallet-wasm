@@ -1109,6 +1109,8 @@ constexpr uint32_t kMaximumMnemonicBytes = 1024;
 constexpr uint32_t kMaximumAadBytes = 4096;
 constexpr uint32_t kMinimumRememberedCiphertextBytes = 16;
 constexpr uint32_t kMaximumRememberedCiphertextBytes = 1024;
+constexpr uint32_t kTransferPublicKeyBytes = 32;
+constexpr uint32_t kMaximumTransferBytes = 1024;
 
 uint16_t status(IdentityError error) noexcept {
     return static_cast<uint16_t>(error);
@@ -2189,6 +2191,85 @@ uint16_t hd_sdn_seal_remembered_identity(
             return status(IdentityError::InvalidRequest);
         }
         std::memcpy(out_bytes, bytes.data(), bytes.size());
+        return uint16_t{0};
+    });
+}
+
+// Identity transfer between two wallet instances (sdn_identity.h): the
+// receiver's begin returns its public key, the sender seals a handle's identity
+// to it, and the receiver opens the sealed bytes into a new handle.
+extern "C" HD_WALLET_EXPORT
+uint16_t hd_sdn_transfer_begin(uint8_t* out_public, uint32_t out_capacity) {
+    return guarded([&] {
+        if (out_capacity != kTransferPublicKeyBytes ||
+            !validRange(out_public, out_capacity)) {
+            return status(IdentityError::InvalidRequest);
+        }
+        std::memset(out_public, 0, out_capacity);
+        auto begun = identity_transfer_begin();
+        if (std::holds_alternative<IdentityError>(begun)) {
+            return status(std::get<IdentityError>(begun));
+        }
+        const auto& recipient = std::get<std::array<uint8_t, 32>>(begun);
+        std::memcpy(out_public, recipient.data(), recipient.size());
+        return uint16_t{0};
+    });
+}
+
+extern "C" HD_WALLET_EXPORT
+uint16_t hd_sdn_transfer_seal(
+    uint64_t handle, const uint8_t* recipient_public, uint32_t recipient_len,
+    uint8_t* out_bytes, uint32_t out_capacity, uint32_t* out_required) {
+    return guarded([&] {
+        if (!prepareOutput(out_bytes, out_capacity, out_required) ||
+            recipient_len != kTransferPublicKeyBytes ||
+            !validRange(recipient_public, recipient_len)) {
+            return status(IdentityError::InvalidRequest);
+        }
+        auto sealed = identity_transfer_seal(
+            handle, std::span<const uint8_t, 32>(recipient_public, 32));
+        if (std::holds_alternative<IdentityError>(sealed)) {
+            return status(std::get<IdentityError>(sealed));
+        }
+        const std::vector<uint8_t>& bytes = std::get<std::vector<uint8_t>>(sealed);
+        if (bytes.empty() || bytes.size() > kMaximumTransferBytes) {
+            return status(IdentityError::CryptoFailure);
+        }
+        const uint32_t required = static_cast<uint32_t>(bytes.size());
+        storeScalar(out_required, required);
+        if (out_capacity < required) {
+            return status(IdentityError::InvalidRequest);
+        }
+        std::memcpy(out_bytes, bytes.data(), bytes.size());
+        return uint16_t{0};
+    });
+}
+
+extern "C" HD_WALLET_EXPORT
+uint16_t hd_sdn_transfer_open(
+    const uint8_t* sealed, uint32_t sealed_len,
+    uint64_t* out_handle, uint8_t* out_json, uint32_t out_capacity,
+    uint32_t* out_required) {
+    return guarded([&] {
+        const bool output_ready = prepareDerivedOutput(
+            out_handle, out_json, out_capacity, out_required);
+        if (!output_ready || !validRange(sealed, sealed_len) ||
+            sealed_len > kMaximumTransferBytes) {
+            return status(IdentityError::InvalidRequest);
+        }
+        auto opened = identity_transfer_open(
+            std::span<const uint8_t>(sealed, sealed_len));
+        if (std::holds_alternative<IdentityError>(opened)) {
+            return status(std::get<IdentityError>(opened));
+        }
+        ImportedIdentity imported = std::get<ImportedIdentity>(std::move(opened));
+        PendingHandle pending(imported.handle);
+        const auto serialized = serializeIdentity(imported.identity);
+        const uint16_t result =
+            copyTextResult(serialized, out_json, out_capacity, out_required);
+        if (result != 0) return result;
+        storeScalar(out_handle, static_cast<uint64_t>(imported.handle));
+        pending.release();
         return uint16_t{0};
     });
 }

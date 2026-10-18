@@ -101,6 +101,17 @@ IdentityOutcome<SecretBuffer> aes256_gcm_open(
     std::span<const uint8_t> aad);
 bool constant_time_equal(std::span<const uint8_t> left,
                          std::span<const uint8_t> right) noexcept;
+// Fills `output` from the platform CSPRNG in place. In WASM the runtime writes
+// the bytes straight into this instance's memory (getentropy), so a private
+// key made from them never exists in a caller's variables.
+bool fill_random_secret(std::span<uint8_t> output) noexcept;
+std::array<uint8_t, 32> x25519_public_key(
+    std::span<const uint8_t, 32> private_key);
+// X25519 with the peer key validated (small-order points refused) and an
+// all-zero result refused.
+bool x25519_shared_secret(std::span<const uint8_t, 32> private_key,
+                          std::span<const uint8_t, 32> peer_public,
+                          std::span<uint8_t, 32> shared) noexcept;
 
 #if defined(HD_WALLET_SDN_IDENTITY_TESTING) && HD_WALLET_SDN_IDENTITY_TESTING
 using TestingDerivationBackend = void (*)(

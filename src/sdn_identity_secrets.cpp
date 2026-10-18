@@ -28,6 +28,10 @@
 #include <type_traits>
 #include <utility>
 
+#if defined(__EMSCRIPTEN__) || defined(__wasi__)
+#include <unistd.h>
+#endif
+
 namespace hd_wallet::sdn::internal {
 namespace {
 
@@ -729,6 +733,49 @@ bool constant_time_equal(std::span<const uint8_t> left,
     uint8_t difference = 0;
     for (size_t i = 0; i < left.size(); ++i) difference |= left[i] ^ right[i];
     return difference == 0;
+}
+
+bool fill_random_secret(std::span<uint8_t> output) noexcept {
+    size_t offset = 0;
+    while (offset < output.size()) {
+        // getentropy serves at most 256 bytes per call.
+        const size_t chunk = std::min<size_t>(output.size() - offset, 256);
+#if defined(__EMSCRIPTEN__) || defined(__wasi__)
+        if (getentropy(output.data() + offset, chunk) != 0) return false;
+#else
+        try {
+            CryptoPP::OS_GenerateRandomBlock(false, output.data() + offset, chunk);
+        } catch (...) {
+            return false;
+        }
+#endif
+        offset += chunk;
+    }
+    return true;
+}
+
+std::array<uint8_t, 32> x25519_public_key(
+    std::span<const uint8_t, 32> private_key) {
+    return x25519Public(private_key);
+}
+
+bool x25519_shared_secret(std::span<const uint8_t, 32> private_key,
+                          std::span<const uint8_t, 32> peer_public,
+                          std::span<uint8_t, 32> shared) noexcept {
+    try {
+        CryptoPP::x25519 operation;
+        if (!operation.Agree(shared.data(), private_key.data(),
+                             peer_public.data(), true)) {
+            secureWipe(shared.data(), shared.size());
+            return false;
+        }
+    } catch (...) {
+        secureWipe(shared.data(), shared.size());
+        return false;
+    }
+    uint8_t any = 0;
+    for (const auto byte : shared) any |= byte;
+    return any != 0;
 }
 
 #if defined(HD_WALLET_SDN_IDENTITY_TESTING) && HD_WALLET_SDN_IDENTITY_TESTING
