@@ -41,6 +41,18 @@ function rawSha256Cid({
 }
 
 const EXPECTED_EXPORTS = [
+  'FIELD_OPEN_LIMITS',
+  'buildFieldOpenRequest',
+  'buildFieldOpenResult',
+  'buildKeyUnwrapRequest',
+  'buildKeyUnwrapResult',
+  'decodeBase64urlBytes',
+  'encodeBase64url',
+  'fieldContextSite',
+  'parseFieldOpenRequest',
+  'parseFieldOpenResult',
+  'parseKeyUnwrapRequest',
+  'parseKeyUnwrapResult',
   'buildAssetReviewAuthorityActivationRequest',
   'buildAssetReviewAuthorityActivationResult',
   'buildAssetReviewDecisionRequest',
@@ -264,6 +276,10 @@ function expectDeepFrozen(value) {
 }
 
 describe('operation-specific wire surface', () => {
+  test('exports only the reviewed operation-specific parse/build pairs and field-open helpers', () => {
+    expect(Object.keys(wire).sort()).toEqual(EXPECTED_EXPORTS);
+  });
+
   test('round-trips an exact 32-byte challenge as 43 canonical base64url characters', () => {
     const input = { protocolVersion: 1, challenge: CHALLENGE_BYTES };
     const built = wire.buildSdnLoginV1Request(input);

@@ -6,6 +6,21 @@ import { describe, expect, test } from 'vitest';
 const publicGlobalUrl = new URL('../dist/browser/sdn-wallet-public-client.js', import.meta.url);
 const callbackGlobalUrl = new URL('../dist/browser/sdn-wallet-callback.js', import.meta.url);
 
+const BASE_METHODS = Object.freeze(['connect', 'destroy', 'disconnect', 'getSnapshot', 'openAccount', 'subscribe']);
+/** Every registry client and the exact public-client methods it gets. */
+const CLIENT_METHODS = Object.freeze({
+  'orbpro-pages-v1': BASE_METHODS,
+  'sdn-asset-models-pages-v1': BASE_METHODS,
+  'sdn-asset-review-v1': BASE_METHODS,
+  'sdn-flatbuffers-pages-v1': Object.freeze([...BASE_METHODS, 'openFields'].sort()),
+  'sdn-flatsql-pages-v1': Object.freeze([...BASE_METHODS, 'unwrapKey'].sort()),
+  'sdn-landing-web-v1': BASE_METHODS,
+  'sdn-module-sdk-pages-v1': BASE_METHODS,
+  'sdn-node-console-v1': BASE_METHODS,
+  'sdn-standards-web-v1': BASE_METHODS,
+  'spaceaware-web-v1': BASE_METHODS,
+});
+
 function instrumentedContext() {
   const counts = {
     close: 0,
@@ -69,6 +84,14 @@ describe('classic public-client global', () => {
     expect(context.SDNWalletPublicClient.create).toHaveLength(1);
     expect(counts).toEqual({ close: 0, fetch: 0, listeners: 0, open: 0, storage: 0, timers: 0 });
 
+    for (const [clientId, expected] of Object.entries(CLIENT_METHODS)) {
+      context.__clientId = clientId;
+      const methods = vm.runInContext(
+        'Object.keys(SDNWalletPublicClient.create({ clientId: __clientId })).sort()',
+        context,
+      );
+      expect(Array.from(methods), clientId).toEqual(expected);
+    }
     expect(counts).toEqual({ close: 0, fetch: 0, listeners: 0, open: 0, storage: 0, timers: 0 });
   });
 

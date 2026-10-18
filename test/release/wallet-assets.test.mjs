@@ -20,6 +20,7 @@ import test from 'node:test';
 
 import { buildWalletAssets } from '../../scripts/build-wallet-assets.mjs';
 import { verifyWalletAssets } from '../../scripts/verify-wallet-assets.mjs';
+import { assertPublicBundleCrypto } from './public-bundle-crypto.mjs';
 
 const repositoryDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const releaseDirectory = join(repositoryDirectory, 'release');
@@ -29,6 +30,20 @@ const staticVersionDirectory = join(
 );
 const manifestPath = join(releaseDirectory, 'wallet-assets.v1.json');
 const staticUrlPrefix = 'https://static.spacedatanetwork.org/assets/hd-wallet-ui/2.2.1/';
+const BASE_METHODS = Object.freeze(['connect', 'destroy', 'disconnect', 'getSnapshot', 'openAccount', 'subscribe']);
+/** Every registry client and the exact public-client methods it gets. */
+const CLIENT_METHODS = Object.freeze({
+  'orbpro-pages-v1': BASE_METHODS,
+  'sdn-asset-models-pages-v1': BASE_METHODS,
+  'sdn-asset-review-v1': BASE_METHODS,
+  'sdn-flatbuffers-pages-v1': Object.freeze([...BASE_METHODS, 'openFields'].sort()),
+  'sdn-flatsql-pages-v1': Object.freeze([...BASE_METHODS, 'unwrapKey'].sort()),
+  'sdn-landing-web-v1': BASE_METHODS,
+  'sdn-module-sdk-pages-v1': BASE_METHODS,
+  'sdn-node-console-v1': BASE_METHODS,
+  'sdn-standards-web-v1': BASE_METHODS,
+  'spaceaware-web-v1': BASE_METHODS,
+});
 
 let canonicalTemporaryRootPromise;
 
@@ -122,6 +137,7 @@ function instrumentedPublicContext() {
 }
 
 function assertPublicClientIife(source) {
+  assertPublicBundleCrypto(source, 'sdn-wallet-public-client.js');
   const { context, counts } = instrumentedPublicContext();
   const before = Reflect.ownKeys(context);
   vm.runInContext(source, context, {
@@ -152,6 +168,16 @@ function assertPublicClientIife(source) {
     storage: 0,
     timers: 0,
   });
+
+  for (const [clientId, expected] of Object.entries(CLIENT_METHODS)) {
+    context.__clientId = clientId;
+    const methods = vm.runInContext(
+      'Object.keys(SDNWalletPublicClient.create({ clientId: __clientId })).sort()',
+      context,
+      { timeout: 1_000 },
+    );
+    assert.deepEqual(Array.from(methods), expected, clientId);
+  }
 
   for (const expression of [
     'SDNWalletPublicClient.create()',

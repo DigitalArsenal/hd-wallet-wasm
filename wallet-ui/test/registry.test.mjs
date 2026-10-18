@@ -32,8 +32,8 @@ const REVIEW_AUDIENCES = [
 const EXPECTED_CLIENTS = [
   ['sdn-landing-web-v1', 'https://spacedatanetwork.org', 'https://spacedatanetwork.org/wallet-callback.html', PUBLIC_OPERATIONS, []],
   ['sdn-standards-web-v1', 'https://spacedatastandards.org', 'https://spacedatastandards.org/wallet-callback.html', PUBLIC_OPERATIONS, []],
-  ['sdn-flatbuffers-pages-v1', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/flatbuffers/wallet-callback.html', PUBLIC_OPERATIONS, []],
-  ['sdn-flatsql-pages-v1', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/flatsql/wallet-callback.html', PUBLIC_OPERATIONS, []],
+  ['sdn-flatbuffers-pages-v1', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/flatbuffers/wallet-callback.html', [...PUBLIC_OPERATIONS, 'sdn.wallet.field-open.v1'], ['sdn-field-encryption/v1|flatbuffers']],
+  ['sdn-flatsql-pages-v1', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/flatsql/wallet-callback.html', [...PUBLIC_OPERATIONS, 'sdn.wallet.key-unwrap.v1'], ['sdn-field-encryption/v1|flatsql']],
   ['sdn-module-sdk-pages-v1', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/space-data-module-sdk/wallet-callback.html', PUBLIC_OPERATIONS, []],
   ['spaceaware-web-v1', 'https://spaceaware.io', 'https://spaceaware.io/wallet/callback', PUBLISH_OPERATIONS, []],
   ['sdn-node-console-v1', 'https://sdn.spaceaware.io', 'https://sdn.spaceaware.io/wallet/callback', SDN_OPERATIONS, SDN_AUDIENCES],
@@ -69,6 +69,32 @@ describe('committed wallet client registry', () => {
     expect(registryReleaseSha256).toMatch(/^[0-9a-f]{64}$/u);
     expect(digest).toBe(registryReleaseSha256);
     expect(bytes).toBe(`${jcs(source)}\n`);
+  });
+
+  test('contains exactly the ten reviewed HTTPS client rows and allowlists', () => {
+    const registry = verifyRegistry();
+    expect(registry.schemaVersion).toBe(1);
+    expect(registry.clients).toHaveLength(EXPECTED_CLIENTS.length);
+    expect(registry.clients.map(({
+      clientId,
+      requestOrigin,
+      callbackUri,
+      allowedOperations,
+      audiences,
+    }) => [
+      clientId,
+      requestOrigin,
+      callbackUri,
+      allowedOperations,
+      audiences,
+    ])).toEqual(EXPECTED_CLIENTS);
+    for (const client of registry.clients) {
+      expect(client.operationBindings.map(({ operation }) => operation)).toEqual(client.allowedOperations);
+      expect([...new Set(client.operationBindings
+        .map(({ audience }) => audience)
+        .filter((audience) => audience !== null))].sort()).toEqual(client.audiences);
+    }
+    expectDeepFrozen(registry);
   });
 
   test('resolves only exact clientId + requestOrigin + operation triples', () => {

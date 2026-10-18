@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, test } from 'vitest';
 
+import { assertPublicBundleCrypto } from '../../test/release/public-bundle-crypto.mjs';
 import walletViteConfig from '../vite.config.js';
 
 const walletUiDirectory = dirname(fileURLToPath(new URL('../package.json', import.meta.url)));
@@ -198,6 +199,7 @@ describe('release bundle isolation', () => {
       /\.wasm\b/iu,
       /\b(?:argon2|pbkdf2|scrypt)\b/iu,
       /\b(?:mnemonic|seed phrase|seedBytes|seedHandle)\b/iu,
+      /\b(?:deriveKey|wrapKey)\b/u,
       /\b(?:derivePasswordIdentity|getWalletOriginCapabilities|secretHandle)\b/u,
       /\b(?:credentialPrompt|PasswordCredential|navigator\.credentials)\b/u,
       /(?:createElement\s*\(\s*["'](?:form|input)["']|type\s*=\s*["']password["']|autocomplete\s*=\s*["'](?:current|new)-password["'])/iu,
@@ -213,6 +215,7 @@ describe('release bundle isolation', () => {
       expect(source, label).not.toMatch(/(?:boundaryVectors|asset-review-v1\.json|release\/protocol)/u);
       for (const pattern of forbidden) expect(source, `${label}: ${pattern}`)
         .not.toMatch(pattern);
+      if (label.endsWith('.js')) assertPublicBundleCrypto(source, label);
     }
     for (const path of expectedJavascript.filter((path) => path.startsWith('client/'))) {
       const source = await readFile(join(distDirectory, path), 'utf8');

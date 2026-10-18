@@ -27,7 +27,7 @@
     "test:wasm": "npm --workspace hd-wallet-wasm test",
     "test:wallet-ui": "npm --workspace hd-wallet-ui test",
     "test:relay": "npm --workspace @sdn/wallet-relay test",
-    "test:release": "node --test test/release/wallet-assets.test.mjs test/release/release-verifier.test.mjs test/release/build-paths.test.mjs test/release/origin-service-release.test.mjs test/release/better-sqlite3-prebuild.test.mjs test/release/npm-tarball-githead.test.mjs test/release/provenance-evidence.test.mjs test/release/provenance-inputs.test.mjs test/release/workflow-artifact-attestation.test.mjs",
+    "test:release": "node --test test/release/wallet-assets.test.mjs test/release/public-bundle-crypto.test.mjs test/release/release-verifier.test.mjs test/release/build-paths.test.mjs test/release/origin-service-release.test.mjs test/release/better-sqlite3-prebuild.test.mjs test/release/npm-tarball-githead.test.mjs test/release/provenance-evidence.test.mjs test/release/provenance-inputs.test.mjs test/release/workflow-artifact-attestation.test.mjs",
     "test:browser": "npm --workspace hd-wallet-ui run test:browser",
     "test:sdn-plugin": "npm --workspace hd-wallet-wasm run test:sdn-plugin",
     "test:packed": "node scripts/test-packed-consumers.mjs",

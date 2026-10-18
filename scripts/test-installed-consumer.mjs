@@ -12,6 +12,8 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { assertPublicBundleCrypto } from '../test/release/public-bundle-crypto.mjs';
+
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryDirectory = resolve(scriptDirectory, '..');
 const typescriptExecutable = join(repositoryDirectory, 'node_modules/.bin/tsc');
@@ -253,7 +255,8 @@ export { createWalletClient, createSdnWalletClient, createAssetReviewWalletClien
     'sdn-bip39-auth-v1-legacy',
   ]) bundle = bundle.replaceAll(`"${literal}"`, '"<allowed-protocol-literal>"');
   assert.doesNotMatch(bundle, /(?:\0asm|\.wasm\b|\b(?:argon2|pbkdf2|scrypt)\b)/iu);
-  assert.doesNotMatch(bundle, /\bsecretHandle\b/u);
+  assert.doesNotMatch(bundle, /\b(?:deriveKey|secretHandle|wrapKey)\b/u);
+  assertPublicBundleCrypto(bundle, 'installed consumer bundle');
   assert.doesNotMatch(bundle, /\bimport\s*\(/u);
   assert.doesNotMatch(bundle, /(?:origin-app|@wallet|@sds|node_modules|file:\/\/|\.worktrees)/u);
   assert.doesNotMatch(bundle, /[A-Za-z0-9+/]{1024,}={0,2}/u);
