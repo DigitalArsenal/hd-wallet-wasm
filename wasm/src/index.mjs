@@ -9,7 +9,7 @@
  * - Transaction building and signing
  *
  * @module hd-wallet-wasm
- * @version 2.2.0
+ * @version 2.2.1
  */
 
 // Import aligned API for batch operations
@@ -1354,7 +1354,7 @@ export async function computeWasmHash(wasmBytes) {
  * that one instance (each copy keeps its own JS wrapper over it). A different
  * version never shares: its exports may differ.
  */
-const PACKAGE_VERSION = '2.2.0';
+const PACKAGE_VERSION = '2.2.1';
 const REALM_INSTANCES = Symbol.for('hd-wallet-wasm/realm-instances');
 
 function realmInstances() {

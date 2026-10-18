@@ -375,7 +375,7 @@ function copySignature(value, canonical) {
   if (canonical === 'module-delivery-key') {
     if (!exactKeys(value, ['schemaVersion', 'keyPath', 'accountXpub', 'publicKeyHex',
       'signedPayloadHex', 'signatureHex', 'algorithm', 'encoding']) ||
-        value.schemaVersion !== 1 || !/^m\/44'\/0'\/\d+'$/u.test(value.keyPath) ||
+        value.schemaVersion !== 1 || !/^m\/44\u0027\/0\u0027\/\d+\u0027$/u.test(value.keyPath) ||
         typeof value.accountXpub !== 'string' || !value.accountXpub.startsWith('xpub') ||
         !validLowerHex(value.publicKeyHex, 66) ||
         typeof value.signedPayloadHex !== 'string' || !/^(?:[0-9a-f]{2})+$/u.test(value.signedPayloadHex) ||

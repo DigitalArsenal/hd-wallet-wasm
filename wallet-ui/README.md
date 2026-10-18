@@ -8,10 +8,10 @@ and signed approval requests.
 ## Install
 
 ```sh
-npm install hd-wallet-ui@2.2.0
+npm install hd-wallet-ui@2.2.1
 ```
 
-`hd-wallet-wasm` 2.2.0 is the package's only runtime dependency.
+`hd-wallet-wasm` 2.2.1 is the package's only runtime dependency.
 
 ## Published surfaces
 

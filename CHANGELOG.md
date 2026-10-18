@@ -1,6 +1,11 @@
 # Changelog
 
-## 2.2.0 (2026-10-18)
+## 2.2.1 (2026-10-18)
+
+2.2.0 was tagged but never published: the release build's asset-closure scan
+misread the wallet-origin bundle at a module-delivery key-path regex holding
+three quote characters. That regex now spells them `\u0027`. 2.2.1 is the
+first published release of the changes below.
 
 ### Wallet opens sealed fields
 
