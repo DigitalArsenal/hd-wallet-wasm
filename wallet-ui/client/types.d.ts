@@ -11,7 +11,7 @@ export type WalletRelayOperation =
 
 export type WalletClientStatus = 'dormant' | 'opening' | 'connected' | 'error';
 export type WalletClientId =
-  | 'orbpro-pages-v1'
+  | 'digitalarsenal-pages-v1'
   | 'sdn-asset-models-pages-v1'
   | 'sdn-asset-review-v1'
   | 'sdn-flatbuffers-pages-v1'

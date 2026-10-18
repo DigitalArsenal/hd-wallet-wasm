@@ -66,10 +66,10 @@ constexpr std::array<RegistryRow, 7> kRegistryRows = {{
      "spaceaware-web-v1", "https://spaceaware.io", "", "", 300},
     // Field opening: the audience is the one CONTEXT prefix the row opens.
     {RegistryRowId::FlatbuffersFieldOpen, RegisteredOperation::FieldOpen,
-     "sdn-flatbuffers-pages-v1", "https://digitalarsenal.github.io",
+     "sdn-flatbuffers-pages-v1", "https://flatbuffers.spacedatanetwork.org",
      "sdn-field-encryption/v1|flatbuffers", "", 300},
     {RegistryRowId::FlatsqlKeyUnwrap, RegisteredOperation::KeyUnwrap,
-     "sdn-flatsql-pages-v1", "https://digitalarsenal.github.io",
+     "sdn-flatsql-pages-v1", "https://flatsql.spacedatanetwork.org",
      "sdn-field-encryption/v1|flatsql", "", 300},
 }};
 

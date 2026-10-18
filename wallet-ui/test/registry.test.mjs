@@ -32,13 +32,13 @@ const REVIEW_AUDIENCES = [
 const EXPECTED_CLIENTS = [
   ['sdn-landing-web-v1', 'https://spacedatanetwork.org', 'https://spacedatanetwork.org/wallet-callback.html', PUBLIC_OPERATIONS, []],
   ['sdn-standards-web-v1', 'https://spacedatastandards.org', 'https://spacedatastandards.org/wallet-callback.html', PUBLIC_OPERATIONS, []],
-  ['sdn-flatbuffers-pages-v1', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/flatbuffers/wallet-callback.html', [...PUBLIC_OPERATIONS, 'sdn.wallet.field-open.v1'], ['sdn-field-encryption/v1|flatbuffers']],
-  ['sdn-flatsql-pages-v1', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/flatsql/wallet-callback.html', [...PUBLIC_OPERATIONS, 'sdn.wallet.key-unwrap.v1'], ['sdn-field-encryption/v1|flatsql']],
-  ['sdn-module-sdk-pages-v1', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/space-data-module-sdk/wallet-callback.html', PUBLIC_OPERATIONS, []],
+  ['sdn-flatbuffers-pages-v1', 'https://flatbuffers.spacedatanetwork.org', 'https://flatbuffers.spacedatanetwork.org/wallet-callback.html', [...PUBLIC_OPERATIONS, 'sdn.wallet.field-open.v1'], ['sdn-field-encryption/v1|flatbuffers']],
+  ['sdn-flatsql-pages-v1', 'https://flatsql.spacedatanetwork.org', 'https://flatsql.spacedatanetwork.org/wallet-callback.html', [...PUBLIC_OPERATIONS, 'sdn.wallet.key-unwrap.v1'], ['sdn-field-encryption/v1|flatsql']],
+  ['sdn-module-sdk-pages-v1', 'https://module-sdk.spacedatanetwork.org', 'https://module-sdk.spacedatanetwork.org/wallet-callback.html', PUBLIC_OPERATIONS, []],
   ['spaceaware-web-v1', 'https://spaceaware.io', 'https://spaceaware.io/wallet/callback', PUBLISH_OPERATIONS, []],
   ['sdn-node-console-v1', 'https://sdn.spaceaware.io', 'https://sdn.spaceaware.io/wallet/callback', SDN_OPERATIONS, SDN_AUDIENCES],
-  ['orbpro-pages-v1', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/OrbPro/wallet-callback.html', PUBLIC_OPERATIONS, []],
-  ['sdn-asset-models-pages-v1', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/asset-models/wallet-callback.html', PUBLIC_OPERATIONS, []],
+  ['digitalarsenal-pages-v1', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/hd-wallet-wasm/wallet-callback.html', PUBLIC_OPERATIONS, []],
+  ['sdn-asset-models-pages-v1', 'https://asset-models.spacedatanetwork.org', 'https://asset-models.spacedatanetwork.org/wallet-callback.html', PUBLIC_OPERATIONS, []],
   ['sdn-asset-review-v1', 'https://review.spacedatanetwork.org', 'https://review.spacedatanetwork.org/wallet/callback', REVIEW_OPERATIONS, REVIEW_AUDIENCES],
 ];
 
@@ -254,7 +254,7 @@ describe('committed wallet client registry', () => {
 test('publication is bound only to the SpaceAware purpose row', () => {
   expect(resolveRegistryBinding({ clientId: 'spaceaware-web-v1', requestOrigin: 'https://spaceaware.io', operation: 'sdn.auth.publish-request.v1' }))
     .toMatchObject({ registryRow: 'spaceaware-publish-request-v1', audience: null, maxLifetimeSeconds: 300 });
-  for (const [clientId, requestOrigin] of [['sdn-node-console-v1', 'https://sdn.spaceaware.io'], ['orbpro-pages-v1', 'https://digitalarsenal.github.io'], ['spaceaware-web-v1', 'https://spaceaware.io.evil.test']]) {
+  for (const [clientId, requestOrigin] of [['sdn-node-console-v1', 'https://sdn.spaceaware.io'], ['digitalarsenal-pages-v1', 'https://digitalarsenal.github.io'], ['spaceaware-web-v1', 'https://spaceaware.io.evil.test']]) {
     expect(() => resolveRegistryBinding({ clientId, requestOrigin, operation: 'sdn.auth.publish-request.v1' })).toThrow();
   }
 });

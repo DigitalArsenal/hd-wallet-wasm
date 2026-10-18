@@ -84,13 +84,15 @@ const REVIEW_OPERATIONS = Object.freeze([
 const EXPECTED_CLIENTS = Object.freeze([
   Object.freeze(['sdn-landing-web-v1', 'Space Data Network', 'https://spacedatanetwork.org', 'https://spacedatanetwork.org/wallet-callback.html', PUBLIC_OPERATIONS]),
   Object.freeze(['sdn-standards-web-v1', 'Space Data Standards', 'https://spacedatastandards.org', 'https://spacedatastandards.org/wallet-callback.html', PUBLIC_OPERATIONS]),
-  Object.freeze(['sdn-flatbuffers-pages-v1', 'FlatBuffers Documentation', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/flatbuffers/wallet-callback.html', FLATBUFFERS_OPERATIONS]),
-  Object.freeze(['sdn-flatsql-pages-v1', 'FlatSQL Documentation', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/flatsql/wallet-callback.html', FLATSQL_OPERATIONS]),
-  Object.freeze(['sdn-module-sdk-pages-v1', 'Space Data Module SDK', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/space-data-module-sdk/wallet-callback.html', PUBLIC_OPERATIONS]),
+  Object.freeze(['sdn-flatbuffers-pages-v1', 'FlatBuffers Documentation', 'https://flatbuffers.spacedatanetwork.org', 'https://flatbuffers.spacedatanetwork.org/wallet-callback.html', FLATBUFFERS_OPERATIONS]),
+  Object.freeze(['sdn-flatsql-pages-v1', 'FlatSQL Documentation', 'https://flatsql.spacedatanetwork.org', 'https://flatsql.spacedatanetwork.org/wallet-callback.html', FLATSQL_OPERATIONS]),
+  Object.freeze(['sdn-module-sdk-pages-v1', 'Space Data Module SDK', 'https://module-sdk.spacedatanetwork.org', 'https://module-sdk.spacedatanetwork.org/wallet-callback.html', PUBLIC_OPERATIONS]),
   Object.freeze(['spaceaware-web-v1', 'SpaceAware', 'https://spaceaware.io', 'https://spaceaware.io/wallet/callback', PUBLISH_OPERATIONS]),
   Object.freeze(['sdn-node-console-v1', 'SDN Node Console', 'https://sdn.spaceaware.io', 'https://sdn.spaceaware.io/wallet/callback', SDN_OPERATIONS]),
-  Object.freeze(['orbpro-pages-v1', 'OrbPro', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/OrbPro/wallet-callback.html', PUBLIC_OPERATIONS]),
-  Object.freeze(['sdn-asset-models-pages-v1', 'SDN Asset Models', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/asset-models/wallet-callback.html', PUBLIC_OPERATIONS]),
+  // Every page on digitalarsenal.github.io is one browser origin, so it is one
+  // client and signs in only: no key operation is bound to a shared origin.
+  Object.freeze(['digitalarsenal-pages-v1', 'DigitalArsenal GitHub Pages', 'https://digitalarsenal.github.io', 'https://digitalarsenal.github.io/hd-wallet-wasm/wallet-callback.html', PUBLIC_OPERATIONS]),
+  Object.freeze(['sdn-asset-models-pages-v1', 'SDN Asset Models', 'https://asset-models.spacedatanetwork.org', 'https://asset-models.spacedatanetwork.org/wallet-callback.html', PUBLIC_OPERATIONS]),
   Object.freeze(['sdn-asset-review-v1', 'SDN Asset Review', 'https://review.spacedatanetwork.org', 'https://review.spacedatanetwork.org/wallet/callback', REVIEW_OPERATIONS]),
 ]);
 
@@ -134,12 +136,13 @@ const COMPILED_SIGNING_ROWS = Object.freeze([
     registryRow: 'asset-review-decision-v1',
     serviceActivationState: 'activated',
     serviceInstance: null,
-  }),  Object.freeze({
+  }),
+  Object.freeze({
     audience: 'sdn-field-encryption/v1|flatbuffers',
     clientId: 'sdn-flatbuffers-pages-v1',
     maxLifetimeSeconds: 300,
     operation: 'sdn.wallet.field-open.v1',
-    requestOrigin: 'https://digitalarsenal.github.io',
+    requestOrigin: 'https://flatbuffers.spacedatanetwork.org',
     registryRow: 'flatbuffers-field-open-v1',
     serviceActivationState: null,
     serviceInstance: null,
@@ -149,7 +152,7 @@ const COMPILED_SIGNING_ROWS = Object.freeze([
     clientId: 'sdn-flatsql-pages-v1',
     maxLifetimeSeconds: 300,
     operation: 'sdn.wallet.key-unwrap.v1',
-    requestOrigin: 'https://digitalarsenal.github.io',
+    requestOrigin: 'https://flatsql.spacedatanetwork.org',
     registryRow: 'flatsql-key-unwrap-v1',
     serviceActivationState: null,
     serviceInstance: null,

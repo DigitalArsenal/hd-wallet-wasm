@@ -8,10 +8,10 @@ and signed approval requests.
 ## Install
 
 ```sh
-npm install hd-wallet-ui@2.2.1
+npm install hd-wallet-ui@2.2.2
 ```
 
-`hd-wallet-wasm` 2.2.1 is the package's only runtime dependency.
+`hd-wallet-wasm` 2.2.2 is the package's only runtime dependency.
 
 ## Published surfaces
 
@@ -120,8 +120,11 @@ const { contentKey } = await wallet.unwrapKey({ enc, kmf, context });
   that carries the answer never holds a plaintext. The browser needs Web
   Crypto X25519.
 
-Pages on one origin are one security principal to the browser: every page on
-`https://digitalarsenal.github.io` can name either client ID.
+Pages on one origin are one security principal to the browser, so each of
+these clients has its own origin (`https://flatbuffers.spacedatanetwork.org`,
+`https://flatsql.spacedatanetwork.org`). The shared
+`https://digitalarsenal.github.io` origin is the one client
+`digitalarsenal-pages-v1`, which signs in only.
 
 ## Callback page
 

@@ -9,7 +9,7 @@ const callbackGlobalUrl = new URL('../dist/browser/sdn-wallet-callback.js', impo
 const BASE_METHODS = Object.freeze(['connect', 'destroy', 'disconnect', 'getSnapshot', 'openAccount', 'subscribe']);
 /** Every registry client and the exact public-client methods it gets. */
 const CLIENT_METHODS = Object.freeze({
-  'orbpro-pages-v1': BASE_METHODS,
+  'digitalarsenal-pages-v1': BASE_METHODS,
   'sdn-asset-models-pages-v1': BASE_METHODS,
   'sdn-asset-review-v1': BASE_METHODS,
   'sdn-flatbuffers-pages-v1': Object.freeze([...BASE_METHODS, 'openFields'].sort()),

@@ -22,7 +22,7 @@ import {
 } from './relay-client.mjs';
 
 const CLIENT_IDS = Object.freeze([
-  'orbpro-pages-v1',
+  'digitalarsenal-pages-v1',
   'sdn-asset-models-pages-v1',
   'sdn-asset-review-v1',
   'sdn-flatbuffers-pages-v1',

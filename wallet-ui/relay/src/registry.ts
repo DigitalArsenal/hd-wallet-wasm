@@ -39,7 +39,7 @@ const BINDING_FIELDS = [
   'serviceActivationState',
   'serviceInstance',
 ] as const;
-const EXPECTED_RELEASE_SHA256 = '63784143e2ad8e2542d22148ff4a0a4da7a10f4b3f9909ae91a20dc0f60db06b';
+const EXPECTED_RELEASE_SHA256 = 'f5f7e3eab42bbb12bd85d95289e0a8006941ceb8505f6dc1cde12a38f4a79a63';
 const OPERATION_POLICY: Readonly<Record<string, Readonly<{
   audience: string | null;
   registryRow: string | null;

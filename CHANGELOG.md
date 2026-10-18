@@ -1,5 +1,36 @@
 # Changelog
 
+## 2.2.2 (2026-10-18)
+
+### Each documentation client is bound to its own origin
+
+The browser's security principal is the origin. Every page on
+`https://digitalarsenal.github.io` could name any client registered there, so
+a site-bound key operation on that shared origin bound nothing. Each
+documentation client now has its own origin:
+
+| Client ID | Origin | Operations |
+| --- | --- | --- |
+| `sdn-flatbuffers-pages-v1` | `https://flatbuffers.spacedatanetwork.org` | connect, `openFields` |
+| `sdn-flatsql-pages-v1` | `https://flatsql.spacedatanetwork.org` | connect, `unwrapKey` |
+| `sdn-module-sdk-pages-v1` | `https://module-sdk.spacedatanetwork.org` | connect |
+| `sdn-asset-models-pages-v1` | `https://asset-models.spacedatanetwork.org` | connect |
+| `digitalarsenal-pages-v1` | `https://digitalarsenal.github.io` | connect |
+
+- Each callback URI is `<origin>/wallet-callback.html`.
+  `digitalarsenal-pages-v1` returns to
+  `https://digitalarsenal.github.io/hd-wallet-wasm/wallet-callback.html`,
+  which the demo site now ships.
+- `digitalarsenal-pages-v1` replaces `orbpro-pages-v1`. It signs in only: it
+  has no `openFields` or `unwrapKey`, and the relay and wallet hold no key
+  operation for it.
+- The relay, the wallet origin's registry and the wallet's compiled rows bind
+  the same origins. Registry release
+  `f5f7e3eab42bbb12bd85d95289e0a8006941ceb8505f6dc1cde12a38f4a79a63`.
+- The demo site moved from `wallet.spacedatanetwork.org` to
+  `https://digitalarsenal.github.io/hd-wallet-wasm/`. That hostname is the
+  wallet origin only.
+
 ## 2.2.1 (2026-10-18)
 
 2.2.0 was tagged but never published: the release build's asset-closure scan

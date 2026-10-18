@@ -48,6 +48,26 @@ export function siteSplitWasmPlugin() {
   };
 }
 
+// The demo site is the callback URI of the digitalarsenal-pages-v1 client
+// (https://digitalarsenal.github.io/hd-wallet-wasm/wallet-callback.html). It
+// ships the release build's callback page and helper unchanged.
+const callbackPage = resolve(configDir, 'dist', 'browser', 'wallet-callback.html');
+const callbackHelper = resolve(configDir, 'dist', 'browser', 'sdn-wallet-callback.js');
+
+export function siteWalletCallbackPlugin() {
+  return {
+    name: 'hd-wallet-site-wallet-callback',
+    apply: 'build',
+    generateBundle() {
+      if (!existsSync(callbackPage) || !existsSync(callbackHelper)) {
+        this.error('The wallet callback page is missing: run npm run build:release first');
+      }
+      this.emitFile({ type: 'asset', fileName: 'wallet-callback.html', source: readFileSync(callbackPage) });
+      this.emitFile({ type: 'asset', fileName: 'sdn-wallet-callback.js', source: readFileSync(callbackHelper) });
+    },
+  };
+}
+
 export function createReleaseLibraryConfig({
   entry,
   fileName,
@@ -93,7 +113,7 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
-  plugins: [siteSplitWasmPlugin()],
+  plugins: [siteSplitWasmPlugin(), siteWalletCallbackPlugin()],
   resolve: {
     alias: {
       '@wallet': resolve(configDir, 'src'),
